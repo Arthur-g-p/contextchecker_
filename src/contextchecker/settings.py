@@ -1,17 +1,14 @@
 """
 Package-wide configuration defaults.
 
-Central place for constants, environment variable lookups, and default
-values. Every module reads config from here instead of hardcoding magic
-strings.
-
-This file is a leaf dependency — it imports nothing from contextchecker.
+Reads environment variables and prompt templates at import time.
+Services validate that the config they need is present before running.
 """
 
 import os
 import json
-import sys
 import logging
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,15 +18,11 @@ load_dotenv()
 LOG_LEVEL: str = os.getenv("CONTEXTCHECKER_LOG_LEVEL", "INFO")
 LOG_FORMAT: str = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
 
+_logger = logging.getLogger("contextchecker.settings")
+
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Return a namespaced logger for *name*.
-
-    Why a factory instead of module-level getLogger calls?
-    Centralises format + level so every module gets the same setup without
-    duplicating boilerplate.
-    """
+    """Return a namespaced logger for *name*."""
     logger = logging.getLogger(f"contextchecker.{name}")
     if not logger.handlers:
         handler = logging.StreamHandler()
@@ -39,42 +32,38 @@ def get_logger(name: str) -> logging.Logger:
     return logger
 
 
-# ── LLM defaults ────────────────────────────────────────────────────────────
+# ── API keys ─────────────────────────────────────────────────────────────────
+# Read eagerly, validated lazily by the service that needs them.
 
-EXTRACTOR_API_KEY = os.getenv("EXTRACTOR_API_KEY")
+EXTRACTOR_API_KEY: str | None = os.getenv("EXTRACTOR_API_KEY")
 if not EXTRACTOR_API_KEY:
-    print("CRITICAL: EXTRACTOR_API_KEY is missing from .env file.")
-    sys.exit("CRITICAL: EXTRACTOR_API_KEY is missing from .env file.")
+    _logger.warning("EXTRACTOR_API_KEY not set — extraction commands will fail.")
 
-
-CHECKER_API_KEY = os.getenv("CHECKER_API_KEY")
+CHECKER_API_KEY: str | None = os.getenv("CHECKER_API_KEY")
 if not CHECKER_API_KEY:
-    print("CRITICAL: CHECKER_API_KEY is missing from .env file.")
-    sys.exit("CRITICAL: CHECKER_API_KEY is missing from .env file.")
+    _logger.warning("CHECKER_API_KEY not set — checking commands will fail.")
 
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120.0"))
+LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "120.0"))
 
 
-def _load_prompts():
-    """
-    Internal function to load prompts once.
-    """
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    prompt_path = os.path.join(current_dir, 'prompt_map.json')
-    
+# ── Prompts ──────────────────────────────────────────────────────────────────
+
+def _load_prompts() -> dict[str, str]:
+    """Load prompt templates from prompt_map.json shipped with the package."""
+    prompt_path = Path(__file__).parent / "prompt_map.json"
+
+    if not prompt_path.exists():
+        raise FileNotFoundError(
+            f"prompt_map.json not found at {prompt_path}. Package may be corrupted."
+        )
+
+    text = prompt_path.read_text(encoding="utf-8")
+
     try:
-        with open(prompt_path, 'r') as file:
-            print(f"   Successfully loaded prompts from {prompt_path}")
-            return json.load(file)
-    except FileNotFoundError:
-        print(f"CRITICAL: Could not find prompt_map.json file at {prompt_path}.")
-        sys.exit(f"CRITICAL: Could not find prompt_map.json file at {prompt_path}.") 
-    except json.JSONDecodeError:
-        print(f"CRITICAL: prompt_map.json is not valid JSON.")
-        sys.exit(f"CRITICAL: prompt_map.json is not valid JSON.") 
-    except Exception as e:
-        print(f"An unexpected error occurred loading prompts: {e}")
-        sys.exit(f"An unexpected error occurred loading prompts: {e}") 
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"prompt_map.json is not valid JSON: {exc}") from exc
 
-# 2. Execution (Runs ONCE on first import)
-PROMPTS = _load_prompts()
+
+PROMPTS: dict[str, str] = _load_prompts()
+
