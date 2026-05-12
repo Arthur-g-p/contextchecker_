@@ -13,7 +13,13 @@ ContextCheckerError          ← catch-all for any package error
 │   └── FilterError          ← nothing left after filtering
 └── WorkerError              ← execution-level failures
     ├── LLMClientError       ← network / API errors from LLM calls
+    │   ├── ContextTooLongError  ← input exceeded model context window
+    │   └── ContentPolicyError   ← safety filter rejected content
     └── ParsingError         ← LLM returned unparseable output
+
+Compat aliases (used by llmclient.py, will migrate later):
+    LLMError      → LLMClientError
+    LLMParseError → ParsingError
 """
 
 
@@ -51,5 +57,19 @@ class LLMClientError(WorkerError):
     """Raised on network or API errors during LLM calls."""
 
 
+class ContextTooLongError(LLMClientError):
+    """Raised when input exceeds the model's context window."""
+
+
+class ContentPolicyError(LLMClientError):
+    """Raised when the model's safety filter rejects the content."""
+
+
 class ParsingError(WorkerError):
     """Raised when LLM output cannot be parsed into the expected structure."""
+
+
+# ── Compat aliases (used by llmclient.py — migrate later) ────────────────────
+
+LLMError = LLMClientError
+LLMParseError = ParsingError

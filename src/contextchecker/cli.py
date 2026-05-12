@@ -4,10 +4,12 @@ CLI controllers — the I/O boundary of the package.
 Responsibilities (and nothing more):
 - Parse Typer flags and arguments
 - Resolve file paths
+- Print the box header and output path
 - Call the appropriate service
-- Write output / report results
+- Catch errors and exit cleanly
 
 All business logic lives in services. All execution lives in workers.
+The CLI does NOT format validation/results output — services own that.
 """
 
 import json
@@ -27,14 +29,31 @@ app = typer.Typer(
 )
 
 
+def _print_header(command: str) -> None:
+    """Print the branded box header."""
+    title = f"  ContextChecker · {command}"
+    width = max(len(title) + 2, 50)
+    logger.info("╭" + "─" * width + "╮")
+    logger.info("│" + title.ljust(width) + "│")
+    logger.info("╰" + "─" * width + "╯")
+    logger.info("")
+
+
 @app.command()
 def extract(
     input_file: Path = typer.Argument(..., help="Path to JSON input file."),
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to input_file with '_extracted' suffix."),
     model: str = typer.Option("gemini-2.0-flash", "--model", "-m", help="Model name used as key prefix."),
+    extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run the extraction pipeline on a JSON dataset."""
-    from contextchecker.services.extraction import run_extract_service
+    from contextchecker.services.extraction import ExtractionService
+
+    # Activate logging (pretty by default, debug if --debug)
+    settings.enable_logging(debug=debug)
+
+    _print_header("extract")
 
     # Resolve output path
     if output_file is None:
@@ -52,7 +71,8 @@ def extract(
 
     # Call service
     try:
-        result = run_extract_service(data, model)
+        service = ExtractionService(model=model, base_url=extractor_base_api)
+        result = service.run_sync(data)
     except ContextCheckerError as exc:
         logger.error("%s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -61,3 +81,6 @@ def extract(
     output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Results written to %s", output_file)
 
+
+if __name__ == "__main__":
+    app()

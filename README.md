@@ -1,6 +1,6 @@
 # ContextChecker
 
-> A framework for evaluating LLM-generated knowledge graphs against ground truth.
+> A framework for evaluating LLM contexts.
 
 ## Installation
 

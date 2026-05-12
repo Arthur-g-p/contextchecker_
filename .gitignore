@@ -31,3 +31,7 @@ Thumbs.db
 
 # ── Results (local runs) ────────────────────────────────────────────────────
 results/*
+
+ignore-found-bugs.md
+
+agent.md

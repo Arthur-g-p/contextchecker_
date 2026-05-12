@@ -1,0 +1,139 @@
+[
+  {
+    "reference": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "question": "how far is kepler-22b from earth?",
+    "response": "Kepler 22b is 600 light years away from earth.",
+    "gemini-3.1_response_kg": [
+      {
+        "subject": "Kepler 22b",
+        "predicate": "is distance from earth",
+        "object": "600 light years"
+      }
+    ]
+  },
+  {
+    "reference": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "question": "how far is kepler-22b from earth?",
+    "response": "I don't know.",
+    "gemini-3.1_response_kg": []
+  },
+  {
+    "reference": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "question": "how far is kepler-22b from earth?",
+    "response": "",
+    "gemini-3.1_response_kg": []
+  },
+  {
+    "reference": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "question": "how far is kepler-22b from earth?",
+    "response": "Kepler-22b is an exoplanet. An exoplanet is a planet that orbits a star outside our solar system. It is located 640 light-years from Earth. It mostly consists of water. Its an interesting planet for sure and its also quite big.",
+    "gemini-3.1_response_kg": [
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is",
+        "object": "an exoplanet"
+      },
+      {
+        "subject": "An exoplanet",
+        "predicate": "is",
+        "object": "a planet that orbits a star outside our solar system"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is located",
+        "object": "640 light-years from Earth"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "consists of",
+        "object": "water"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is",
+        "object": "big"
+      }
+    ]
+  },
+  {
+    "reference": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "question": "how far is kepler-22b from earth?",
+    "response": "Kepler-22b is an exoplanet. An exoplanet is a planet that orbits a star outside our solar system. It is located 640 light-years from Earth. It mostly consists of rock and iron.",
+    "gemini-3.1_response_kg": [
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is",
+        "object": "an exoplanet"
+      },
+      {
+        "subject": "An exoplanet",
+        "predicate": "is",
+        "object": "a planet that orbits a star outside our solar system"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is located",
+        "object": "640 light-years from Earth"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "consists of",
+        "object": "rock and iron"
+      }
+    ]
+  },
+  {
+    "reference": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "s": "how far is kepler-22b from earth?",
+    "response": "Kepler-22b is an exoplanet. An exoplanet is a planet that orbits a star outside our solar system. It is located 640 light-years from Earth. It mostly consists of rock and iron.",
+    "gemini-3.1_response_kg": [
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is",
+        "object": "an exoplanet"
+      },
+      {
+        "subject": "An exoplanet",
+        "predicate": "is",
+        "object": "a planet that orbits a star outside our solar system"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is located",
+        "object": "640 light-years from Earth"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "consists of",
+        "object": "rock and iron"
+      }
+    ]
+  },
+  {
+    "s": "Kepler-22b is an exoplanet orbiting a Sun-like star 640 light-years from Earth. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface.[4] The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+    "ss": "how far is kepler-22b from earth?",
+    "response": "Kepler-22b is an exoplanet. An exoplanet is a planet that orbits a star outside our solar system. It is located 640 light-years from Earth. It mostly consists of rock and iron.",
+    "gemini-3.1_response_kg": [
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is",
+        "object": "an exoplanet"
+      },
+      {
+        "subject": "An exoplanet",
+        "predicate": "is",
+        "object": "a planet that orbits a star outside our solar system"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "is located",
+        "object": "640 light-years from Earth"
+      },
+      {
+        "subject": "Kepler-22b",
+        "predicate": "consists of",
+        "object": "rock and iron"
+      }
+    ]
+  }
+]

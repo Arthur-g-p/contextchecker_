@@ -3,6 +3,12 @@ Package-wide configuration defaults.
 
 Reads environment variables and prompt templates at import time.
 Services validate that the config they need is present before running.
+
+Logging architecture:
+    - Every module calls get_logger(__name__) → silent by default (NullHandler).
+    - CLI calls enable_logging() at startup → pretty output via PrettyFormatter.
+    - Library users call contextchecker.enable_logging() to opt in.
+    - --debug flag switches to DebugFormatter (timestamp + module prefix).
 """
 
 import os
@@ -13,51 +19,86 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 
-LOG_LEVEL: str = os.getenv("CONTEXTCHECKER_LOG_LEVEL", "INFO")
-LOG_FORMAT: str = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+class PrettyFormatter(logging.Formatter):
+    """Default CLI formatter — just the message, no noise."""
 
-_logger = logging.getLogger("contextchecker.settings")
+    def format(self, record: logging.LogRecord) -> str:
+        return record.getMessage()
+
+
+class DebugFormatter(logging.Formatter):
+    """Debug formatter — timestamp + source module prefix on every line."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = self.formatTime(record, "%H:%M:%S")
+        src = record.name.removeprefix("contextchecker.")
+        # Pad source to 12 chars for alignment
+        return f"{ts} | {src:<12} | {record.getMessage()}"
+
+
+# Install a NullHandler on the root logger so library users get silence.
+# Without this, Python's lastResort handler prints WARNING+ to stderr.
+logging.getLogger("contextchecker").addHandler(logging.NullHandler())
+
+
+def enable_logging(debug: bool = False) -> None:
+    """Activate console output for the contextchecker package.
+
+    Called automatically by the CLI. Library users can call this
+    explicitly to see output::
+
+        import contextchecker
+        contextchecker.enable_logging()        # pretty output
+        contextchecker.enable_logging(debug=True)  # + timestamps & module
+    """
+    root = logging.getLogger("contextchecker")
+
+    # Remove any existing handlers (avoid duplicates on repeated calls)
+    for h in root.handlers[:]:
+        if not isinstance(h, logging.NullHandler):
+            root.removeHandler(h)
+
+    formatter = DebugFormatter() if debug else PrettyFormatter()
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if debug else logging.INFO)
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a namespaced logger for *name*."""
-    logger = logging.getLogger(f"contextchecker.{name}")
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logger.addHandler(handler)
-    logger.setLevel(LOG_LEVEL)
-    return logger
+    """Return a namespaced logger for *name*.
+
+    The logger inherits from the 'contextchecker' root logger.
+    No handlers are attached here — enable_logging() controls output.
+    """
+    return logging.getLogger(f"contextchecker.{name}")
 
 
 # ── API keys ─────────────────────────────────────────────────────────────────
 # Read eagerly, validated lazily by the service that needs them.
 
 EXTRACTOR_API_KEY: str | None = os.getenv("EXTRACTOR_API_KEY")
-if not EXTRACTOR_API_KEY:
-    _logger.warning("EXTRACTOR_API_KEY not set — extraction commands will fail.")
-
 CHECKER_API_KEY: str | None = os.getenv("CHECKER_API_KEY")
-if not CHECKER_API_KEY:
-    _logger.warning("CHECKER_API_KEY not set — checking commands will fail.")
 
 LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "120.0"))
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
+PROMPT_PATH: Path = Path(__file__).parent / "prompt_map.json"
+
+
 def _load_prompts() -> dict[str, str]:
     """Load prompt templates from prompt_map.json shipped with the package."""
-    prompt_path = Path(__file__).parent / "prompt_map.json"
-
-    if not prompt_path.exists():
+    if not PROMPT_PATH.exists():
         raise FileNotFoundError(
-            f"prompt_map.json not found at {prompt_path}. Package may be corrupted."
+            f"prompt_map.json not found at {PROMPT_PATH}. Package may be corrupted."
         )
 
-    text = prompt_path.read_text(encoding="utf-8")
+    text = PROMPT_PATH.read_text(encoding="utf-8")
 
     try:
         return json.loads(text)
@@ -66,4 +107,3 @@ def _load_prompts() -> dict[str, str]:
 
 
 PROMPTS: dict[str, str] = _load_prompts()
-
