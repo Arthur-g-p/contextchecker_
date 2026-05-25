@@ -74,7 +74,61 @@ def extract(
         service = ExtractionService(model=model, base_url=extractor_base_api)
         result = service.run_sync(data)
     except ContextCheckerError as exc:
-        logger.error("%s: %s", type(exc).__name__, exc)
+        logger.error("")
+        logger.error("❌ %s: %s", type(exc).__name__, exc)
+        raise typer.Exit(code=1)
+
+    # Write output
+    output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Results written to %s", output_file)
+
+
+@app.command()
+def check(
+    input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to input_file with '_checked' suffix."),
+    model: str = typer.Option("gemini-2.0-flash", "--model", "-m", help="Model name for the checker LLM."),
+    extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model name that was used for extraction (to find the kg_key)."),
+    checker_base_api: str = typer.Option(None, "--checker-base-api", help="Optional base URL for the checker LLM API."),
+    joint: bool = typer.Option(True, "--joint/--no-joint", help="Use joint checking (multiple claims per LLM call). Default: on."),
+    joint_num: int = typer.Option(10, "--joint-num", help="Max claims per joint LLM call."),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
+):
+    """Check extracted claims against reference passages."""
+    from contextchecker.services.checking import CheckingService
+
+    # Activate logging
+    settings.enable_logging(debug=debug)
+
+    _print_header("check")
+
+    # Resolve output path
+    if output_file is None:
+        output_file = input_file.with_stem(input_file.stem + "_checked")
+
+    # Load input
+    try:
+        data = json.loads(input_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.error("Input file not found: %s", input_file)
+        raise typer.Exit(code=1)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid JSON in %s: %s", input_file, exc)
+        raise typer.Exit(code=1)
+
+    # Call service
+    try:
+        service = CheckingService(
+            model=model,
+            extractor_model=extractor_model,
+            base_url=checker_base_api,
+            joint=joint,
+            joint_num=joint_num,
+        )
+        result = service.run_sync(data)
+    except ContextCheckerError as exc:
+        logger.error("")
+        logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
     # Write output

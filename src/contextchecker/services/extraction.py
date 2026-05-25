@@ -2,6 +2,7 @@
 Extraction service — orchestrates the extract pipeline.
 
 Pipeline steps:
+0. Canonicalize: Normalize key aliases (context→reference, query→question).
 1. Validation: Ensures API key is configured and input data has 'response' keys.
 2. Filtering:  Skips items that already contain a {model}_response_kg key.
 3. Pre-filter: Detects full abstentions to avoid wasting LLM calls.
@@ -103,6 +104,9 @@ class ExtractionService(BaseService):
             InvalidInputError: No items contain a 'response' key.
             FilterError:       All items are already processed.
         """
+        # Step 0: Normalize key aliases (context→reference, query→question)
+        self._canonicalize_keys(data)
+
         valid = self._validate(data)
         pending, abstained, skipped = self._filter(valid)
 
@@ -156,7 +160,7 @@ class ExtractionService(BaseService):
         valid = []
         for i, item in enumerate(data):
             if "response" not in item:
-                logger.warning("Item %d has no 'response' key — skipping.", i)
+                logger.debug("Item %d has no 'response' key — skipping.", i)
                 continue
             valid.append(item)
 

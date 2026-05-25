@@ -20,5 +20,19 @@ class ExtractionPayload:
 
 # ── Checking ─────────────────────────────────────────────────────────────────
 
+@dataclass
+class CheckingPayload:
+    """Contract: CheckingService → Checker worker.
+
+    One payload per claim. The worker checks if this claim
+    is entailed by the reference (Entailment / Contradiction / Neutral).
+    """
+
+    claim: str          # flattened triplet: "subject predicate object"
+    reference: str      # the reference passage(s) to check against
+    item_index: int     # which item in the dataset this claim belongs to
+    claim_index: int    # which claim within that item
+
 
 # ── Evaluation ───────────────────────────────────────────────────────────────
+

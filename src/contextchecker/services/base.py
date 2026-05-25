@@ -116,3 +116,21 @@ class BaseService(ABC):
                 f"{name} is required. Set it in your .env file."
             )
         return key
+
+    @staticmethod
+    def _canonicalize_keys(data: list[dict]) -> None:
+        """Step 0: Normalize common key aliases in-place.
+
+        Different datasets use different names for the same concept.
+        This normalizes them to our canonical keys before any service
+        logic runs. 
+
+        Mappings:
+            context → reference
+            query   → question
+        """
+        for item in data:
+            if "context" in item and "reference" not in item:
+                item["reference"] = item.pop("context")
+            if "query" in item and "question" not in item:
+                item["question"] = item.pop("query")
