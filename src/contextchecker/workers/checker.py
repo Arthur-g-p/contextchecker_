@@ -33,19 +33,44 @@ class Verdict(str, Enum):
 
 
 class CheckResult(BaseModel):
-    """LLM response schema for single-claim checker prompt."""
+    """LLM response schema for single-claim checker prompt.
+
+    Explanation first — forces chain-of-thought reasoning before
+    the model commits to a verdict. Improves accuracy.
+    """
+    explanation: str
     verdict: Verdict
 
 
 class JointVerdictItem(BaseModel):
     """One claim's verdict in a joint checking response."""
     claim_id: int
+    explanation: str
     verdict: Verdict
 
 
 class JointCheckResult(BaseModel):
     """LLM response schema for joint checker prompt — multiple claims at once."""
     verdicts: list[JointVerdictItem] = Field(default_factory=list)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _format_reference(reference: list[str]) -> str:
+    """Join a list of reference passages into a single string for the prompt.
+
+    Each passage is numbered for clarity.
+    """
+    if len(reference) == 1:
+        return reference[0]
+    return "\n".join(
+        f"[Passage {i+1}] {passage}" for i, passage in enumerate(reference)
+    )
+
+
+def _reference_word_count(reference: list[str]) -> int:
+    """Total word count across all reference passages."""
+    return sum(len(p.split()) for p in reference)
 
 
 # ── Worker ───────────────────────────────────────────────────────────────────
@@ -80,11 +105,11 @@ class Checker:
 
     # ── Single mode ──────────────────────────────────────────────
 
-    def _build_messages(self, claim: str, reference: str) -> list[dict]:
+    def _build_messages(self, claim: str, reference: list[str]) -> list[dict]:
         """Build chat messages for a single check call."""
         prompt = format_prompt(self._prompt_template, {
             "claim": claim,
-            "reference": reference,
+            "reference": _format_reference(reference),
         })
         return [
             {"role": "system", "content": "You are a factual entailment judge."},
@@ -149,20 +174,20 @@ class Checker:
     # ── Joint mode ───────────────────────────────────────────────
 
     def _build_joint_messages(
-        self, numbered_claims: list[tuple[int, str]], reference: str
+        self, numbered_claims: list[tuple[int, str]], reference: list[str]
     ) -> list[dict]:
         """Build chat messages for a joint check call.
 
         Args:
             numbered_claims: list of (claim_id, claim_text) tuples.
-            reference: the reference passage.
+            reference: list of reference passages.
         """
         claims_block = "\n".join(
             f"[{cid}] {text}" for cid, text in numbered_claims
         )
         prompt = format_prompt(self._joint_prompt_template, {
             "claims": claims_block,
-            "reference": reference,
+            "reference": _format_reference(reference),
         })
         return [
             {"role": "system", "content": "You are a factual entailment judge."},
@@ -172,13 +197,13 @@ class Checker:
     async def check_joint(
         self,
         numbered_claims: list[tuple[int, str]],
-        reference: str,
+        reference: list[str],
     ) -> dict[int, Verdict | None]:
         """Check multiple claims in a single LLM call (joint mode).
 
         Args:
             numbered_claims: list of (claim_id, claim_text) tuples.
-            reference: the reference passage.
+            reference: list of reference passages.
 
         Returns:
             Dict mapping claim_id → Verdict. Missing IDs (gaps) get None.

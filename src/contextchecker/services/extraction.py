@@ -122,9 +122,10 @@ class ExtractionService(BaseService):
         # Build payloads only for pending items
         payloads = [ExtractionPayload(text=item["response"]) for item in pending]
 
-        # Execute
+        # Execute — fatal errors (auth, connection) propagate to CLI
         logger.info("── Extraction ────────────────────────────────────────")
         batch_results = await self._extractor.extract_batch(payloads)
+        phase_stats = self._extractor.last_stats
 
         # Serialize results back into dicts
         self._serialize(pending, batch_results)
@@ -133,19 +134,14 @@ class ExtractionService(BaseService):
         for item in abstained:
             item[self._kg_key] = []
 
-        # Count results for reporting
-        total_claims = sum(len(r) for r in batch_results)
-        successful = sum(1 for r in batch_results if len(r) > 0)
-        failed = len(batch_results) - successful
-
-        # Log results
+        # Log results using PhaseStats from the worker
         self._log_results(
             pending_count=len(pending),
             abstained_count=len(abstained),
             total=len(data),
-            total_claims=total_claims,
-            successful=successful,
-            failed=failed,
+            total_claims=phase_stats.total_items,
+            successful=phase_stats.success,
+            failed=phase_stats.total_errors,
             skipped=skipped,
         )
 
@@ -249,6 +245,7 @@ class ExtractionService(BaseService):
         self._log_bl_results(total, total_claims, successful, abstained_count)
         log_token_stats()
         self._log_done(total, total_claims, abstained_count, skipped)
+        # as of now we are not printing retriable errors?
 
     def _log_bl_results(
         self, total: int, claims: int, with_claims: int, abstentions: int

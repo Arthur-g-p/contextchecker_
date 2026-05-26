@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sqlite3
+import sys
 import traceback
 from dataclasses import dataclass
 from enum import Enum
@@ -188,13 +189,19 @@ class LLMClient:
 
         # ── CONFIG ERROR: BadRequest base (after subclass checks!) ─
 
-        if isinstance(e, BadRequestError):   
+        if isinstance(e, BadRequestError) or e.__class__.__name__ == 'BadRequestError':   
             error_text = ""
             if hasattr(e, 'body') and isinstance(e.body, dict):
                 error_text = str(e.body).lower()
             else:
                 error_text = str(e).lower()        
-            if "invalid model" in error_text or "model name" in error_text or "model id" in error_text:  #hardcode lite llm invalid model error catch
+            if (
+                "invalid model" in error_text 
+                or "model name" in error_text 
+                or "model id" in error_text
+                or "provider not provided" in error_text
+                or "pass in the llm provider" in error_text
+            ):
                 logger.error("⛔ CRITICAL: Model Error for '%s' - %s", self.model, e)
                 
                 if "/" in self.model:
@@ -211,7 +218,6 @@ class LLMClient:
         
             # Fallback 
             logger.warning("⚠️ BAD REQUEST (%s): %s", self.model, str(e)[:300])
-            # does not catch BAD REQUEST (google/gemini-3.1-flash-lite-preview): litellm.BadRequestError: LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model=google/gemini-3.1-flash-lite-preview
             return ErrorAction.SKIP
 
         # ── RETRY: Transient errors ───────────────────────────────
@@ -494,11 +500,17 @@ class LLMClient:
                 if self._discovery_lock.locked():
                     self._discovery_lock.release()
                 if not self._discovery_succeeded:
-                    self.save_cache()
-                    raise LLMClientError(
-                        f"No compatible strategy found for '{self.model}'. "
-                        f"Exhausted all {len(RETRY_MATRIX)} strategies."
-                    )
+                    # Don't mask a fatal error that's already propagating
+                    # (e.g. invalid model name → _save_and_raise → LLMClientError)
+                    current_exc = sys.exc_info()[1]
+                    if isinstance(current_exc, LLMClientError):
+                        pass  # fatal error already in flight — let it propagate
+                    else:
+                        self.save_cache()
+                        raise LLMClientError(
+                            f"No compatible strategy found for '{self.model}'. "
+                            f"Exhausted all {len(RETRY_MATRIX)} strategies."
+                        )
 
 
 
@@ -592,9 +604,16 @@ class LLMClient:
 
         logger.info("📡 Testing connection to %s/models...", self.base_url)
         try:
-            await self.client.models.list()
+            models_response = await self.client.models.list()
             logger.info("   ✅ Connection confirmed. Server reachable")
             self._connection_verified = True
+
+            # Show available models in debug mode — helps diagnose model name typos
+            model_ids = sorted([m.id for m in models_response.data])
+            if model_ids:
+                logger.debug("   Available models (%d):", len(model_ids))
+                for mid in model_ids:
+                    logger.debug("     - %s", mid)
 
         except AuthenticationError as e:
             logger.error("❌ FATAL: Authentication Failed.")

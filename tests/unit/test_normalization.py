@@ -1,15 +1,15 @@
 """
-Unit tests for _canonicalize_keys (BaseService) and _normalize_triplets (CheckingService).
+Unit tests for normalization and shared context/question canonicalization helpers.
 
-Tests the normalization logic that runs before any service-specific validation.
+Covers:
+- _canonicalize_keys (BaseService)
+- _normalize_triplets (CheckingService helper)
 """
 
 import pytest
-from unittest.mock import patch
 
 from contextchecker.services.base import BaseService
-from contextchecker.services.checking import _normalize_triplets, CheckingService
-from contextchecker.exceptions import InvalidInputError
+from contextchecker.services.checking import _normalize_triplets
 
 
 # ── _canonicalize_keys tests ─────────────────────────────────────────────────
@@ -18,11 +18,11 @@ class TestCanonicalizeKeys:
 
     def test_context_renamed_to_reference(self):
         """'context' → 'reference' when 'reference' is absent."""
-        data = [{"context": "some text", "response": "answer"}]
+        data = [{"context": ["passage one"], "response": "answer"}]
         BaseService._canonicalize_keys(data)
         assert "reference" in data[0]
         assert "context" not in data[0]
-        assert data[0]["reference"] == "some text"
+        assert data[0]["reference"] == ["passage one"]
 
     def test_query_renamed_to_question(self):
         """'query' → 'question' when 'question' is absent."""
@@ -34,19 +34,19 @@ class TestCanonicalizeKeys:
 
     def test_both_aliases_renamed(self):
         """Both 'context' and 'query' are renamed in the same item."""
-        data = [{"context": "ref text", "query": "q text", "response": "r"}]
+        data = [{"context": ["ref"], "query": "q text", "response": "r"}]
         BaseService._canonicalize_keys(data)
-        assert data[0]["reference"] == "ref text"
+        assert data[0]["reference"] == ["ref"]
         assert data[0]["question"] == "q text"
         assert "context" not in data[0]
         assert "query" not in data[0]
 
     def test_reference_already_exists_no_overwrite(self):
         """If 'reference' already exists, 'context' is NOT renamed (no overwrite)."""
-        data = [{"reference": "original", "context": "alias"}]
+        data = [{"reference": ["original"], "context": ["alias"]}]
         BaseService._canonicalize_keys(data)
-        assert data[0]["reference"] == "original"
-        assert data[0]["context"] == "alias"  # untouched
+        assert data[0]["reference"] == ["original"]
+        assert data[0]["context"] == ["alias"]  # untouched
 
     def test_question_already_exists_no_overwrite(self):
         """If 'question' already exists, 'query' is NOT renamed."""
@@ -57,9 +57,9 @@ class TestCanonicalizeKeys:
 
     def test_canonical_keys_already_present(self):
         """Items with canonical keys are untouched."""
-        data = [{"reference": "ref", "question": "q", "response": "r"}]
+        data = [{"reference": ["ref"], "question": "q", "response": "r"}]
         BaseService._canonicalize_keys(data)
-        assert data[0] == {"reference": "ref", "question": "q", "response": "r"}
+        assert data[0] == {"reference": ["ref"], "question": "q", "response": "r"}
 
     def test_no_relevant_keys(self):
         """Items with neither alias nor canonical key — untouched."""
@@ -76,19 +76,19 @@ class TestCanonicalizeKeys:
     def test_mixed_items(self):
         """Multiple items with different key shapes."""
         data = [
-            {"context": "ref1", "response": "r1"},
-            {"reference": "ref2", "query": "q2", "response": "r2"},
+            {"context": ["ref1"], "response": "r1"},
+            {"reference": ["ref2"], "query": "q2", "response": "r2"},
             {"response": "r3"},
         ]
         BaseService._canonicalize_keys(data)
-        assert data[0]["reference"] == "ref1"
-        assert data[1]["reference"] == "ref2"
+        assert data[0]["reference"] == ["ref1"]
+        assert data[1]["reference"] == ["ref2"]
         assert data[1]["question"] == "q2"
         assert "reference" not in data[2]
 
     def test_mutation_in_place(self):
         """Canonicalization mutates the original list, not a copy."""
-        data = [{"context": "ref"}]
+        data = [{"context": ["ref"]}]
         original_item = data[0]
         BaseService._canonicalize_keys(data)
         assert data[0] is original_item  # same object
@@ -162,75 +162,3 @@ class TestNormalizeTriplets:
         assert all("subject" in c for c in kg)
         assert all("triplet" not in c for c in kg)
         assert all("human_label" in c for c in kg)
-
-
-# ── Integration: CheckingService._validate with normalization ────────────────
-
-FAKE_API_KEY = "test-key-12345"
-EXTRACTOR_MODEL = "gemini-2.0-flash"
-KG_KEY = f"{EXTRACTOR_MODEL}_response_kg"
-
-
-class TestCheckingValidation:
-
-    @pytest.fixture(autouse=True)
-    def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
-
-    @pytest.fixture
-    def service(self):
-        with patch("contextchecker.services.checking.Checker"):
-            return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
-
-    def test_legacy_triplets_normalized_during_validation(self, service):
-        """_validate normalizes legacy triplet format in-place."""
-        data = [
-            {
-                "reference": "some ref",
-                KG_KEY: [{"triplet": ["X", "is", "Y"], "human_label": "Entailment"}],
-            }
-        ]
-        valid = service._validate(data)
-        # After validation, triplets should be canonical
-        assert valid[0][KG_KEY][0]["subject"] == "X"
-        assert "triplet" not in valid[0][KG_KEY][0]
-        assert valid[0][KG_KEY][0]["human_label"] == "Entailment"
-
-    def test_all_empty_kg_raises(self, service):
-        """All items have empty _response_kg → InvalidInputError."""
-        data = [
-            {"reference": "ref1", KG_KEY: []},
-            {"reference": "ref2", KG_KEY: []},
-        ]
-        with pytest.raises(InvalidInputError, match="empty"):
-            service._validate(data)
-
-    def test_missing_reference_dropped(self, service):
-        """Items without 'reference' are dropped."""
-        data = [
-            {KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},  # no reference
-            {"reference": "ref", KG_KEY: [{"subject": "X", "predicate": "Y", "object": "Z"}]},
-        ]
-        valid = service._validate(data)
-        assert len(valid) == 1
-        assert valid[0]["reference"] == "ref"
-
-    def test_missing_kg_key_dropped(self, service):
-        """Items without _response_kg are dropped."""
-        data = [
-            {"reference": "ref"},  # no kg_key
-            {"reference": "ref2", KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
-        ]
-        valid = service._validate(data)
-        assert len(valid) == 1
-
-    def test_context_alias_works_after_canonicalize(self, service):
-        """'context' is renamed to 'reference' by _canonicalize_keys before _validate."""
-        data = [
-            {"context": "some ref", KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
-        ]
-        # Simulate what run() does: canonicalize then validate
-        service._canonicalize_keys(data)
-        valid = service._validate(data)
-        assert len(valid) == 1
-        assert valid[0]["reference"] == "some ref"

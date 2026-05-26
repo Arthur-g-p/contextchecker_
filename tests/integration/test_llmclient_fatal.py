@@ -4,7 +4,7 @@ Integration tests for LLMClient fatal error handling.
 Tests verify that fatal API errors (auth, connection, budget, infrastructure)
 correctly propagate as LLMClientError, stop the batch, and trigger cache saves.
 
-All tests mock the AsyncOpenAI SDK — zero real network calls.
+All tests mock the AsyncOpenAI SDK and litellm.acompletion — zero real network calls.
 
 Run with:
     pytest tests/integration/test_llmclient_fatal.py -v
@@ -20,6 +20,7 @@ from openai import (
     APIConnectionError,
     APITimeoutError,
     InternalServerError,
+    BadRequestError,
 )
 
 from contextchecker.llmclient import LLMClient
@@ -103,6 +104,35 @@ def client():
     return c
 
 
+@pytest.fixture(params=["openai", "litellm"])
+def client_and_mock(request):
+    """Fixture parameterizing the client across OpenAI and LiteLLM paths."""
+    mode = request.param
+    if mode == "openai":
+        with patch("contextchecker.llmclient.AsyncOpenAI"):
+            c = LLMClient(
+                api_key="test-key-abc123",
+                model="test-model",
+                base_url="http://fake/v1",
+            )
+        c._connection_verified = True
+        c._strategy_discovered = True
+        c._discovery_succeeded = True
+        c.client.chat.completions.parse = AsyncMock()
+        yield c, c.client.chat.completions.parse
+    elif mode == "litellm":
+        c = LLMClient(
+            api_key="test-key-abc123",
+            model="google/gemini-2.0-flash",
+            base_url=None,
+        )
+        c._connection_verified = True
+        c._strategy_discovered = True
+        c._discovery_succeeded = True
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+            yield c, mock_acompletion
+
+
 # ── Group 1a: Fatal API errors stop the batch ────────────────────
 
 
@@ -114,9 +144,10 @@ class TestFatalErrorsStopBatch:
     run is doomed, not just one item.
     """
 
-    async def test_auth_error_raises_llmclient_error(self, client):
+    async def test_auth_error_raises_llmclient_error(self, client_and_mock):
         """AuthenticationError → LLMClientError with 'FATAL' in message."""
-        client.client.chat.completions.parse.side_effect = AuthenticationError(
+        client, mock_call = client_and_mock
+        mock_call.side_effect = AuthenticationError(
             message="Incorrect API key provided: test-k***23.",
             response=_fake_httpx_response(401),
             body=None,
@@ -125,9 +156,10 @@ class TestFatalErrorsStopBatch:
         with pytest.raises(LLMClientError, match="FATAL"):
             await client.generate_batch(_make_tasks(3))
 
-    async def test_permission_denied_raises_llmclient_error(self, client):
+    async def test_permission_denied_raises_llmclient_error(self, client_and_mock):
         """PermissionDeniedError → LLMClientError with 'FATAL' in message."""
-        client.client.chat.completions.parse.side_effect = PermissionDeniedError(
+        client, mock_call = client_and_mock
+        mock_call.side_effect = PermissionDeniedError(
             message="You don't have access to this model.",
             response=_fake_httpx_response(403),
             body=None,
@@ -136,9 +168,10 @@ class TestFatalErrorsStopBatch:
         with pytest.raises(LLMClientError, match="FATAL"):
             await client.generate_batch(_make_tasks(3))
 
-    async def test_model_not_found_raises_llmclient_error(self, client):
+    async def test_model_not_found_raises_llmclient_error(self, client_and_mock):
         """NotFoundError (model doesn't exist) → LLMClientError with 'FATAL'."""
-        client.client.chat.completions.parse.side_effect = NotFoundError(
+        client, mock_call = client_and_mock
+        mock_call.side_effect = NotFoundError(
             message="The model 'gpt-99' does not exist.",
             response=_fake_httpx_response(404),
             body=None,
@@ -147,15 +180,49 @@ class TestFatalErrorsStopBatch:
         with pytest.raises(LLMClientError, match="FATAL"):
             await client.generate_batch(_make_tasks(3))
 
-    async def test_auth_error_mid_batch_still_fatal(self, client):
+    async def test_unknown_model_bad_request_raises_llmclient_error(self, client_and_mock):
+        """BadRequestError for invalid/unknown model name → LLMClientError with 'FATAL'."""
+        client, mock_call = client_and_mock
+        body = {
+            "error": {
+                "message": "{'error': '/chat/completions: Invalid model name passed in model=gemini-2.0-flash. Call `/v1/models` to view available models for your key.'}",
+                "type": "None",
+            }
+        }
+        mock_call.side_effect = BadRequestError(
+            message="Error code: 400 - " + str(body),
+            response=_fake_httpx_response(400),
+            body=body,
+        )
+
+        with pytest.raises(LLMClientError, match="FATAL"):
+            await client.generate_batch(_make_tasks(3))
+
+    async def test_litellm_invalid_provider_raises_llmclient_error(self, client_and_mock):
+        """BadRequestError for LiteLLM provider missing -> LLMClientError with 'FATAL'."""
+        client, mock_call = client_and_mock
+        body = {
+            "error": "LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model=google/gemini-3.1-flash-lite-preview"
+        }
+        mock_call.side_effect = BadRequestError(
+            message=body["error"],
+            response=_fake_httpx_response(400),
+            body=body,
+        )
+
+        with pytest.raises(LLMClientError, match="FATAL"):
+            await client.generate_batch(_make_tasks(3))
+
+    async def test_auth_error_mid_batch_still_fatal(self, client_and_mock):
         """Auth error on request 3 of 5 → still raises LLMClientError.
 
         With async gather, all 5 tasks start concurrently. The auth error
         on any one of them should propagate and kill the batch. We can't
         assert exact call count (async timing), but the raise is guaranteed.
         """
+        client, mock_call = client_and_mock
         success = _fake_response()
-        client.client.chat.completions.parse.side_effect = [
+        mock_call.side_effect = [
             success,  # task 0: succeeds
             success,  # task 1: succeeds
             AuthenticationError(
@@ -170,13 +237,14 @@ class TestFatalErrorsStopBatch:
         with pytest.raises(LLMClientError):
             await client.generate_batch(_make_tasks(5))
 
-    async def test_server_error_4_consecutive_is_fatal(self, client):
+    async def test_server_error_4_consecutive_is_fatal(self, client_and_mock):
         """4 consecutive InternalServerError → LLMClientError('Infrastructure failure').
 
         The client tolerates up to 3 consecutive server errors with progressive
         backoff (5s, 10s, 15s). The 4th triggers a fatal crash with cache save.
         """
-        client.client.chat.completions.parse.side_effect = InternalServerError(
+        client, mock_call = client_and_mock
+        mock_call.side_effect = InternalServerError(
             message="Internal server error",
             response=_fake_httpx_response(500),
             body=None,
@@ -276,9 +344,10 @@ class TestCacheSavedOnFatal:
     This ensures partial results are preserved for crash recovery.
     """
 
-    async def test_cache_saved_on_auth_error(self, client):
+    async def test_cache_saved_on_auth_error(self, client_and_mock):
         """Auth failure triggers save_cache before the LLMClientError propagates."""
-        client.client.chat.completions.parse.side_effect = AuthenticationError(
+        client, mock_call = client_and_mock
+        mock_call.side_effect = AuthenticationError(
             message="expired",
             response=_fake_httpx_response(401),
             body=None,
@@ -291,9 +360,10 @@ class TestCacheSavedOnFatal:
             # save_cache called at least once (by _save_and_raise and/or generate_batch)
             assert mock_save.called
 
-    async def test_cache_saved_on_server_crash(self, client):
+    async def test_cache_saved_on_server_crash(self, client_and_mock):
         """Infrastructure failure (4× server error) triggers cache save."""
-        client.client.chat.completions.parse.side_effect = InternalServerError(
+        client, mock_call = client_and_mock
+        mock_call.side_effect = InternalServerError(
             message="Bad gateway",
             response=_fake_httpx_response(502),
             body=None,
@@ -306,13 +376,14 @@ class TestCacheSavedOnFatal:
 
                 assert mock_save.called
 
-    async def test_no_cache_save_on_clean_run(self, client):
+    async def test_no_cache_save_on_clean_run(self, client_and_mock):
         """Successful batch → save_cache is NOT called.
 
         Cache saves are expensive (SQLite I/O). They should only happen
         on errors, not on every successful completion.
         """
-        client.client.chat.completions.parse.return_value = _fake_response()
+        client, mock_call = client_and_mock
+        mock_call.return_value = _fake_response()
 
         with patch.object(client, "save_cache") as mock_save:
             results = await client.generate_batch(_make_tasks(3))

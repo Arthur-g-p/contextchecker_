@@ -1,0 +1,451 @@
+"""
+Unit tests for CheckingService methods and helper functions.
+
+Covers:
+- _format_reference, _reference_word_count (checker worker)
+- _effective_joint_num (checking service)
+- _triplet_to_text (CheckingService)
+- _flat_to_map (CheckingService)
+- _serialize (CheckingService)
+- _warn_oversized_references (CheckingService)
+- CheckingService._validate integration
+- CheckingService._filter
+- _build_payloads (CheckingService)
+"""
+
+import pytest
+from unittest.mock import patch
+
+from contextchecker.services.checking import (
+    _effective_joint_num,
+    CheckingService,
+    DEFAULT_MAX_WORDS,
+    CONTEXT_BUDGET_RATIO,
+)
+from contextchecker.workers.checker import (
+    Verdict,
+    _format_reference,
+    _reference_word_count,
+)
+from contextchecker.exceptions import InvalidInputError, FilterError
+
+
+FAKE_API_KEY = "test-key-12345"
+EXTRACTOR_MODEL = "gemini-2.0-flash"
+KG_KEY = f"{EXTRACTOR_MODEL}_response_kg"
+
+
+# ── _format_reference tests ─────────────────────────────────────────────────
+
+class TestFormatReference:
+
+    def test_single_passage(self):
+        """Single passage returned as-is, no numbering."""
+        assert _format_reference(["Hello world"]) == "Hello world"
+
+    def test_multiple_passages(self):
+        """Multiple passages numbered [Passage 1], [Passage 2], etc."""
+        result = _format_reference(["First", "Second", "Third"])
+        assert "[Passage 1] First" in result
+        assert "[Passage 2] Second" in result
+        assert "[Passage 3] Third" in result
+
+    def test_empty_list(self):
+        """Edge case: empty list."""
+        result = _format_reference([])
+        assert result == ""
+
+    def test_two_passages_newline_separated(self):
+        """Passages are joined with newlines."""
+        result = _format_reference(["A", "B"])
+        assert result == "[Passage 1] A\n[Passage 2] B"
+
+
+# ── _reference_word_count tests ──────────────────────────────────────────────
+
+class TestReferenceWordCount:
+
+    def test_single_passage(self):
+        assert _reference_word_count(["hello world"]) == 2
+
+    def test_multiple_passages(self):
+        assert _reference_word_count(["hello world", "foo bar baz"]) == 5
+
+    def test_empty_list(self):
+        assert _reference_word_count([]) == 0
+
+    def test_empty_string_passage(self):
+        assert _reference_word_count([""]) == 0
+
+
+# ── _effective_joint_num tests ───────────────────────────────────────────────
+
+class TestEffectiveJointNum:
+
+    def test_small_reference_no_reduction(self):
+        """Short reference — joint_num unchanged."""
+        ref = ["Small ref"]
+        claims = ["claim one", "claim two", "claim three"]
+        result = _effective_joint_num(ref, claims, joint_num=10, max_words=6000)
+        assert result == 10
+
+    def test_huge_reference_reduces_to_one(self):
+        """Reference alone exceeds budget — falls back to 1."""
+        ref = [" ".join(["word"] * 5000)]  # 5000 words
+        claims = ["claim"]
+        result = _effective_joint_num(ref, claims, joint_num=10, max_words=6000)
+        assert result == 1
+
+    def test_moderate_reference_partial_reduction(self):
+        """Reference eats into budget, fewer claims fit."""
+        # Budget: 6000 * 0.75 = 4500. Ref = 4000 words. Available = 4500 - 4000 - 100 = 400.
+        # Each claim ~2 words. Fits ~200 claims. joint_num=10 wins.
+        ref = [" ".join(["word"] * 4000)]
+        claims = ["claim one"] * 5
+        result = _effective_joint_num(ref, claims, joint_num=10, max_words=6000)
+        assert result == 10  # 200 fit, capped at 10
+
+    def test_tight_budget_reduces_below_joint_num(self):
+        """Budget is tight — effective num drops below joint_num."""
+        # Budget: 500 * 0.75 = 375. Ref = 300 words. Available = 375 - 300 - 100 = -25 → 1
+        ref = [" ".join(["word"] * 300)]
+        claims = ["claim"] * 5
+        result = _effective_joint_num(ref, claims, joint_num=10, max_words=500)
+        assert result == 1
+
+    def test_no_claims_returns_joint_num(self):
+        """Empty claims list → return joint_num as-is."""
+        result = _effective_joint_num(["ref"], [], joint_num=10, max_words=6000)
+        assert result == 10
+
+    def test_multiple_passages_word_count(self):
+        """Reference is list of passages — total word count used."""
+        # 3 passages × 100 words = 300 words total
+        ref = [" ".join(["word"] * 100) for _ in range(3)]
+        claims = ["claim"] * 5
+        result = _effective_joint_num(ref, claims, joint_num=10, max_words=6000)
+        assert result == 10  # plenty of room
+
+
+# ── _triplet_to_text tests ───────────────────────────────────────────────────
+
+class TestTripletToText:
+
+    def test_basic(self):
+        t = {"subject": "France", "predicate": "has capital", "object": "Paris"}
+        assert CheckingService._triplet_to_text(t) == "France has capital Paris"
+
+    def test_single_word_fields(self):
+        t = {"subject": "A", "predicate": "is", "object": "B"}
+        assert CheckingService._triplet_to_text(t) == "A is B"
+
+
+# ── _flat_to_map tests ──────────────────────────────────────────────────────
+
+class TestFlatToMap:
+
+    def test_basic_mapping(self):
+        """Flat payloads+verdicts → nested dict."""
+        from contextchecker.models import CheckingPayload
+
+        payloads = [
+            CheckingPayload(claim="c1", reference=["r"], item_index=0, claim_index=0),
+            CheckingPayload(claim="c2", reference=["r"], item_index=0, claim_index=1),
+            CheckingPayload(claim="c3", reference=["r"], item_index=1, claim_index=0),
+        ]
+        verdicts = [Verdict.ENTAILMENT, Verdict.CONTRADICTION, Verdict.NEUTRAL]
+
+        result = CheckingService._flat_to_map(payloads, verdicts)
+        assert result == {
+            0: {0: Verdict.ENTAILMENT, 1: Verdict.CONTRADICTION},
+            1: {0: Verdict.NEUTRAL},
+        }
+
+    def test_with_none_verdicts(self):
+        """None verdicts (failures) are preserved."""
+        from contextchecker.models import CheckingPayload
+
+        payloads = [
+            CheckingPayload(claim="c1", reference=["r"], item_index=0, claim_index=0),
+            CheckingPayload(claim="c2", reference=["r"], item_index=0, claim_index=1),
+        ]
+        verdicts = [Verdict.ENTAILMENT, None]
+
+        result = CheckingService._flat_to_map(payloads, verdicts)
+        assert result == {0: {0: Verdict.ENTAILMENT, 1: None}}
+
+    def test_empty_inputs(self):
+        result = CheckingService._flat_to_map([], [])
+        assert result == {}
+
+
+# ── _serialize tests ─────────────────────────────────────────────────────────
+
+class TestSerialize:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    @pytest.fixture
+    def service(self):
+        with patch("contextchecker.services.checking.Checker"):
+            return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
+
+    def test_basic_serialize(self, service):
+        """Verdicts written back as string values."""
+        items = [
+            {KG_KEY: [
+                {"subject": "A", "predicate": "is", "object": "B"},
+                {"subject": "C", "predicate": "is", "object": "D"},
+            ]},
+        ]
+        verdicts_map = {0: {0: Verdict.ENTAILMENT, 1: Verdict.CONTRADICTION}}
+        service._serialize(items, verdicts_map)
+        assert items[0]["checker-model_checker_verdicts"] == ["Entailment", "Contradiction"]
+
+    def test_serialize_with_none_gaps(self, service):
+        """None verdicts (gaps/failures) preserved as None."""
+        items = [
+            {KG_KEY: [
+                {"subject": "A", "predicate": "is", "object": "B"},
+                {"subject": "C", "predicate": "is", "object": "D"},
+            ]},
+        ]
+        verdicts_map = {0: {0: Verdict.ENTAILMENT, 1: None}}
+        service._serialize(items, verdicts_map)
+        assert items[0]["checker-model_checker_verdicts"] == ["Entailment", None]
+
+    def test_serialize_missing_item_in_map(self, service):
+        """Item missing from verdicts_map → all None."""
+        items = [
+            {KG_KEY: [{"subject": "A", "predicate": "is", "object": "B"}]},
+        ]
+        verdicts_map = {}  # empty
+        service._serialize(items, verdicts_map)
+        assert items[0]["checker-model_checker_verdicts"] == [None]
+
+
+# ── _warn_oversized_references tests ─────────────────────────────────────────
+
+class TestWarnOversizedReferences:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    def test_no_warning_when_max_words_none(self, caplog):
+        """No warning when max_words is None (single mode, unset)."""
+        with patch("contextchecker.services.checking.Checker"):
+            service = CheckingService(
+                model="checker", extractor_model=EXTRACTOR_MODEL,
+                joint=False, max_words=None,
+            )
+        items = [{"reference": [" ".join(["word"] * 10000)], KG_KEY: []}]
+        service._warn_oversized_references(items)
+        assert "too large" not in caplog.text
+
+    def test_warning_when_reference_exceeds_budget(self, caplog):
+        """Warning emitted when reference exceeds the word budget."""
+        import logging
+        with patch("contextchecker.services.checking.Checker"):
+            service = CheckingService(
+                model="checker", extractor_model=EXTRACTOR_MODEL,
+                max_words=100,
+            )
+        items = [{"reference": [" ".join(["word"] * 200)], KG_KEY: []}]
+        with caplog.at_level(logging.WARNING, logger="contextchecker.services.checking"):
+            service._warn_oversized_references(items)
+        assert "too large" in caplog.text
+
+    def test_no_warning_when_within_budget(self, caplog):
+        """No warning when reference is within budget."""
+        import logging
+        with patch("contextchecker.services.checking.Checker"):
+            service = CheckingService(
+                model="checker", extractor_model=EXTRACTOR_MODEL,
+                max_words=6000,
+            )
+        items = [{"reference": ["short ref"], KG_KEY: []}]
+        with caplog.at_level(logging.WARNING, logger="contextchecker.services.checking"):
+            service._warn_oversized_references(items)
+        assert "too large" not in caplog.text
+
+
+# ── CheckingService._validate integration ────────────────────────────────────
+
+class TestCheckingValidation:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    @pytest.fixture
+    def service(self):
+        with patch("contextchecker.services.checking.Checker"):
+            return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
+
+    def test_legacy_triplets_normalized_during_validation(self, service):
+        """_validate normalizes legacy triplet format in-place."""
+        data = [
+            {
+                "reference": ["some ref"],
+                KG_KEY: [{"triplet": ["X", "is", "Y"], "human_label": "Entailment"}],
+            }
+        ]
+        valid = service._validate(data)
+        assert valid[0][KG_KEY][0]["subject"] == "X"
+        assert "triplet" not in valid[0][KG_KEY][0]
+        assert valid[0][KG_KEY][0]["human_label"] == "Entailment"
+
+    def test_all_empty_kg_raises(self, service):
+        """All items have empty _response_kg → InvalidInputError."""
+        data = [
+            {"reference": ["ref1"], KG_KEY: []},
+            {"reference": ["ref2"], KG_KEY: []},
+        ]
+        with pytest.raises(InvalidInputError, match="empty"):
+            service._validate(data)
+
+    def test_missing_reference_dropped(self, service):
+        """Items without 'reference' are dropped."""
+        data = [
+            {KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
+            {"reference": ["ref"], KG_KEY: [{"subject": "X", "predicate": "Y", "object": "Z"}]},
+        ]
+        valid = service._validate(data)
+        assert len(valid) == 1
+        assert valid[0]["reference"] == ["ref"]
+
+    def test_missing_kg_key_dropped(self, service):
+        """Items without _response_kg are dropped."""
+        data = [
+            {"reference": ["ref"]},
+            {"reference": ["ref2"], KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
+        ]
+        valid = service._validate(data)
+        assert len(valid) == 1
+
+    def test_context_alias_works_after_canonicalize(self, service):
+        """'context' is renamed to 'reference' by _canonicalize_keys before _validate."""
+        data = [
+            {"context": ["some ref"], KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
+        ]
+        service._canonicalize_keys(data)
+        valid = service._validate(data)
+        assert len(valid) == 1
+        assert valid[0]["reference"] == ["some ref"]
+
+    def test_all_items_missing_both_keys_raises(self, service):
+        """No items have required keys → InvalidInputError."""
+        data = [{"foo": "bar"}, {"baz": "qux"}]
+        with pytest.raises(InvalidInputError):
+            service._validate(data)
+
+
+# ── CheckingService._filter tests ────────────────────────────────────────────
+
+class TestCheckingFilter:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    @pytest.fixture
+    def service(self):
+        with patch("contextchecker.services.checking.Checker"):
+            return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
+
+    def test_pending_items_returned(self, service):
+        """Items without verdict key are pending."""
+        valid = [
+            {"reference": ["r"], KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
+        ]
+        pending, skipped = service._filter(valid)
+        assert len(pending) == 1
+        assert skipped == 0
+
+    def test_already_checked_skipped(self, service):
+        """Items with existing verdict key are skipped."""
+        valid = [
+            {
+                "reference": ["r"],
+                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}],
+                "checker-model_checker_verdicts": ["Entailment"],
+            },
+            {"reference": ["r"], KG_KEY: [{"subject": "X", "predicate": "Y", "object": "Z"}]},
+        ]
+        pending, skipped = service._filter(valid)
+        assert len(pending) == 1
+        assert skipped == 1
+
+    def test_empty_kg_skipped(self, service):
+        """Items with empty _response_kg (abstentions) are skipped."""
+        valid = [
+            {"reference": ["r"], KG_KEY: []},
+            {"reference": ["r"], KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
+        ]
+        pending, skipped = service._filter(valid)
+        assert len(pending) == 1
+        assert skipped == 1
+
+    def test_all_skipped_raises(self, service):
+        """All items already checked → FilterError."""
+        valid = [
+            {
+                "reference": ["r"],
+                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}],
+                "checker-model_checker_verdicts": ["Entailment"],
+            },
+        ]
+        with pytest.raises(FilterError):
+            service._filter(valid)
+
+
+# ── _build_payloads tests ────────────────────────────────────────────────────
+
+class TestBuildPayloads:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    @pytest.fixture
+    def service(self):
+        with patch("contextchecker.services.checking.Checker"):
+            return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
+
+    def test_single_item_single_claim(self, service):
+        pending = [
+            {"reference": ["ref passage"], KG_KEY: [{"subject": "A", "predicate": "is", "object": "B"}]},
+        ]
+        payloads = service._build_payloads(pending)
+        assert len(payloads) == 1
+        assert payloads[0].claim == "A is B"
+        assert payloads[0].reference == ["ref passage"]
+        assert payloads[0].item_index == 0
+        assert payloads[0].claim_index == 0
+
+    def test_multiple_items_multiple_claims(self, service):
+        pending = [
+            {"reference": ["r1"], KG_KEY: [
+                {"subject": "A", "predicate": "is", "object": "B"},
+                {"subject": "C", "predicate": "has", "object": "D"},
+            ]},
+            {"reference": ["r2"], KG_KEY: [
+                {"subject": "X", "predicate": "near", "object": "Y"},
+            ]},
+        ]
+        payloads = service._build_payloads(pending)
+        assert len(payloads) == 3
+        assert payloads[0].item_index == 0 and payloads[0].claim_index == 0
+        assert payloads[1].item_index == 0 and payloads[1].claim_index == 1
+        assert payloads[2].item_index == 1 and payloads[2].claim_index == 0
+
+    def test_reference_is_list(self, service):
+        """Reference in payload is list[str], not concatenated."""
+        pending = [
+            {"reference": ["p1", "p2"], KG_KEY: [{"subject": "A", "predicate": "is", "object": "B"}]},
+        ]
+        payloads = service._build_payloads(pending)
+        assert payloads[0].reference == ["p1", "p2"]

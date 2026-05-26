@@ -5,6 +5,7 @@ Pipeline steps:
 0. Canonicalize: Normalize key aliases (context→reference, query→question).
 1. Validation:   Ensures data has 'reference' and non-empty '{model}_response_kg'.
    1.5. Normalize: Convert triplet arrays to canonical {subject, predicate, object} dicts.
+   1.6. Context warning: Warn if reference exceeds max_words (advisory in single mode).
 2. Filtering:    Skips items already checked or with zero claims (abstentions).
 3. Payloading:   Flattens triplets into one CheckingPayload per claim.
 4. Execution:    Delegates to the Checker worker (async).
@@ -22,7 +23,7 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.models import CheckingPayload
 from contextchecker.services.base import BaseService
-from contextchecker.workers.checker import Checker, Verdict
+from contextchecker.workers.checker import Checker, Verdict, _reference_word_count
 from contextchecker.stats import GLOBAL_STATS
 
 logger = settings.get_logger(__name__)
@@ -63,13 +64,8 @@ def _normalize_triplets(kg_list: list[dict]) -> None:
 
 # ── Context budget helpers ───────────────────────────────────────────────────
 
-def _word_count(text: str) -> int:
-    """Rough word count — split on whitespace."""
-    return len(text.split())
-
-
 def _effective_joint_num(
-    reference: str,
+    reference: list[str],
     claims: list[str],
     joint_num: int,
     max_words: int = DEFAULT_MAX_WORDS,
@@ -80,7 +76,7 @@ def _effective_joint_num(
     returns joint_num unchanged. Otherwise reduces it proportionally.
 
     Args:
-        reference: the reference text.
+        reference: list of reference passages.
         claims: list of claim strings.
         joint_num: user-requested max claims per call.
         max_words: word budget for the entire prompt.
@@ -88,7 +84,7 @@ def _effective_joint_num(
     Returns:
         Effective chunk size (≥ 1).
     """
-    ref_words = _word_count(reference)
+    ref_words = _reference_word_count(reference)
     budget = int(max_words * CONTEXT_BUDGET_RATIO)
 
     # Words available for claims after reference + prompt overhead (~100 words)
@@ -100,7 +96,7 @@ def _effective_joint_num(
     # Average words per claim
     if not claims:
         return joint_num
-    avg_claim_words = sum(_word_count(c) for c in claims) / len(claims)
+    avg_claim_words = sum(len(c.split()) for c in claims) / len(claims)
     if avg_claim_words <= 0:
         return joint_num
 
@@ -120,7 +116,7 @@ class CheckingService(BaseService):
 
     Supports two modes:
     - Joint (default): groups claims per item into a single LLM call.
-      Controlled by joint_num (max claims per call) and context budget.
+      Controlled by joint_num (max claims per call) and max_words (context budget).
     - Single: one LLM call per claim (--no-joint).
 
     The service owns all validation and filtering logic. The Checker
@@ -135,6 +131,7 @@ class CheckingService(BaseService):
         concurrency: int = 10,
         joint: bool = True,
         joint_num: int = DEFAULT_JOINT_NUM,
+        max_words: int | None = None,
     ):
         api_key = self._require_api_key(
             settings.CHECKER_API_KEY, "CHECKER_API_KEY"
@@ -144,6 +141,10 @@ class CheckingService(BaseService):
         self.base_url = base_url
         self.joint = joint
         self.joint_num = joint_num
+        # max_words: default only applies in joint mode
+        self.max_words = max_words if max_words is not None else (
+            DEFAULT_MAX_WORDS if joint else None
+        )
         self._extractor_model = extractor_model
         self._kg_key = f"{extractor_model}_response_kg"
         self._verdict_key = f"{model}_checker_verdicts"
@@ -202,6 +203,7 @@ class CheckingService(BaseService):
 
         Items without the kg_key (not yet extracted) or without 'reference'
         are dropped. Then step 1.5 normalizes triplet format in-place.
+        Step 1.6 warns about oversized references.
 
         Global gate: at least one item must have a non-empty _response_kg.
         """
@@ -236,7 +238,35 @@ class CheckingService(BaseService):
                 "No claims to check."
             )
 
+        # Step 1.6: Context size warning
+        self._warn_oversized_references(valid)
+
         return valid
+
+    def _warn_oversized_references(self, items: list[dict]) -> None:
+        """Step 1.6: Warn if any reference exceeds max_words.
+
+        Only fires when max_words is set (always in joint mode,
+        opt-in in single mode). Advisory only — does not drop items.
+        """
+        if self.max_words is None:
+            return
+
+        budget = int(self.max_words * CONTEXT_BUDGET_RATIO)
+        oversized = []
+        for i, item in enumerate(items):
+            ref = item["reference"]
+            wc = _reference_word_count(ref) if isinstance(ref, list) else len(ref.split())
+            if wc > budget:
+                oversized.append((i, wc))
+
+        if oversized:
+            for idx, wc in oversized:
+                logger.warning(
+                    "⚠️  Item %d: reference is %d words (budget: %d). "
+                    "Context may be too large for reliable results.",
+                    idx, wc, budget,
+                )
 
     def _filter(self, valid: list[dict]) -> tuple[list[dict], int]:
         """Step 2: Filter items that already have verdicts or zero claims.
@@ -303,7 +333,7 @@ class CheckingService(BaseService):
 
             # Compute effective chunk size based on context budget
             effective_num = _effective_joint_num(
-                reference, claim_texts, self.joint_num,
+                reference, claim_texts, self.joint_num, self.max_words,
             )
 
             # Chunk claims into groups of effective_num
@@ -405,9 +435,12 @@ class CheckingService(BaseService):
         logger.info("    Model:       %s", location)
         logger.info("    Extractor:   %s (reading '%s')", self._extractor_model, self._kg_key)
         if self.joint:
-            logger.info("    Mode:        joint (max %d claims/call)", self.joint_num)
+            logger.info("    Mode:        joint (max %d claims/call, %d max words)", self.joint_num, self.max_words)
         else:
-            logger.info("    Mode:        single (1 claim/call)")
+            if self.max_words:
+                logger.info("    Mode:        single (1 claim/call, %d max words)", self.max_words)
+            else:
+                logger.info("    Mode:        single (1 claim/call)")
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 

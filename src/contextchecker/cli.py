@@ -92,6 +92,7 @@ def check(
     checker_base_api: str = typer.Option(None, "--checker-base-api", help="Optional base URL for the checker LLM API."),
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Use joint checking (multiple claims per LLM call). Default: on."),
     joint_num: int = typer.Option(10, "--joint-num", help="Max claims per joint LLM call."),
+    max_words: int = typer.Option(None, "--max-words", help="Word budget per LLM call. Default: 6000 in joint mode, unset in single."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Check extracted claims against reference passages."""
@@ -124,6 +125,7 @@ def check(
             base_url=checker_base_api,
             joint=joint,
             joint_num=joint_num,
+            max_words=max_words,
         )
         result = service.run_sync(data)
     except ContextCheckerError as exc:
