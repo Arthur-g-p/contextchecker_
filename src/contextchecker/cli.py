@@ -42,8 +42,8 @@ def _print_header(command: str) -> None:
 @app.command()
 def extract(
     input_file: Path = typer.Argument(..., help="Path to JSON input file."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to input_file with '_extracted' suffix."),
-    model: str = typer.Option("gemini-2.0-flash", "--model", "-m", help="Model name used as key prefix."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    model: str = typer.Option(None, "--model", "-m", help="Model name used as key prefix."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
@@ -55,9 +55,10 @@ def extract(
 
     _print_header("extract")
 
-    # Resolve output path
+    # Resolve output path — default: results/{filename} next to input
     if output_file is None:
-        output_file = input_file.with_stem(input_file.stem + "_extracted")
+        output_file = input_file.parent / "results" / input_file.name
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Load input
     try:
@@ -86,12 +87,12 @@ def extract(
 @app.command()
 def check(
     input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to input_file with '_checked' suffix."),
-    model: str = typer.Option("gemini-2.0-flash", "--model", "-m", help="Model name for the checker LLM."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    model: str = typer.Option(None, "--model", "-m", help="Model name for the checker LLM."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model name that was used for extraction (to find the kg_key)."),
     checker_base_api: str = typer.Option(None, "--checker-base-api", help="Optional base URL for the checker LLM API."),
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Use joint checking (multiple claims per LLM call). Default: on."),
-    joint_num: int = typer.Option(10, "--joint-num", help="Max claims per joint LLM call."),
+    joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per LLM call. Default: 6000 in joint mode, unset in single."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
@@ -103,9 +104,10 @@ def check(
 
     _print_header("check")
 
-    # Resolve output path
+    # Resolve output path — default: results/{filename} next to input
     if output_file is None:
-        output_file = input_file.with_stem(input_file.stem + "_checked")
+        output_file = input_file.parent / "results" / input_file.name
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Load input
     try:

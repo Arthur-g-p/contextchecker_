@@ -9,36 +9,31 @@ Pipeline steps:
 2. Filtering:    Skips items already checked or with zero claims (abstentions).
 3. Payloading:   Flattens triplets into one CheckingPayload per claim.
 4. Execution:    Delegates to the Checker worker (async).
-                 Joint mode: groups claims per item, chunks by context budget.
-                 Single mode: one LLM call per claim.
-5. Serialization: Writes verdicts back into the dicts.
+                 Joint mode: pre-computes all chunks, sends via check_joint_batch.
+                 Single mode: one LLM call per claim via check_batch.
+5. Serialization: Writes verdict + explanation into each triplet dict.
 6. Reporting:    Logs validation, skip, config, results, and done line.
 """
 
 import asyncio
-import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.models import CheckingPayload
 from contextchecker.services.base import BaseService
-from contextchecker.workers.checker import Checker, Verdict, _reference_word_count
+from contextchecker.workers.checker import (
+    Checker, Verdict, ClaimVerdict, _reference_word_count,
+)
 from contextchecker.stats import GLOBAL_STATS
 
 logger = settings.get_logger(__name__)
-
-# Default maximum claims per joint LLM call.
-DEFAULT_JOINT_NUM = 10
 
 # Context budget: if estimated word count exceeds this fraction of
 # max_words, we reduce the chunk size. Word count is a proxy for
 # tokens since not all endpoints support tokenization.
 CONTEXT_BUDGET_RATIO = 0.75
-
-# Rough word limit for a joint prompt. Conservative default that
-# works for most models (~8k tokens ≈ 6000 words).
-DEFAULT_MAX_WORDS = 6000
 
 
 # ── Normalization helpers ────────────────────────────────────────────────────
@@ -68,7 +63,7 @@ def _effective_joint_num(
     reference: list[str],
     claims: list[str],
     joint_num: int,
-    max_words: int = DEFAULT_MAX_WORDS,
+    max_words: int = settings.DEFAULT_MAX_WORDS,
 ) -> int:
     """Compute the effective chunk size for a joint call.
 
@@ -107,12 +102,27 @@ def _effective_joint_num(
     return min(joint_num, fits)
 
 
+# ── Joint chunk metadata ────────────────────────────────────────────────────
+
+@dataclass
+class _JointChunk:
+    """Internal bookkeeping for a joint LLM call.
+
+    Maps a chunk of numbered claims back to its source item and
+    claim indices so we can write verdicts to the correct triplets.
+    """
+    numbered_claims: list[tuple[int, str]]
+    reference: list[str]
+    item_index: int
+    chunk_start: int   # 0-based index into the item's claims
+
+
 class CheckingService(BaseService):
     """Orchestrates checking: validate → filter → flatten → check → serialize.
 
     Takes extracted data (with {model}_response_kg triplets) and checks
-    each claim against the item's reference passage. Writes verdicts
-    back as {model}_checker_verdicts.
+    each claim against the item's reference passage. Writes verdict +
+    explanation directly into each triplet dict.
 
     Supports two modes:
     - Joint (default): groups claims per item into a single LLM call.
@@ -130,7 +140,7 @@ class CheckingService(BaseService):
         base_url: str | None = None,
         concurrency: int = 10,
         joint: bool = True,
-        joint_num: int = DEFAULT_JOINT_NUM,
+        joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
     ):
         api_key = self._require_api_key(
@@ -143,11 +153,12 @@ class CheckingService(BaseService):
         self.joint_num = joint_num
         # max_words: default only applies in joint mode
         self.max_words = max_words if max_words is not None else (
-            DEFAULT_MAX_WORDS if joint else None
+            settings.DEFAULT_MAX_WORDS if joint else None
         )
         self._extractor_model = extractor_model
         self._kg_key = f"{extractor_model}_response_kg"
-        self._verdict_key = f"{model}_checker_verdicts"
+        self._verdict_key = f"{model}_checker_verdict"
+        self._explanation_key = f"{model}_checker_explanation"
         self._checker = Checker(
             api_key=api_key,
             model=model,
@@ -160,8 +171,8 @@ class CheckingService(BaseService):
     async def run(self, data: list[dict]) -> list[dict]:
         """Run the full checking pipeline.
 
-        Mutates and returns *data* with verdicts written
-        into each dict under the ``{model}_checker_verdicts`` key.
+        Mutates and returns *data* with verdicts + explanations written
+        into each triplet dict.
 
         Raises:
             InvalidInputError: No items have extracted triplets.
@@ -171,10 +182,10 @@ class CheckingService(BaseService):
         self._canonicalize_keys(data)
 
         valid = self._validate(data)
-        pending, skipped = self._filter(valid)
+        pending, skip_stats = self._filter(valid)
 
         self._log_validation(len(data), len(valid), abstained=0)
-        self._log_skip(len(valid), skipped, len(pending))
+        self._log_skip(len(valid), skip_stats, len(pending))
         self._log_config()
 
         # Execute
@@ -188,7 +199,7 @@ class CheckingService(BaseService):
             flat_verdicts = await self._checker.check_batch(payloads)
             verdicts_map = self._flat_to_map(payloads, flat_verdicts)
 
-        # Serialize verdicts back into dicts
+        # Serialize verdicts + explanations into each triplet dict
         self._serialize(pending, verdicts_map)
 
         # TODO: Count results for reporting
@@ -268,30 +279,39 @@ class CheckingService(BaseService):
                     idx, wc, budget,
                 )
 
-    def _filter(self, valid: list[dict]) -> tuple[list[dict], int]:
+    def _filter(self, valid: list[dict]) -> tuple[list[dict], dict]:
         """Step 2: Filter items that already have verdicts or zero claims.
 
-        Returns (pending, skipped_count).
+        Returns (pending, skip_stats) where skip_stats breaks down
+        the reasons items were skipped:
+            already_checked: item already has verdict for this checker model
+            empty_claims:    _response_kg is empty (abstention or extraction error)
         """
         pending: list[dict] = []
-        skipped = 0
+        already_checked = 0
+        empty_claims = 0
 
         for item in valid:
-            if self._verdict_key in item:
-                skipped += 1
+            # Already checked: at least one triplet has the verdict key
+            if any(self._verdict_key in t for t in item[self._kg_key]):
+                already_checked += 1
                 continue
-            # Skip items with zero claims (abstentions) — nothing to check
+            # Empty claims (abstention or extraction error) — nothing to check
             if not item[self._kg_key]:
-                skipped += 1
+                empty_claims += 1
                 continue
             pending.append(item)
 
+        skipped = already_checked + empty_claims
         if not pending:
             raise FilterError(
-                f"All {len(valid)} items already have '{self._verdict_key}' "
-                "or have zero claims. Nothing to check."
+                f"All {len(valid)} items already checked or have zero claims. "
+                "Nothing to check."
             )
-        return pending, skipped
+        return pending, {
+            "already_checked": already_checked,
+            "empty_claims": empty_claims,
+        }
 
     def _build_payloads(self, pending: list[dict]) -> list[CheckingPayload]:
         """Step 3 (single mode): Flatten triplets into one payload per claim."""
@@ -317,18 +337,18 @@ class CheckingService(BaseService):
 
     async def _execute_joint(
         self, pending: list[dict]
-    ) -> dict[int, dict[int, Verdict | None]]:
-        """Execute checking in joint mode: group claims per item, chunk by budget.
+    ) -> dict[int, dict[int, ClaimVerdict]]:
+        """Execute checking in joint mode.
 
-        Returns nested dict: {item_index: {claim_index: Verdict | None}}.
+        Pre-computes ALL chunks across all items, sends them as a single
+        batch through check_joint_batch (→ tqdm progress bar + concurrency).
+        Maps results back to {item_index: {claim_index: ClaimVerdict}}.
         """
-        all_verdicts: dict[int, dict[int, Verdict | None]] = {}
-
+        # Pre-compute all chunks
+        chunks: list[_JointChunk] = []
         for item_idx, item in enumerate(pending):
             claims = item[self._kg_key]
             reference = item["reference"]
-
-            # Flatten all claim texts for this item
             claim_texts = [self._triplet_to_text(t) for t in claims]
 
             # Compute effective chunk size based on context budget
@@ -336,44 +356,51 @@ class CheckingService(BaseService):
                 reference, claim_texts, self.joint_num, self.max_words,
             )
 
-            # Chunk claims into groups of effective_num
-            item_verdicts: dict[int, Verdict | None] = {}
             for chunk_start in range(0, len(claims), effective_num):
                 chunk_end = min(chunk_start + effective_num, len(claims))
-
-                # Build numbered claims: (claim_id, claim_text)
-                # claim_id is 1-based for the LLM prompt
                 numbered = [
                     (claim_idx + 1, claim_texts[claim_idx])
                     for claim_idx in range(chunk_start, chunk_end)
                 ]
-
-                # Call worker
-                id_verdicts = await self._checker.check_joint(
+                chunks.append(_JointChunk(
                     numbered_claims=numbered,
                     reference=reference,
+                    item_index=item_idx,
+                    chunk_start=chunk_start,
+                ))
+
+        # Send all chunks as a single batch (progress bar + concurrency)
+        batch_input = [
+            (c.numbered_claims, c.reference) for c in chunks
+        ]
+        batch_results = await self._checker.check_joint_batch(batch_input)
+
+        # Map results back: {item_index: {claim_index: ClaimVerdict}}
+        all_verdicts: dict[int, dict[int, ClaimVerdict]] = {}
+        for chunk_meta, id_verdicts in zip(chunks, batch_results):
+            item_idx = chunk_meta.item_index
+            if item_idx not in all_verdicts:
+                all_verdicts[item_idx] = {}
+
+            for claim_idx_offset, (claim_id, _) in enumerate(chunk_meta.numbered_claims):
+                claim_idx = chunk_meta.chunk_start + claim_idx_offset
+                all_verdicts[item_idx][claim_idx] = id_verdicts.get(
+                    claim_id, ClaimVerdict(verdict=None)
                 )
-
-                # Map 1-based claim_ids back to 0-based claim indices
-                for claim_idx in range(chunk_start, chunk_end):
-                    claim_id = claim_idx + 1  # 1-based
-                    item_verdicts[claim_idx] = id_verdicts.get(claim_id)
-
-            all_verdicts[item_idx] = item_verdicts
 
         return all_verdicts
 
     @staticmethod
     def _flat_to_map(
         payloads: list[CheckingPayload],
-        verdicts: list[Verdict | None],
-    ) -> dict[int, dict[int, Verdict | None]]:
+        verdicts: list[ClaimVerdict],
+    ) -> dict[int, dict[int, ClaimVerdict]]:
         """Convert flat payload+verdict lists to the nested dict format.
 
         Used by single mode to produce the same shape as joint mode
         so _serialize can handle both.
         """
-        result: dict[int, dict[int, Verdict | None]] = {}
+        result: dict[int, dict[int, ClaimVerdict]] = {}
         for payload, verdict in zip(payloads, verdicts):
             if payload.item_index not in result:
                 result[payload.item_index] = {}
@@ -385,24 +412,25 @@ class CheckingService(BaseService):
     def _serialize(
         self,
         items: list[dict],
-        verdicts_map: dict[int, dict[int, Verdict | None]],
+        verdicts_map: dict[int, dict[int, ClaimVerdict]],
     ) -> None:
-        """Step 5: Write verdicts back into the source dicts.
+        """Step 5: Write verdict + explanation into each triplet dict.
 
-        verdicts_map: {item_index: {claim_index: Verdict | None}}
+        Each triplet gets:
+        - ``{model}_checker_verdict``: "Entailment" | "Contradiction" | "Neutral" | None
+        - ``{model}_checker_explanation``: chain-of-thought reasoning | None
+
+        This mirrors how human_label lives inside the triplet —
+        the verdict belongs TO the claim.
         """
         for item_idx, item in enumerate(items):
-            num_claims = len(item[self._kg_key])
             item_verdicts = verdicts_map.get(item_idx, {})
-            item[self._verdict_key] = [
-                item_verdicts.get(ci, None)
-                for ci in range(num_claims)
-            ]
-            # Convert Verdict enums to strings for JSON serialization
-            item[self._verdict_key] = [
-                v.value if isinstance(v, Verdict) else v
-                for v in item[self._verdict_key]
-            ]
+            for claim_idx, triplet in enumerate(item[self._kg_key]):
+                cv = item_verdicts.get(claim_idx, ClaimVerdict(verdict=None))
+                triplet[self._verdict_key] = (
+                    cv.verdict.value if cv.verdict else None
+                )
+                triplet[self._explanation_key] = cv.explanation
 
     # ── Logging (service-owned sections) ─────────────────────────
 
@@ -416,14 +444,22 @@ class CheckingService(BaseService):
         logger.info("    └─ valid:    %d items", valid)
         logger.info("")
 
-    def _log_skip(self, valid: int, skipped: int, pending: int) -> None:
-        """Print 🔄 Skip section. Hidden entirely when nothing was skipped."""
+    def _log_skip(self, valid: int, skip_stats: dict, pending: int) -> None:
+        """Print 🔄 Skip section with breakdown. Hidden when nothing was skipped."""
+        already = skip_stats["already_checked"]
+        empty = skip_stats["empty_claims"]
+        skipped = already + empty
+
         if skipped == 0:
             return
-        logger.info(" 🔄 Skip: items already checked or with zero claims")
-        logger.info("    Total:      %d valid items", valid)
-        logger.info("    ├─ skipped: %d items", skipped)
-        logger.info("    └─ pending: %d items", pending)
+
+        logger.info(" 🔄 Skip")
+        logger.info("    Total:            %d valid items", valid)
+        if already > 0:
+            logger.info("    ├─ already checked: %d  (verdict exists for this model)", already)
+        if empty > 0:
+            logger.info("    ├─ empty claims:    %d  (abstention or extraction error)", empty)
+        logger.info("    └─ pending:        %d items", pending)
         logger.info("")
 
     def _log_config(self) -> None:

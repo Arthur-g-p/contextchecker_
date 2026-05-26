@@ -48,11 +48,11 @@ def enable_logging(debug: bool = False) -> None:
     """Activate console output for the contextchecker package.
 
     Called automatically by the CLI. Library users can call this
-    explicitly to see output::
+    explicitly to see output:
 
         import contextchecker
         contextchecker.enable_logging()        # pretty output
-        contextchecker.enable_logging(debug=True)  # + timestamps & module
+        contextchecker.enable_logging(debug=True)  # + timestamps & module & sometimes more info and certain events
     """
     root = logging.getLogger("contextchecker")
 
@@ -84,6 +84,18 @@ EXTRACTOR_API_KEY: str | None = os.getenv("EXTRACTOR_API_KEY")
 CHECKER_API_KEY: str | None = os.getenv("CHECKER_API_KEY")
 
 LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "120.0"))
+
+
+# ── Checker defaults ────────────────────────────────────────────────────────
+# Joint mode groups multiple claims per LLM call. These control chunking.
+
+DEFAULT_JOINT_NUM: int = 10
+"""Max claims per joint LLM call."""
+
+DEFAULT_MAX_WORDS: int = 6000
+"""Word budget for joint prompts (~8k tokens ≈ 6000 words).
+Only applies in joint mode by default. Single mode has no budget
+unless the user explicitly sets --max-words."""
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────

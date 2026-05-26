@@ -3,13 +3,14 @@ Checker worker — async execution unit for claim entailment checking.
 
 Supports two modes:
 - Single: one claim + reference → one verdict  (check_batch)
-- Joint:  N claims + reference → N verdicts     (check_joint)
+- Joint:  N claims + reference → N verdicts     (check_joint_batch)
 
 Takes a claim + reference, sends to an LLM, returns a verdict.
 Owns no validation, filtering, or orchestration logic.
 The service layer handles all of that before calling us.
 """
 
+from dataclasses import dataclass
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -52,6 +53,18 @@ class JointVerdictItem(BaseModel):
 class JointCheckResult(BaseModel):
     """LLM response schema for joint checker prompt — multiple claims at once."""
     verdicts: list[JointVerdictItem] = Field(default_factory=list)
+
+
+# ── Worker return type ───────────────────────────────────────────────────────
+
+@dataclass
+class ClaimVerdict:
+    """Result for a single claim — verdict + explanation.
+
+    This is the typed contract between the worker and the service.
+    """
+    verdict: Verdict | None
+    explanation: str | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -116,7 +129,7 @@ class Checker:
             {"role": "user", "content": prompt},
         ]
 
-    async def check(self, payload: CheckingPayload) -> Verdict:
+    async def check(self, payload: CheckingPayload) -> ClaimVerdict:
         """Check a single claim against its reference.
 
         Raises ParsingError if the LLM returns unparseable output.
@@ -133,14 +146,14 @@ class Checker:
             raise ParsingError(
                 f"Failed to parse check result: {exc}"
             ) from exc
-        return parsed.verdict
+        return ClaimVerdict(verdict=parsed.verdict, explanation=parsed.explanation)
 
     async def check_batch(
         self, payloads: list[CheckingPayload]
-    ) -> list[Verdict | None]:
+    ) -> list[ClaimVerdict]:
         """Check multiple claims concurrently (single mode — 1 call per claim).
 
-        Returns one Verdict per payload. Failed items get None
+        Returns one ClaimVerdict per payload. Failed items get None verdict
         so the caller always gets len(payloads) results.
         """
         tasks = [
@@ -156,18 +169,21 @@ class Checker:
             tasks, description="Checking", task="check",
         )
 
-        results: list[Verdict | None] = []
+        results: list[ClaimVerdict] = []
         for raw in raw_responses:
             if isinstance(raw, Exception):
                 logger.warning("Check failed for claim: %s", raw)
-                results.append(None)
+                results.append(ClaimVerdict(verdict=None))
                 continue
             try:
                 parsed = CheckResult.model_validate_json(raw)
-                results.append(parsed.verdict)
+                results.append(ClaimVerdict(
+                    verdict=parsed.verdict,
+                    explanation=parsed.explanation,
+                ))
             except Exception as exc:
                 logger.warning("Failed to parse check result: %s", exc)
-                results.append(None)
+                results.append(ClaimVerdict(verdict=None))
 
         return results
 
@@ -194,54 +210,77 @@ class Checker:
             {"role": "user", "content": prompt},
         ]
 
-    async def check_joint(
+    async def check_joint_batch(
         self,
-        numbered_claims: list[tuple[int, str]],
-        reference: list[str],
-    ) -> dict[int, Verdict | None]:
-        """Check multiple claims in a single LLM call (joint mode).
+        chunks: list[tuple[list[tuple[int, str]], list[str]]],
+    ) -> list[dict[int, ClaimVerdict]]:
+        """Check multiple joint chunks concurrently via generate_batch.
+
+        Each chunk is (numbered_claims, reference). All chunks are sent
+        as a single batch through generate_batch (→ tqdm progress bar
+        + concurrency).
 
         Args:
-            numbered_claims: list of (claim_id, claim_text) tuples.
-            reference: list of reference passages.
+            chunks: list of (numbered_claims, reference) tuples.
+                    numbered_claims: list of (claim_id, claim_text).
+                    reference: list of reference passages.
 
         Returns:
-            Dict mapping claim_id → Verdict. Missing IDs (gaps) get None.
+            List of dicts, one per chunk. Each dict maps
+            claim_id → ClaimVerdict. Missing IDs (gaps) get None verdict.
         """
-        expected_ids = {cid for cid, _ in numbered_claims}
+        tasks = [
+            {
+                "messages": self._build_joint_messages(numbered, ref),
+                "schema": JointCheckResult,
+                "temperature": 0.0,
+            }
+            for numbered, ref in chunks
+        ]
 
-        messages = self._build_joint_messages(numbered_claims, reference)
-        raw = await self.client.generate(
-            messages=messages,
-            schema=JointCheckResult,
-            task="check",
+        raw_responses = await self.client.generate_batch(
+            tasks, description="Checking (joint)", task="check",
         )
 
-        # Parse the response
-        try:
-            parsed = JointCheckResult.model_validate_json(raw)
-        except Exception as exc:
-            logger.warning("Failed to parse joint check result: %s", exc)
-            return {cid: None for cid in expected_ids}
+        results: list[dict[int, ClaimVerdict]] = []
+        for raw, (numbered, _) in zip(raw_responses, chunks):
+            expected_ids = {cid for cid, _ in numbered}
 
-        # Map claim_id → verdict, tracking gaps
-        result: dict[int, Verdict | None] = {}
-        for item in parsed.verdicts:
-            if item.claim_id in expected_ids:
-                result[item.claim_id] = item.verdict
-            else:
-                logger.debug(
-                    "Joint check returned unexpected claim_id %d — ignoring.",
-                    item.claim_id,
-                )
+            if isinstance(raw, Exception):
+                logger.warning("Joint check failed for chunk: %s", raw)
+                results.append({cid: ClaimVerdict(verdict=None) for cid in expected_ids})
+                continue
 
-        # Fill gaps with None
-        for cid in expected_ids:
-            if cid not in result:
-                logger.debug("Joint check gap: claim_id %d missing from response.", cid)
-                result[cid] = None
+            try:
+                parsed = JointCheckResult.model_validate_json(raw)
+            except Exception as exc:
+                logger.warning("Failed to parse joint check result: %s", exc)
+                results.append({cid: ClaimVerdict(verdict=None) for cid in expected_ids})
+                continue
 
-        return result
+            # Map claim_id → ClaimVerdict, tracking gaps
+            chunk_result: dict[int, ClaimVerdict] = {}
+            for item in parsed.verdicts:
+                if item.claim_id in expected_ids:
+                    chunk_result[item.claim_id] = ClaimVerdict(
+                        verdict=item.verdict,
+                        explanation=item.explanation,
+                    )
+                else:
+                    logger.debug(
+                        "Joint check returned unexpected claim_id %d — ignoring.",
+                        item.claim_id,
+                    )
+
+            # Fill gaps with None
+            for cid in expected_ids:
+                if cid not in chunk_result:
+                    logger.debug("Joint check gap: claim_id %d missing from response.", cid)
+                    chunk_result[cid] = ClaimVerdict(verdict=None)
+
+            results.append(chunk_result)
+
+        return results
 
     # TODO: retry pass for parse errors
     # TODO: wire to stats tracking

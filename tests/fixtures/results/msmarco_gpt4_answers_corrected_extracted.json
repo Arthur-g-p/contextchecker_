@@ -30,7 +30,8 @@
         "subject": "Jimmy Jazz",
         "predicate": "has sold",
         "object": "fake shoes",
-        "gemini-3.1_checker_verdict": "Neutral"
+        "gemini-3.1_checker_verdict": "Neutral",
+        "gemini-3.1_checker_explanation": "The reference passages contain a user expressing suspicion about a pair of shoes purchased from Jimmy Jazz (Passage 1 and 2), but this is a subjective concern rather than a confirmed fact. No passage explicitly states or confirms that Jimmy Jazz has sold fake shoes. Therefore, the claim cannot be entailed by the provided text."
       }
     ]
   },
@@ -300,7 +301,8 @@
         "subject": "burning sage",
         "predicate": "",
         "object": "mosquitoes",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 7 explicitly states, 'Burn a small amount of dried sage outside to repel mosquitoes and other insects.' This directly supports the claim that burning sage repels mosquitoes."
       }
     ]
   },
@@ -1000,7 +1002,8 @@
         "subject": "A T-Rex",
         "predicate": "lived for",
         "object": "around 25-30 years",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 7 states that a T-Rex usually lived for around 25-29 years. Passage 10 states that the average life span was about 30 years. Combining these, the claim that a T-Rex lived for around 25-30 years is supported by the provided references."
       }
     ]
   },
@@ -2104,37 +2107,43 @@
         "subject": "USB port",
         "predicate": "is an external bus standard",
         "object": "that supports data transfer rates",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 4 explicitly states: 'Short for Universal Serial Bus, an external bus standard that supports data transfer rates of 12 Mbps.' This directly supports the claim that USB is an external bus standard that supports data transfer rates."
       },
       {
         "subject": "USB port",
         "predicate": "can connect to multiple peripheral devices",
         "object": "peripheral devices",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 4 explicitly states that 'A single USB port can be used to connect up to 127 peripheral devices'. This directly supports the claim that a USB port can connect to multiple peripheral devices."
       },
       {
         "subject": "USB port",
         "predicate": "is used for connection, communication, and power supply",
         "object": "computers and electronic devices",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 5 explicitly states that USB is an industry standard that defines the cables, connectors, and communications protocols used in a bus for connection, communication, and power supply between computers and electronic devices. This directly supports the claim."
       },
       {
         "subject": "USB ports",
         "predicate": "are backward compatible",
         "object": "previous versions",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 1 explicitly states that a USB 3.0 port is backward compatible with USB 2.0 devices and cables. While the claim is a generalization, the provided reference supports the concept of backward compatibility for USB ports (specifically USB 3.0 to USB 2.0). Therefore, the claim is entailed by the reference."
       },
       {
         "subject": "USB ports",
         "predicate": "can support devices and cables of previous versions",
         "object": "previous versions",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 1 explicitly states that a USB 3.0 port is backward compatible with USB 2.0 devices and cables. This confirms that USB ports can support devices and cables from previous versions."
       },
       {
         "subject": "USB ports",
         "predicate": "are used to implement connections to storage devices",
         "object": "using a set of standards",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 6 explicitly states that 'USB implements connections to storage devices using a set of standards called the USB mass storage device class (MSC or UMS).' While the claim specifies 'USB ports' rather than just 'USB', the context of the reference material (specifically Passage 4, which mentions 'A single USB port can be used to connect...') supports the functional role of USB ports in facilitating these connections. Therefore, the claim is entailed by the provided text."
       }
     ]
   },
@@ -2269,13 +2278,15 @@
         "subject": "roasting time for beets",
         "predicate": "can vary",
         "object": "depending on their size and the specific recipe",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "The claim states that roasting time for beets varies based on size and the specific recipe. Passage 2 explicitly mentions that the baking time is '45 minutes to 1 hour depending on their size.' Passage 3 and Passage 5 state that roasting time is '45 minutes to 2 hours (very large beets may take even longer).' Furthermore, the provided passages offer widely different roasting temperatures and times (e.g., 450°F, 425°F, 375°F, 350°F, 400°F, with times ranging from 20 minutes to 2 hours), which confirms that the roasting time depends on the specific recipe being followed."
       },
       {
         "subject": "roasting time for beets",
         "predicate": "can range",
         "object": "from 20 minutes to 2 hours",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "The claim states that the roasting time for beets can range from 20 minutes to 2 hours. Passage 7 mentions a baking time of 'about 20 minutes', and Passage 3 and Passage 5 mention a roasting time of '45 minutes to 2 hours'. Since the reference passages collectively support a range that includes 20 minutes (Passage 7) and up to 2 hours (Passage 3 and 5), the claim is entailed by the provided text."
       }
     ]
   },
@@ -2646,19 +2657,22 @@
         "subject": "IIS",
         "predicate": "has maximum size",
         "object": "the ASP buffer",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 1 explicitly states that the <limits> element of the <asp> element in IIS 7 specifies connection and queue limits, and specifically mentions that the 'bufferingLimit attribute sets the maximum size of the ASP buffer.' This directly supports the claim."
       },
       {
         "subject": "JSON response",
         "predicate": "has size",
         "object": "102400",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 2 explicitly states, 'Doing a quick search, it looks like the default size is 102400' in the context of adjusting the JSON response size in the web.config. This directly supports the claim."
       },
       {
         "subject": "IIS",
         "predicate": "has maximum size",
         "object": "the output cache",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 5 and Passage 10 explicitly state: 'Configure the Maximum Cache Size Limit (IIS 7) Set the maximum output cache size when you want to limit the amount of memory IIS uses for output caching.' This directly supports the claim that IIS has a maximum size for the output cache."
       }
     ]
   },
@@ -3065,7 +3079,8 @@
         "subject": "Ariba help desk phone number",
         "predicate": "is",
         "object": "1-866-772-7422",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 6 explicitly states that 'The customer support phone number of Ariba is 1-866-772-7422'. Passage 8 also confirms that '+1 866-772-7422' is Ariba's phone number for customer care. This directly supports the claim."
       }
     ]
   },
@@ -3464,13 +3479,15 @@
         "subject": "gout",
         "predicate": "associated with",
         "object": "high levels of uric acid",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Multiple passages in the reference explicitly link gout to high levels of uric acid. For example, Passage 4 states that 'Gout is caused by an accumulation of uric acid crystals in the joints' and that 'Crystals can form when abnormally high levels of uric acid (hyperuricemia) are present in the body'. Passage 5 also states that 'Gout is a type of arthritis that occurs when too much uric acid builds up in the body'. Therefore, the claim is directly supported by the provided text."
       },
       {
         "subject": "high levels of triglycerides",
         "predicate": "associated with",
         "object": "high levels of uric acid",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 2 explicitly states that 'High uric acid levels raise the likelihood of a person having elevated triglyceride levels', which directly supports the claim that high levels of triglycerides are associated with high levels of uric acid."
       }
     ]
   },
@@ -3515,7 +3532,8 @@
         "subject": "The passages",
         "predicate": "provide",
         "object": "weather information for Nelson, New Zealand.",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Multiple passages explicitly mention providing weather information, forecasts, or climate data for Nelson, New Zealand. For example, Passage 3 discusses 'CLIMATE: AVERAGE MONTHLY WEATHER IN Nelson, New Zealand', Passage 4 provides 'Key weather averages for Nelson in January', and Passage 10 mentions 'weather forecasts... for Nelson, NZ'. Therefore, the claim is directly supported by the provided text."
       }
     ]
   },
@@ -5715,7 +5733,8 @@
         "subject": "Leopardfoot",
         "predicate": "died",
         "object": "unknown causes",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 2 explicitly states, 'She died of unknown causes and is only mentioned by Bluestar to have passed away and joined StarClan.' This directly supports the claim that Leopardfoot died of unknown causes."
       }
     ]
   },
@@ -6022,73 +6041,85 @@
         "subject": "Egyptians",
         "predicate": "are",
         "object": "an ethnic group native to Egypt",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 4 explicitly states: 'Egyptians (Egyptian Arabic: مَصريين‎‎ IPA:; Arabic: مِصريّون‎‎ Miṣriyyūn; Coptic: ϩⲁⲛⲣⲉⲙ̀ⲛⲭⲏⲙⲓ Hanremenkīmi) are an ethnic group and the citizens native to Egypt'. This directly supports the claim."
       },
       {
         "subject": "Egyptians",
         "predicate": "have",
         "object": "a common culture",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 4 explicitly states that 'Egyptians... are an ethnic group and the citizens native to Egypt sharing a common culture and a variety of Egyptian Arabic.' This directly supports the claim."
       },
       {
         "subject": "Egyptians",
         "predicate": "have",
         "object": "a variety of Egyptian Arabic",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 4 explicitly states that Egyptians are 'an ethnic group and the citizens native to Egypt sharing a common culture and a variety of Egyptian Arabic.' This directly supports the claim."
       },
       {
         "subject": "Egyptians",
         "predicate": "are",
         "object": "a blend of many cultures",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "Greek heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim that Egyptians include Greek heritage."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "Arab heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim that Egyptians include Arab heritage."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "Armenian heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim that Egyptians include Armenian heritage."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "Turkish heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim that Egyptians include Turkish heritage."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "African heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 5 explicitly states that many people in Egypt are mixed with African heritage, and Passage 8 lists 'African' as one of the cultures that the Egyptian people are an ethnic blend of. Therefore, the claim is supported by the provided references."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "Syrian heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim that Egyptians include Syrian heritage."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "Palestinian heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that the Egyptian people are an ethnic blend of many cultures, and it includes 'Palestinian' in the list of those cultures. Therefore, the claim is directly supported by the reference."
       },
       {
         "subject": "Egyptians",
         "predicate": "include",
         "object": "European heritage",
-        "gemini-3.1_checker_verdict": "Entailment"
+        "gemini-3.1_checker_verdict": "Entailment",
+        "gemini-3.1_checker_explanation": "Passage 8 explicitly states that 'The Egyptian people are an ethnic blend of many other cultures that include: Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, and those of Turkish heritage.' This directly supports the claim that Egyptians include European heritage."
       }
     ]
   },
@@ -6206,7 +6237,8 @@
         "subject": "",
         "predicate": "",
         "object": "",
-        "gemini-3.1_checker_verdict": "Contradiction"
+        "gemini-3.1_checker_verdict": "Neutral",
+        "gemini-3.1_checker_explanation": "The provided claim is empty or consists only of a period, making it impossible to evaluate against the provided reference passages. Therefore, it cannot be entailed, contradicted, or verified."
       }
     ]
   },
