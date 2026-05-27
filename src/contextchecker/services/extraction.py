@@ -20,7 +20,7 @@ from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.services.base import BaseService
 from contextchecker.models import ExtractionPayload
 from contextchecker.workers.extractor import Extractor, Triplet
-from contextchecker.stats import log_api_summary, log_token_stats
+from contextchecker.stats import log_api_parsing, log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -76,6 +76,7 @@ class ExtractionService(BaseService):
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
+        max_retries: int | None = None,
     ):
         # Fail-fast: validate config before creating any workers.
         api_key = self._require_api_key(
@@ -90,6 +91,7 @@ class ExtractionService(BaseService):
             model=model,
             base_url=base_url,
             concurrency=concurrency,
+            max_retries=max_retries,
         )
 
     # ── Public API ───────────────────────────────────────────────
@@ -238,33 +240,34 @@ class ExtractionService(BaseService):
         skipped: int,
     ) -> None:
         """Print the full results block: API summary, BL results, tokens, done line."""
+        phase_stats = self._extractor.last_stats
+
         logger.info("")
         logger.info("── EXTRACTOR RESULTS ────────────────────────────────────────")
         logger.info("")
-        log_api_summary(pending_count, abstained_count, successful, failed)
-        self._log_bl_results(total, total_claims, successful, abstained_count)
+        log_api_parsing(pending_count, phase_stats)
+        worker_empty = phase_stats.empty if phase_stats else 0
+        total_output = successful + worker_empty + abstained_count
+        self._log_bl_results(total_output, total_claims, successful, worker_empty + abstained_count)
         log_token_stats()
         self._log_done(total, total_claims, abstained_count, skipped)
-        # as of now we are not printing retriable errors?
 
     def _log_bl_results(
-        self, total: int, claims: int, with_claims: int, abstentions: int
+        self, valid_items: int, claims: int, with_claims: int, empty_count: int
     ) -> None:
-        """Print 📝 Extraction Result summary.
+        """Print 📝 Extraction summary.
 
-        Tree is item-based: total = with_claims + abstentions.
-        Claims (triplets) are a detail on the 'with claims' line.
+        Shows items with output: how many generated claims vs empty.
         """
-        logger.info(" 📝 Extraction Result summary:")
-        logger.info("    %d items", total)
-        has_abstentions = abstentions > 0
-        # "with claims" line
-        prefix = "├─" if has_abstentions else "└─"
-        logger.info("     %s %d with claims (%d triplets)", prefix, with_claims, claims)
-        # abstentions sub-tree
-        if has_abstentions:
-            logger.info("     └─ %d abstentions", abstentions)
-            logger.info("        └─ %d prefiltered (empty response)", abstentions)
+        logger.info(" 📝 Extraction:")
+        logger.info("    %d items with output", valid_items)
+        has_empty = empty_count > 0
+        # Items with claims
+        prefix = "├─" if has_empty else "└─"
+        logger.info("     %s 💎 %d items → %d triplets", prefix, with_claims, claims)
+        # Empty items (abstentions / model returned 0 claims)
+        if has_empty:
+            logger.info("     └─ ⚪ %d items → 0 claims (empty)", empty_count)
         logger.info("")
 
     def _log_done(

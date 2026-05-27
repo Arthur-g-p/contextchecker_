@@ -9,16 +9,18 @@ Error handling:
     generate_batch() returns list[str | LLMError].
     Per-item errors are VALUES in the list, not raised exceptions.
     Fatal errors (auth, connection) propagate — the worker doesn't catch them.
-    This worker classifies per-item errors, retries parse failures once
-    with a vanilla prompt, and returns clean results + stats.
+    This worker classifies per-item errors, retries parse failures in
+    configurable rounds, and returns clean results with stats on self.
 """
+
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
 from contextchecker.llmclient import LLMClient
 from contextchecker.models import ExtractionPayload
 from contextchecker.exceptions import ContextTooLongError, ContentPolicyError
-from contextchecker.stats import PhaseStats
+from contextchecker.stats import PhaseStats, RoundResult
 from contextchecker.utils import format_prompt
 from contextchecker import settings
 
@@ -39,6 +41,22 @@ class ExtractionResult(BaseModel):
     triplets: list[Triplet]
 
 
+# ── Retry configuration ─────────────────────────────────────────────────────
+
+@dataclass
+class RetryRoundConfig:
+    """Config for one retry round. Prompt can be 'standard' or 'vanilla'."""
+    temperature: float = 0.3
+    prompt: str = "standard"   # "standard" → _build_messages, "vanilla" → _build_retry_messages
+
+
+# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 vanilla.
+DEFAULT_RETRY_ROUNDS = [
+    RetryRoundConfig(temperature=0.3, prompt="standard"),
+    RetryRoundConfig(temperature=0.5, prompt="vanilla"),
+]
+
+
 # ── Worker ───────────────────────────────────────────────────────────────────
 
 class Extractor:
@@ -55,6 +73,7 @@ class Extractor:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
+        max_retries: int | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -65,9 +84,16 @@ class Extractor:
         )
         self._prompt_template = settings.PROMPTS["extractor_prompt"]
         self.last_stats: PhaseStats | None = None
-        # Vanilla prompt for retry pass — falls back to auto-generated schema example
+
+        # Vanilla prompt for retry — falls back to auto-generated schema example
         # if "extractor_prompt_vanilla" is not in prompt_map.json
         self._vanilla_prompt = settings.PROMPTS.get("extractor_prompt_vanilla", None)
+
+        # Retry config — max_retries caps how many rounds from DEFAULT_RETRY_ROUNDS to use
+        if max_retries is None:
+            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS)
+        else:
+            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS[:max_retries])
 
     # ── Message builders ─────────────────────────────────────────
 
@@ -80,7 +106,7 @@ class Extractor:
         ]
 
     def _build_retry_messages(self, text: str) -> list[dict]:
-        """Build chat messages for the retry pass (vanilla prompt).
+        """Build chat messages for the vanilla retry pass.
 
         Uses a dedicated vanilla prompt if available in prompt_map.json,
         otherwise reuses the standard prompt — the LLMClient will auto-append
@@ -92,6 +118,29 @@ class Extractor:
             {"role": "system", "content": "Extract knowledge triplets."},
             {"role": "user", "content": prompt},
         ]
+
+    def _build_task(self, payload: ExtractionPayload, round_config: RetryRoundConfig | None = None) -> dict:
+        """Build a generate_batch task dict for one item.
+
+        Uses the round config to determine prompt and temperature.
+        None means first pass (standard prompt, temp 0.0).
+        """
+        if round_config is None:
+            # First pass — structured, low temperature
+            messages = self._build_messages(payload.text)
+            temperature = 0.0
+        elif round_config.prompt == "vanilla":
+            messages = self._build_retry_messages(payload.text)
+            temperature = round_config.temperature
+        else:
+            messages = self._build_messages(payload.text)
+            temperature = round_config.temperature
+
+        return {
+            "messages": messages,
+            "schema": ExtractionResult,
+            "temperature": temperature,
+        }
 
     # ── Single-item extraction ───────────────────────────────────
 
@@ -127,38 +176,39 @@ class Extractor:
         self.last_stats = stats
 
         # ── First pass ───────────────────────────────────────
-        tasks = [
-            {
-                "messages": self._build_messages(p.text),
-                "schema": ExtractionResult,
-                "temperature": 0.0,
-            }
-            for p in payloads
-        ]
+        tasks = [self._build_task(p) for p in payloads]
 
         raw_responses = await self.client.generate_batch(
             tasks, description="Extracting", task="extract",
         )
+        stats.http_requests += len(tasks)
 
         results, retry_indices = self._classify(raw_responses, stats)
+        stats.first_pass_ok = stats.success + stats.empty
 
-        # ── Retry pass (parse errors only, vanilla prompt) ───
-        if retry_indices:
-            logger.info("   ♻️  Retry: %d failed items...", len(retry_indices))
+        # ── Retry loop ───────────────────────────────────────
+        for round_num, round_config in enumerate(self._retry_rounds):
+            if not retry_indices:
+                break
+
+            logger.info("   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
+                        round_num + 1, len(retry_indices),
+                        round_config.temperature, round_config.prompt)
+
             retry_tasks = [
-                {
-                    "messages": self._build_retry_messages(payloads[i].text),
-                    "schema": ExtractionResult,
-                    "temperature": 0.3,
-                }
+                self._build_task(payloads[i], round_config)
                 for i in retry_indices
             ]
 
             raw_retries = await self.client.generate_batch(
-                retry_tasks, description="Retrying", task="extract",
+                retry_tasks, description=f"Retry round {round_num + 1}", task="extract",
             )
+            stats.http_requests += len(retry_tasks)
 
-            self._apply_retries(raw_retries, retry_indices, results, stats)
+            round_result, retry_indices = self._apply_retries(
+                raw_retries, retry_indices, results, stats
+            )
+            stats.rounds.append(round_result)
 
         return results
 
@@ -200,7 +250,7 @@ class Extractor:
                     stats.success += 1
                     stats.total_items += len(parsed.triplets)
                 else:
-                    stats.valid_empty += 1
+                    stats.empty += 1
             except Exception as exc:
                 logger.debug("Parse failed for item %d: %s", i, exc)
                 stats.parse_error += 1
@@ -215,20 +265,29 @@ class Extractor:
         indices: list[int],
         results: list[list[Triplet]],
         stats: PhaseStats,
-    ) -> None:
-        """Merge retry results back into the main results list."""
+    ) -> tuple[RoundResult, list[int]]:
+        """Merge retry results back into the main results list.
+
+        Returns (round_result, remaining_indices) where remaining_indices
+        are the items that still failed — they feed into the next round.
+        """
+        round_result = RoundResult()
+        remaining: list[int] = []
+
         for raw, original_idx in zip(responses, indices):
             try:
                 if isinstance(raw, Exception):
                     raise raw
                 parsed = ExtractionResult.model_validate_json(raw)
                 results[original_idx] = parsed.triplets
-                stats.recovered += 1
-                stats.parse_error -= 1
+                round_result.recovered += 1
                 if parsed.triplets:
                     stats.success += 1
                     stats.total_items += len(parsed.triplets)
                 else:
-                    stats.valid_empty += 1
+                    stats.empty += 1
             except Exception:
-                stats.still_failed += 1
+                round_result.still_failed += 1
+                remaining.append(original_idx)
+
+        return round_result, remaining

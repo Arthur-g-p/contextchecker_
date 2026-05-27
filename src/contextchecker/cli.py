@@ -45,6 +45,7 @@ def extract(
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
     model: str = typer.Option(None, "--model", "-m", help="Model name used as key prefix."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
+    max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run the extraction pipeline on a JSON dataset."""
@@ -72,7 +73,7 @@ def extract(
 
     # Call service
     try:
-        service = ExtractionService(model=model, base_url=extractor_base_api)
+        service = ExtractionService(model=model, base_url=extractor_base_api, max_retries=max_retries)
         result = service.run_sync(data)
     except ContextCheckerError as exc:
         logger.error("")

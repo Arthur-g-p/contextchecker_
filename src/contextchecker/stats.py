@@ -12,28 +12,51 @@ logger = settings.get_logger(__name__)
 # ───────────────────────────────────────────────────────────────
 
 @dataclass
+class RoundResult:
+    """Outcome of a single retry round."""
+    recovered: int = 0
+    still_failed: int = 0
+
+
+@dataclass
 class PhaseStats:
     """Tracks outcomes for a single LLM batch call. 
     Reusable across extractor, checker, or any batch caller."""
-    success: int = 0
-    prefilter: int = 0        # skipped before LLM call (e.g. abstention)
-    valid_empty: int = 0      # LLM returned valid JSON but empty content
-    context_too_long: int = 0 # ContextTooLongError — permanent
-    content_policy: int = 0   # ContentPolicyError — permanent
-    parse_error: int = 0      # LLMParseError OR model_validate_json fail — retryable
-    total_items: int = 0      # domain-specific count (e.g. triplets, verdicts)
+    # First pass results
+    success: int = 0              # parsed with content on ANY pass (cumulative)
+    first_pass_ok: int = 0        # parsed on first attempt (set once, never modified)
+    empty: int = 0                # parsed successfully but 0 items (e.g. empty triplets)
+    context_too_long: int = 0     # ContextTooLongError — permanent
+    content_policy: int = 0       # ContentPolicyError — permanent
+    parse_error: int = 0          # initial retryable failure count (set in _classify)
+    total_items: int = 0          # domain-specific count (e.g. triplets, verdicts)
+    http_requests: int = 0        # total HTTP requests across all rounds
 
-    # Retry results (filled after retry pass)
-    recovered: int = 0        # items recovered on retry
-    still_failed: int = 0     # items that failed again on retry
-    id_gaps: int = 0          # claims where LLM skipped the claim_id (joint mode)
+    # Per-round retry results (index 0 = round 1, etc.)
+    rounds: list[RoundResult] = field(default_factory=list)
 
-    # Which batch indices failed and are retryable
-    failed_indices: List[int] = field(default_factory=list)
+    # Checker-specific
+    id_gaps: int = 0              # claims where LLM skipped the claim_id (joint mode)
+
+    # Which batch indices failed and are retryable (debug aid)
+    failed_indices: list[int] = field(default_factory=list)
+
+    @property
+    def permanently_failed(self) -> int:
+        """Items that failed ALL retry rounds."""
+        if self.rounds:
+            return self.rounds[-1].still_failed
+        return self.parse_error
+
+    @property
+    def total_permanent(self) -> int:
+        """All permanently failed items (context + content + exhausted retries)."""
+        return self.context_too_long + self.content_policy + self.permanently_failed
 
     @property
     def total_errors(self) -> int:
-        return self.context_too_long + self.content_policy + self.parse_error
+        """Backward-compat: total permanent errors."""
+        return self.total_permanent
 
 
 @dataclass
@@ -130,29 +153,62 @@ GLOBAL_STATS = TokenStats()
 #  SHARED LOGGING — reusable across all services
 # ───────────────────────────────────────────────────────────────
 
-def log_api_summary(
+def log_api_parsing(
     pending: int,
-    prefiltered: int,
-    successful: int,
-    failed: int,
+    stats: PhaseStats,
 ) -> None:
-    """Log 🌐 API-Request summary. Same format across all services.
+    """Log 🌐 API & Parsing summary. Same format across all services.
 
-    Uses logger.info() → silent for library users, pretty for CLI.
+    Shows first-pass results, permanent failures, retryable failures
+    with per-round breakdown.
     """
-    logger.info(" 🌐 API-Request summary:")
-    logger.info("    %d (pending) input items", pending + prefiltered)
-    entries = []
-    if prefiltered > 0:
-        entries.append(("🔇", f"{prefiltered} prefiltered"))
-    entries.append(("✅", f"{successful} successful calls"))
-    # TODO: add context_too_long, content_blocked from PhaseStats when wired
-    if failed > 0:
-        entries.append(("❌", f"{failed} failed"))
-    for i, (icon, text) in enumerate(entries):
-        is_last = i == len(entries) - 1
-        prefix = "└─" if is_last else "├─"
-        logger.info("     %s %s %s", prefix, icon, text)
+    logger.info(" 🌐 API & Parsing:")
+    logger.info("    %d items sent to LLM [%d HTTP requests]", pending, stats.http_requests)
+
+    # ── Success on first attempt
+    permanent = stats.context_too_long + stats.content_policy
+    has_permanent = permanent > 0
+    has_retryable = stats.parse_error > 0
+
+    if has_permanent or has_retryable:
+        logger.info("     ├─ ✅ %d parsed on first attempt", stats.first_pass_ok)
+    else:
+        logger.info("     └─ ✅ %d parsed on first attempt", stats.first_pass_ok)
+
+    # ── Permanent failures (context too long / content policy)
+    if has_permanent:
+        parts = []
+        if stats.context_too_long > 0:
+            parts.append(f"{stats.context_too_long} context too long")
+        if stats.content_policy > 0:
+            parts.append(f"{stats.content_policy} content policy")
+        prefix = "├─" if has_retryable else "└─"
+        logger.info("     %s 🚫 %d permanent failures (%s)", prefix, permanent, ", ".join(parts))
+
+    # ── Retryable failures with per-round breakdown
+    if has_retryable:
+        logger.info("     └─ ⚠️  %d retryable failures", stats.parse_error)
+        total_rounds = len(stats.rounds)
+        for i, round_result in enumerate(stats.rounds):
+            is_last = (i == total_rounds - 1)
+            if is_last and round_result.still_failed > 0:
+                # Last round with remaining failures — show round then exhausted
+                logger.info("          ├─ ♻️  Round %d: %d recovered | %d failed",
+                            i + 1, round_result.recovered, round_result.still_failed)
+                logger.info("          └─ ❌ %d exhausted after %d attempts",
+                            round_result.still_failed, total_rounds + 1)
+            elif is_last:
+                # Last round, all recovered
+                logger.info("          └─ ♻️  Round %d: %d recovered | %d failed",
+                            i + 1, round_result.recovered, round_result.still_failed)
+            else:
+                logger.info("          ├─ ♻️  Round %d: %d recovered | %d failed",
+                            i + 1, round_result.recovered, round_result.still_failed)
+
+        # Edge case: parse errors but no retry rounds ran (max_retries=0)
+        if not stats.rounds:
+            logger.info("          └─ ❌ %d exhausted (retries disabled)", stats.parse_error)
+
     logger.info("")
 
 
