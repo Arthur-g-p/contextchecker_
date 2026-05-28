@@ -38,14 +38,14 @@ def _print_header(command: str) -> None:
     logger.info("╰" + "─" * width + "╯")
     logger.info("")
 
-
+# Todo: add concurrency to extractor and checker
 @app.command()
 def extract(
     input_file: Path = typer.Argument(..., help="Path to JSON input file."),
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
     model: str = typer.Option(None, "--model", "-m", help="Model name used as key prefix."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
-    max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2."),
+    max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2. Max: Amount of retry stategies defined."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run the extraction pipeline on a JSON dataset."""
@@ -95,6 +95,7 @@ def check(
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Use joint checking (multiple claims per LLM call). Default: on."),
     joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per LLM call. Default: 6000 in joint mode, unset in single."),
+    max_retries: int = typer.Option(None, "--max-retries", help="Max retry rounds for API/parsing failures."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Check extracted claims against reference passages."""
@@ -129,6 +130,7 @@ def check(
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
+            max_retries=max_retries,
         )
         result = service.run_sync(data)
     except ContextCheckerError as exc:

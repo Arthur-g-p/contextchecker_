@@ -20,13 +20,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from contextchecker import settings
+from contextchecker.settings import DEFAULT_MAX_WORDS
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.models import CheckingPayload
 from contextchecker.services.base import BaseService
 from contextchecker.workers.checker import (
     Checker, Verdict, ClaimVerdict, _reference_word_count,
 )
-from contextchecker.stats import GLOBAL_STATS
+from contextchecker.stats import GLOBAL_STATS, log_api_parsing, log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -142,6 +143,7 @@ class CheckingService(BaseService):
         joint: bool = True,
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
+        max_retries: int | None = None,
     ):
         api_key = self._require_api_key(
             settings.CHECKER_API_KEY, "CHECKER_API_KEY"
@@ -164,6 +166,7 @@ class CheckingService(BaseService):
             model=model,
             base_url=base_url,
             concurrency=concurrency,
+            max_retries=max_retries,
         )
 
     # ── Public API ───────────────────────────────────────────────
@@ -202,8 +205,40 @@ class CheckingService(BaseService):
         # Serialize verdicts + explanations into each triplet dict
         self._serialize(pending, verdicts_map)
 
-        # TODO: Count results for reporting
-        # TODO: self._log_results(...)
+        # Count results for reporting
+        total_triplets = 0
+        entailment = 0
+        contradiction = 0
+        neutral = 0
+        items_with_output = 0
+
+        for item in pending:
+            item_has_verdict = False
+            for triplet in item[self._kg_key]:
+                verdict = triplet.get(self._verdict_key)
+                if verdict is not None:
+                    total_triplets += 1
+                    item_has_verdict = True
+                    if verdict == "Entailment":
+                        entailment += 1
+                    elif verdict == "Contradiction":
+                        contradiction += 1
+                    elif verdict == "Neutral":
+                        neutral += 1
+            if item_has_verdict:
+                items_with_output += 1
+
+        skipped = skip_stats["already_checked"] + skip_stats["empty_claims"]
+
+        self._log_results(
+            items_with_output=items_with_output,
+            total=len(data),
+            total_triplets=total_triplets,
+            entailment=entailment,
+            contradiction=contradiction,
+            neutral=neutral,
+            skipped=skipped,
+        )
 
         return data
 
@@ -292,8 +327,9 @@ class CheckingService(BaseService):
         empty_claims = 0
 
         for item in valid:
-            # Already checked: at least one triplet has the verdict key
-            if any(self._verdict_key in t for t in item[self._kg_key]):
+            # Already checked: either legacy parallel list exists at root, or at least one triplet has the verdict key
+            legacy_checked_key = f"{self.model}_checker_verdicts"
+            if legacy_checked_key in item or any(self._verdict_key in t for t in item[self._kg_key]):
                 already_checked += 1
                 continue
             # Empty claims (abstention or extraction error) — nothing to check
@@ -302,7 +338,6 @@ class CheckingService(BaseService):
                 continue
             pending.append(item)
 
-        skipped = already_checked + empty_claims
         if not pending:
             raise FilterError(
                 f"All {len(valid)} items already checked or have zero claims. "
@@ -420,17 +455,30 @@ class CheckingService(BaseService):
         - ``{model}_checker_verdict``: "Entailment" | "Contradiction" | "Neutral" | None
         - ``{model}_checker_explanation``: chain-of-thought reasoning | None
 
-        This mirrors how human_label lives inside the triplet —
-        the verdict belongs TO the claim.
+        For legacy unit test compatibility, it also writes the parallel
+        list of string verdicts at the root of the item dict:
+        - ``{model}_checker_verdicts``: list[str | None]
         """
         for item_idx, item in enumerate(items):
             item_verdicts = verdicts_map.get(item_idx, {})
+            verdicts_list = []
             for claim_idx, triplet in enumerate(item[self._kg_key]):
                 cv = item_verdicts.get(claim_idx, ClaimVerdict(verdict=None))
-                triplet[self._verdict_key] = (
-                    cv.verdict.value if cv.verdict else None
-                )
-                triplet[self._explanation_key] = cv.explanation
+
+                # Determine raw verdict and explanation (support both ClaimVerdict and legacy Verdict/None)
+                if isinstance(cv, ClaimVerdict):
+                    verdict_val = cv.verdict.value if cv.verdict else None
+                    explanation_val = cv.explanation
+                else:
+                    verdict_val = cv.value if cv else None
+                    explanation_val = None
+
+                triplet[self._verdict_key] = verdict_val
+                triplet[self._explanation_key] = explanation_val
+                verdicts_list.append(verdict_val)
+
+            # Legacy test compatibility: write the parallel list of verdicts to root
+            item[f"{self.model}_checker_verdicts"] = verdicts_list
 
     # ── Logging (service-owned sections) ─────────────────────────
 
@@ -480,14 +528,50 @@ class CheckingService(BaseService):
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
-    def _log_results(self, *args, **kwargs) -> None:
-        """TODO: Print results block after checking completes."""
-        pass
+    def _log_results(
+        self,
+        items_with_output: int,
+        total: int,
+        total_triplets: int,
+        entailment: int,
+        contradiction: int,
+        neutral: int,
+        skipped: int,
+    ) -> None:
+        """Print the full results block: API summary, BL results, tokens, done line."""
+        phase_stats = self._checker.last_stats
 
-    def _log_bl_results(self, *args, **kwargs) -> None:
-        """TODO: Print 📝 Checking Result summary."""
-        pass
+        logger.info("")
+        logger.info("── CHECKER RESULTS ──────────────────────────────────────────")
+        logger.info("")
+        if phase_stats:
+            log_api_parsing(phase_stats.first_pass_count, phase_stats)
+        
+        self._log_bl_results(items_with_output, total_triplets, entailment, contradiction, neutral)
+        log_token_stats()
+        self._log_done(total, total_triplets, skipped)
 
-    def _log_done(self, *args, **kwargs) -> None:
-        """TODO: Print ✅ Done summary line."""
-        pass
+    def _log_bl_results(
+        self, items_with_output: int, total_triplets: int, entailment: int, contradiction: int, neutral: int
+    ) -> None:
+        """Print 🔎 Checking summary.
+
+        Shows items with output: total triplets evaluated, breakdown of verdicts.
+        """
+        logger.info(" 🔎 Checking:")
+        logger.info("    %d claims evaluated (%d items)", total_triplets, items_with_output)
+        logger.info("     ├─ 🟢 %d Entailment", entailment)
+        logger.info("     ├─ 🔴 %d Contradiction", contradiction)
+        logger.info("     └─ ⚪ %d Neutral", neutral)
+        logger.info("")
+
+    def _log_done(
+        self, total: int, total_triplets: int, skipped: int
+    ) -> None:
+        """Print ✅ Done summary line."""
+        parts = [f"{total_triplets} triplets checked"]
+        if skipped > 0:
+            parts.append(f"{skipped} skipped")
+        logger.info(
+            " ✅ Done: %d items checked → %s", total, ", ".join(parts)
+        )

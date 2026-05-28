@@ -182,6 +182,7 @@ class Extractor:
             tasks, description="Extracting", task="extract",
         )
         stats.http_requests += len(tasks)
+        stats.first_pass_count = len(tasks)
 
         results, retry_indices = self._classify(raw_responses, stats)
         stats.first_pass_ok = stats.success + stats.empty

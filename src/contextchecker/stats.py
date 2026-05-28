@@ -32,6 +32,8 @@ class PhaseStats:
     total_items: int = 0          # domain-specific count (e.g. triplets, verdicts)
     http_requests: int = 0        # total HTTP requests across all rounds
 
+    first_pass_count: int = 0     # total items/tasks sent in the first pass
+
     # Per-round retry results (index 0 = round 1, etc.)
     rounds: list[RoundResult] = field(default_factory=list)
 
@@ -116,8 +118,11 @@ class TokenStats:
     def log_error(self):
         with self._lock:
             self.total_errors += 1
+            self.total_requests += 1
             if self._current_phase in self._phases:
-                self._phases[self._current_phase]["errors"] += 1
+                p = self._phases[self._current_phase]
+                p["errors"] += 1
+                p["requests"] += 1
 
     def to_dict(self) -> dict:
         """Crash-safe dict for _meta output. Never raises."""
@@ -163,7 +168,7 @@ def log_api_parsing(
     with per-round breakdown.
     """
     logger.info(" 🌐 API & Parsing:")
-    logger.info("    %d items sent to LLM [%d HTTP requests]", pending, stats.http_requests)
+    logger.info("    %d tasks sent to LLM [%d HTTP requests]", pending, stats.http_requests)
 
     # ── Success on first attempt
     permanent = stats.context_too_long + stats.content_policy

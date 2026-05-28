@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 
 from contextchecker.llmclient import LLMClient
 from contextchecker.models import CheckingPayload
-from contextchecker.exceptions import ParsingError
+from contextchecker.exceptions import ParsingError, ContextTooLongError, ContentPolicyError
+from contextchecker.stats import PhaseStats, RoundResult
 from contextchecker.utils import format_prompt
 from contextchecker import settings
 
@@ -67,6 +68,22 @@ class ClaimVerdict:
     explanation: str | None = None
 
 
+# ── Retry configuration ─────────────────────────────────────────────────────
+
+@dataclass
+class RetryRoundConfig:
+    """Config for one retry round. Prompt can be 'standard' or 'vanilla'."""
+    temperature: float = 0.3
+    prompt: str = "standard"   # "standard" or "vanilla"
+
+
+# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 vanilla.
+DEFAULT_RETRY_ROUNDS = [
+    RetryRoundConfig(temperature=0.3, prompt="standard"),
+    RetryRoundConfig(temperature=0.5, prompt="vanilla"),
+]
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _format_reference(reference: list[str]) -> str:
@@ -105,6 +122,7 @@ class Checker:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
+        max_retries: int | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -115,12 +133,26 @@ class Checker:
         )
         self._prompt_template = settings.PROMPTS["checker_prompt"]
         self._joint_prompt_template = settings.PROMPTS["checker_prompt_joint"]
+        self._vanilla_prompt = settings.PROMPTS.get("checker_prompt_vanilla", None)
+        self._joint_vanilla_prompt = settings.PROMPTS.get("checker_prompt_joint_vanilla", None)
+        self.last_stats: PhaseStats | None = None
+
+        if max_retries is None:
+            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS)
+        else:
+            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS[:max_retries])
 
     # ── Single mode ──────────────────────────────────────────────
 
-    def _build_messages(self, claim: str, reference: list[str]) -> list[dict]:
+    def _build_messages(
+        self, claim: str, reference: list[str], prompt_type: str = "standard"
+    ) -> list[dict]:
         """Build chat messages for a single check call."""
-        prompt = format_prompt(self._prompt_template, {
+        template = self._prompt_template
+        if prompt_type == "vanilla" and self._vanilla_prompt:
+            template = self._vanilla_prompt
+
+        prompt = format_prompt(template, {
             "claim": claim,
             "reference": _format_reference(reference),
         })
@@ -156,52 +188,130 @@ class Checker:
         Returns one ClaimVerdict per payload. Failed items get None verdict
         so the caller always gets len(payloads) results.
         """
-        tasks = [
-            {
+        stats = PhaseStats()
+        self.last_stats = stats
+
+        # Initialize results list
+        results: list[ClaimVerdict] = [ClaimVerdict(verdict=None) for _ in payloads]
+        retry_indices: list[int] = []
+
+        # ── First pass ───────────────────────────────────────
+        tasks = []
+        for p in payloads:
+            tasks.append({
                 "messages": self._build_messages(p.claim, p.reference),
                 "schema": CheckResult,
                 "temperature": 0.0,
-            }
-            for p in payloads
-        ]
+            })
 
         raw_responses = await self.client.generate_batch(
             tasks, description="Checking", task="check",
         )
+        stats.http_requests += len(tasks)
+        stats.first_pass_count = len(tasks)
 
-        results: list[ClaimVerdict] = []
-        for raw in raw_responses:
-            if isinstance(raw, Exception):
-                logger.warning("Check failed for claim: %s", raw)
-                results.append(ClaimVerdict(verdict=None))
+        # Classify first pass
+        for i, raw in enumerate(raw_responses):
+            if isinstance(raw, ContextTooLongError):
+                stats.context_too_long += 1
                 continue
+            if isinstance(raw, ContentPolicyError):
+                stats.content_policy += 1
+                continue
+
+            if isinstance(raw, Exception):
+                stats.parse_error += 1
+                retry_indices.append(i)
+                stats.failed_indices.append(i)
+                continue
+
             try:
                 parsed = CheckResult.model_validate_json(raw)
-                results.append(ClaimVerdict(
+                results[i] = ClaimVerdict(
                     verdict=parsed.verdict,
                     explanation=parsed.explanation,
-                ))
+                )
+                stats.success += 1
+                stats.total_items += 1
             except Exception as exc:
-                logger.warning("Failed to parse check result: %s", exc)
-                results.append(ClaimVerdict(verdict=None))
+                logger.debug("Parse failed for item %d: %s", i, exc)
+                stats.parse_error += 1
+                retry_indices.append(i)
+                stats.failed_indices.append(i)
+
+        stats.first_pass_ok = stats.success
+
+        # ── Retry loop ───────────────────────────────────────
+        for round_num, round_config in enumerate(self._retry_rounds):
+            if not retry_indices:
+                break
+
+            logger.info("   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
+                        round_num + 1, len(retry_indices),
+                        round_config.temperature, round_config.prompt)
+
+            retry_tasks = []
+            for i in retry_indices:
+                p = payloads[i]
+                retry_tasks.append({
+                    "messages": self._build_messages(p.claim, p.reference, round_config.prompt),
+                    "schema": CheckResult,
+                    "temperature": round_config.temperature,
+                })
+
+            raw_retries = await self.client.generate_batch(
+                retry_tasks, description=f"Retry round {round_num + 1}", task="check",
+            )
+            stats.http_requests += len(retry_tasks)
+
+            # Apply retries
+            round_result = RoundResult()
+            next_retry_indices: list[int] = []
+
+            for raw, original_idx in zip(raw_retries, retry_indices):
+                try:
+                    if isinstance(raw, Exception):
+                        raise raw
+                    parsed = CheckResult.model_validate_json(raw)
+                    results[original_idx] = ClaimVerdict(
+                        verdict=parsed.verdict,
+                        explanation=parsed.explanation,
+                    )
+                    round_result.recovered += 1
+                    stats.success += 1
+                    stats.total_items += 1
+                except Exception:
+                    round_result.still_failed += 1
+                    next_retry_indices.append(original_idx)
+
+            stats.rounds.append(round_result)
+            retry_indices = next_retry_indices
 
         return results
 
     # ── Joint mode ───────────────────────────────────────────────
 
     def _build_joint_messages(
-        self, numbered_claims: list[tuple[int, str]], reference: list[str]
+        self,
+        numbered_claims: list[tuple[int, str]],
+        reference: list[str],
+        prompt_type: str = "standard",
     ) -> list[dict]:
         """Build chat messages for a joint check call.
 
         Args:
             numbered_claims: list of (claim_id, claim_text) tuples.
             reference: list of reference passages.
+            prompt_type: standard or vanilla prompt template.
         """
+        template = self._joint_prompt_template
+        if prompt_type == "vanilla" and self._joint_vanilla_prompt:
+            template = self._joint_vanilla_prompt
+
         claims_block = "\n".join(
             f"[{cid}] {text}" for cid, text in numbered_claims
         )
-        prompt = format_prompt(self._joint_prompt_template, {
+        prompt = format_prompt(template, {
             "claims": claims_block,
             "reference": _format_reference(reference),
         })
@@ -229,58 +339,173 @@ class Checker:
             List of dicts, one per chunk. Each dict maps
             claim_id → ClaimVerdict. Missing IDs (gaps) get None verdict.
         """
-        tasks = [
-            {
+        stats = PhaseStats()
+        self.last_stats = stats
+
+        # Initialize results: list of dicts mapping claim_id -> ClaimVerdict
+        results: list[dict[int, ClaimVerdict]] = [{} for _ in chunks]
+
+        # Keep track of retryable claims per chunk: index -> set of failed claim_ids
+        retryable_claims: dict[int, set[int]] = {}
+
+        # ── First pass ───────────────────────────────────────
+        tasks = []
+        for numbered, ref in chunks:
+            tasks.append({
                 "messages": self._build_joint_messages(numbered, ref),
                 "schema": JointCheckResult,
                 "temperature": 0.0,
-            }
-            for numbered, ref in chunks
-        ]
+            })
 
         raw_responses = await self.client.generate_batch(
             tasks, description="Checking (joint)", task="check",
         )
+        stats.http_requests += len(tasks)
+        stats.first_pass_count = len(tasks)
 
-        results: list[dict[int, ClaimVerdict]] = []
-        for raw, (numbered, _) in zip(raw_responses, chunks):
+        # Classify first pass
+        for i, raw in enumerate(raw_responses):
+            numbered, ref = chunks[i]
             expected_ids = {cid for cid, _ in numbered}
 
-            if isinstance(raw, Exception):
-                logger.warning("Joint check failed for chunk: %s", raw)
-                results.append({cid: ClaimVerdict(verdict=None) for cid in expected_ids})
+            # Permanent per-item failures — fill with None, no retry
+            if isinstance(raw, ContextTooLongError):
+                stats.context_too_long += 1
+                for cid in expected_ids:
+                    results[i][cid] = ClaimVerdict(verdict=None)
+                continue
+            if isinstance(raw, ContentPolicyError):
+                stats.content_policy += 1
+                for cid in expected_ids:
+                    results[i][cid] = ClaimVerdict(verdict=None)
                 continue
 
+            # Any other error type — retryable failure for the whole chunk
+            if isinstance(raw, Exception):
+                stats.parse_error += 1
+                retryable_claims[i] = expected_ids.copy()
+                stats.failed_indices.append(i)
+                continue
+
+            # Parse JSON response
             try:
                 parsed = JointCheckResult.model_validate_json(raw)
+                # Map claim_id -> ClaimVerdict
+                chunk_result: dict[int, ClaimVerdict] = {}
+                for item in parsed.verdicts:
+                    if item.claim_id in expected_ids:
+                        chunk_result[item.claim_id] = ClaimVerdict(
+                            verdict=item.verdict,
+                            explanation=item.explanation,
+                        )
+                        stats.success += 1
+                        stats.total_items += 1
+                    else:
+                        logger.debug("Unexpected claim_id %d in response — ignoring.", item.claim_id)
+
+                # Find any gaps (missing claim IDs from expected)
+                gaps = expected_ids - chunk_result.keys()
+                if gaps:
+                    logger.debug("Chunk %d has gaps: %s", i, gaps)
+                    stats.id_gaps += len(gaps)
+                    stats.parse_error += 1
+                    retryable_claims[i] = gaps
+                    stats.failed_indices.append(i)
+
+                # Save the successful ones
+                results[i].update(chunk_result)
+
             except Exception as exc:
-                logger.warning("Failed to parse joint check result: %s", exc)
-                results.append({cid: ClaimVerdict(verdict=None) for cid in expected_ids})
-                continue
+                logger.debug("Failed to parse joint check result for chunk %d: %s", i, exc)
+                stats.parse_error += 1
+                retryable_claims[i] = expected_ids.copy()
+                stats.failed_indices.append(i)
 
-            # Map claim_id → ClaimVerdict, tracking gaps
-            chunk_result: dict[int, ClaimVerdict] = {}
-            for item in parsed.verdicts:
-                if item.claim_id in expected_ids:
-                    chunk_result[item.claim_id] = ClaimVerdict(
-                        verdict=item.verdict,
-                        explanation=item.explanation,
-                    )
-                else:
-                    logger.debug(
-                        "Joint check returned unexpected claim_id %d — ignoring.",
-                        item.claim_id,
-                    )
+        stats.first_pass_ok = stats.first_pass_count - stats.context_too_long - stats.content_policy - stats.parse_error
 
-            # Fill gaps with None
+        # ── Retry loop ───────────────────────────────────────
+        for round_num, round_config in enumerate(self._retry_rounds):
+            if not retryable_claims:
+                break
+
+            logger.info("   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
+                        round_num + 1, len(retryable_claims),
+                        round_config.temperature, round_config.prompt)
+
+            # Build tasks only for the retryable claims
+            retry_indices = sorted(retryable_claims.keys())
+            retry_tasks = []
+            for idx in retry_indices:
+                numbered, ref = chunks[idx]
+                failed_ids = retryable_claims[idx]
+                filtered_numbered = [(cid, text) for cid, text in numbered if cid in failed_ids]
+
+                retry_tasks.append({
+                    "messages": self._build_joint_messages(filtered_numbered, ref, round_config.prompt),
+                    "schema": JointCheckResult,
+                    "temperature": round_config.temperature,
+                })
+
+            raw_retries = await self.client.generate_batch(
+                retry_tasks, description=f"Retry round {round_num + 1}", task="check",
+            )
+            stats.http_requests += len(retry_tasks)
+
+            # Apply retries
+            round_result = RoundResult()
+            next_retryable: dict[int, set[int]] = {}
+
+            for idx, raw in zip(retry_indices, raw_retries):
+                numbered, ref = chunks[idx]
+                failed_ids = retryable_claims[idx]
+
+                try:
+                    if isinstance(raw, Exception):
+                        raise raw
+                    parsed = JointCheckResult.model_validate_json(raw)
+
+                    # Map claim_id -> ClaimVerdict
+                    chunk_result: dict[int, ClaimVerdict] = {}
+                    for item in parsed.verdicts:
+                        if item.claim_id in failed_ids:
+                            chunk_result[item.claim_id] = ClaimVerdict(
+                                verdict=item.verdict,
+                                explanation=item.explanation,
+                            )
+                            stats.success += 1
+                            stats.total_items += 1
+                        else:
+                            logger.debug("Unexpected claim_id %d in retry response — ignoring.", item.claim_id)
+
+                    # Update results
+                    results[idx].update(chunk_result)
+
+                    # Find remaining gaps
+                    still_missing = failed_ids - chunk_result.keys()
+                    if still_missing:
+                        logger.debug("Chunk %d still has gaps after retry: %s", idx, still_missing)
+                        next_retryable[idx] = still_missing
+                        round_result.still_failed += 1
+                    else:
+                        round_result.recovered += 1
+
+                except Exception as exc:
+                    logger.debug("Failed to parse joint retry result for chunk %d: %s", idx, exc)
+                    next_retryable[idx] = failed_ids
+                    round_result.still_failed += 1
+
+            stats.rounds.append(round_result)
+            retryable_claims = next_retryable
+
+        # Fill any remaining failures/gaps with None verdict so we always return results for every claim
+        for idx, (numbered, _) in enumerate(chunks):
+            expected_ids = {cid for cid, _ in numbered}
             for cid in expected_ids:
-                if cid not in chunk_result:
-                    logger.debug("Joint check gap: claim_id %d missing from response.", cid)
-                    chunk_result[cid] = ClaimVerdict(verdict=None)
-
-            results.append(chunk_result)
+                if cid not in results[idx]:
+                    results[idx][cid] = ClaimVerdict(verdict=None)
 
         return results
+
 
     # TODO: retry pass for parse errors
     # TODO: wire to stats tracking

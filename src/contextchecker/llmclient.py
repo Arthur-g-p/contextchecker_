@@ -14,7 +14,7 @@ from openai import (
     NotFoundError, ConflictError, UnprocessableEntityError,
     RateLimitError, InternalServerError,
 )
-from tqdm.asyncio import tqdm_asyncio
+from tqdm import tqdm
 from pydantic import ValidationError
 
 from contextchecker.stats import GLOBAL_STATS
@@ -64,7 +64,7 @@ class ErrorAction(Enum):
 
 
 class LLMClient:
-    def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10):
+    def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10, cache_file: str | None = None):
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
@@ -87,12 +87,13 @@ class LLMClient:
         self._discovery_succeeded = False   # True only if discovery pioneer actually got a 200
         self._discovery_lock = asyncio.Lock()  # Serializes strategy discovery
         self._cache_hit_logged = False  # Only log cache hint once
+        self._fatal_error_occurred = False
 
         self._session_cache = {}
         self._new_cache_entries = 0
         self._cache_enabled = True
         self._cache_loaded_from_disk = False
-        self._cache_file = ".rag_crash_cache.db"
+        self._cache_file = cache_file or ".rag_crash_cache.db"
         if os.path.exists(self._cache_file):
             try:
                 with sqlite3.connect(self._cache_file) as conn:
@@ -133,6 +134,9 @@ class LLMClient:
     # ───────────────────────────────────────────────────────────────
 
     def _handle_api_error(self, e: Exception, attempt: int = 0, max_retries: int = 0) -> ErrorAction:
+        if getattr(self, '_fatal_error_occurred', False):
+            # A fatal error has already occurred. Silence subsequent concurrent errors.
+            return ErrorAction.SKIP
 
         # ── FATAL: Auth / Permissions / Not Found ─────────────────
 
@@ -266,7 +270,14 @@ class LLMClient:
             return ErrorAction.SERVER_ERROR
 
         if isinstance(e, ValidationError):
-            logger.warning("⚠️ LOCAL SCHEMA VALIDATION FAILED (%s): Model generated incomplete JSON.", self.model)
+            # Format validation errors nicely
+            error_details = []
+            for err in e.errors():
+                loc = " -> ".join(str(x) for x in err.get("loc", []))
+                msg = err.get("msg", "")
+                error_details.append(f"{loc}: {msg}")
+            details_str = " | ".join(error_details)
+            logger.warning("⚠️ LOCAL SCHEMA VALIDATION FAILED (%s): %s", self.model, details_str)
             return ErrorAction.RETRY 
         # ── UNKNOWN ───────────────────────────────────────────────
 
@@ -297,14 +308,17 @@ class LLMClient:
         # ── Discovery: serialize the first request to walk the matrix alone ──
         # All other requests wait at the lock until discovery is done.
         discovering = False
-        if self.base_url and not self._strategy_discovered:
+        if not self._strategy_discovered:
             await self._discovery_lock.acquire()
             if self._strategy_discovered:
-                # Someone else discovered while we waited — release and continue
+                # Someone else validated while we waited — release and continue
                 self._discovery_lock.release()
             else:
                 discovering = True
-                logger.info("🔬 Discovering best strategy for %s...", self.model)
+                if self.base_url:
+                    logger.info("🔬 Discovering best strategy for %s starting with '%s'...", self.model, self.strategy.name)
+                else:
+                    logger.info("📡 LiteLLM mode (%s) — validating connection on first request...", self.model)
 
         try:
             last_error = None
@@ -448,12 +462,12 @@ class LLMClient:
                             if schema_retries < 3:
                                 logger.warning("   ⚠️ Schema Error. Retrying same strategy (%d/3)...", schema_retries + 1)
                                 schema_retries += 1
-                                # add more verbose and detailed JSON description
                                 continue
                             else:
                                 logger.warning("   ❌ Model failed JSON schema 3 times. Downgrading strategy...")
                                 schema_retries = 0  # reset before downgrade
-                                is_capability_error = True
+                                if self._next_strategy():
+                                    continue  # same attempt counter, just different strategy
 
                         elif action == ErrorAction.SKIP:
                             GLOBAL_STATS.log_error()
@@ -500,11 +514,13 @@ class LLMClient:
                 if self._discovery_lock.locked():
                     self._discovery_lock.release()
                 if not self._discovery_succeeded:
-                    # Don't mask a fatal error that's already propagating
-                    # (e.g. invalid model name → _save_and_raise → LLMClientError)
+                    # Don't mask a fatal error or cancellation that's already propagating
                     current_exc = sys.exc_info()[1]
-                    if isinstance(current_exc, LLMClientError):
-                        pass  # fatal error already in flight — let it propagate
+                    if current_exc is not None and (
+                        isinstance(current_exc, LLMClientError)
+                        or not isinstance(current_exc, Exception)
+                    ):
+                        pass  # let fatal errors and system/cancellation exceptions propagate
                     else:
                         self.save_cache()
                         raise LLMClientError(
@@ -532,6 +548,7 @@ class LLMClient:
 
     def _save_and_raise(self, message: str):
         """Log error, save partial results to crash cache, and raise LLMClientError."""
+        self._fatal_error_occurred = True
         logger.error("💀 %s", message)
         self.save_cache()
         raise LLMClientError(message)
@@ -569,23 +586,36 @@ class LLMClient:
         async def _run_safe(task_args):
             return await self._generate_safe(task=task, **task_args)
 
-        try:
-            results = await tqdm_asyncio.gather(
-                *[_run_safe(args) for args in tasks_data],
-                desc="  "+description
-            )
-        except asyncio.CancelledError:
-            self.save_cache()
-            raise
-        except LLMError:
-            # Fatal error from generate() (auth, connection, budget).
-            # Cache already saved by _save_and_raise, but belt-and-suspenders.
-            self.save_cache()
-            raise
+        # Hermetic progress bar: use standard non-async tqdm and update it manually
+        # inside standard asyncio.gather, ensuring perfect exception cancellation.
+        pbar = tqdm(total=len(tasks_data), desc="  " + description)
 
-        # Post-gather safety net: tqdm_asyncio.gather may use return_exceptions=True
-        # internally, which swallows fatal errors as list items instead of raising.
-        # Scan for fatal LLMClientError that leaked through as a value.
+        async def _run_and_update(args):
+            completed = False
+            try:
+                res = await _run_safe(args)
+                completed = True
+                return res
+            finally:
+                if completed:
+                    pbar.update(1)
+
+        tasks = [asyncio.create_task(_run_and_update(args)) for args in tasks_data]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException as e:
+            # Cancel all other tasks immediately!
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            # Wait for all tasks to be cancelled/done to avoid orphaned tasks
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.save_cache()
+            raise
+        finally:
+            pbar.close()
+
+        # Scan for fatal LLMClientError that leaked through as a value (just in case)
         for r in results:
             if isinstance(r, LLMClientError) and not isinstance(r, (ContextTooLongError, ContentPolicyError)):
                 self.save_cache()
@@ -598,7 +628,6 @@ class LLMClient:
         """Pre-flight check: verifies API reachability and authentication."""
         if not self.base_url:
             # LiteLLM mode — no direct endpoint to check, skip pre-flight
-            logger.info("📡 LiteLLM mode (%s) — skipping pre-flight connection check.", self.model)
             self._connection_verified = True
             return
 

@@ -83,17 +83,19 @@ def _make_tasks(n: int) -> list[dict]:
 
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     """Create an LLMClient with a mocked AsyncOpenAI backend.
 
     Preflight connection check and strategy discovery are both skipped
     so tests can focus purely on error handling during generate/generate_batch.
     """
+    cache_path = str(tmp_path / ".test_cache.db")
     with patch("contextchecker.llmclient.AsyncOpenAI"):
         c = LLMClient(
             api_key="test-key-abc123",
             model="test-model",
             base_url="http://fake/v1",
+            cache_file=cache_path,
         )
     # Skip preflight and discovery — tested separately
     c._connection_verified = True
@@ -105,15 +107,17 @@ def client():
 
 
 @pytest.fixture(params=["openai", "litellm"])
-def client_and_mock(request):
+def client_and_mock(request, tmp_path):
     """Fixture parameterizing the client across OpenAI and LiteLLM paths."""
     mode = request.param
+    cache_path = str(tmp_path / f".test_cache_{mode}.db")
     if mode == "openai":
         with patch("contextchecker.llmclient.AsyncOpenAI"):
             c = LLMClient(
                 api_key="test-key-abc123",
                 model="test-model",
                 base_url="http://fake/v1",
+                cache_file=cache_path,
             )
         c._connection_verified = True
         c._strategy_discovered = True
@@ -125,6 +129,7 @@ def client_and_mock(request):
             api_key="test-key-abc123",
             model="google/gemini-2.0-flash",
             base_url=None,
+            cache_file=cache_path,
         )
         c._connection_verified = True
         c._strategy_discovered = True

@@ -363,7 +363,8 @@ class TestCheckingFilter:
         ]
         pending, skipped = service._filter(valid)
         assert len(pending) == 1
-        assert skipped == 0
+        assert skipped["already_checked"] == 0
+        assert skipped["empty_claims"] == 0
 
     def test_already_checked_skipped(self, service):
         """Items with existing verdict key are skipped."""
@@ -377,7 +378,8 @@ class TestCheckingFilter:
         ]
         pending, skipped = service._filter(valid)
         assert len(pending) == 1
-        assert skipped == 1
+        assert skipped["already_checked"] == 1
+        assert skipped["empty_claims"] == 0
 
     def test_empty_kg_skipped(self, service):
         """Items with empty _response_kg (abstentions) are skipped."""
@@ -387,7 +389,8 @@ class TestCheckingFilter:
         ]
         pending, skipped = service._filter(valid)
         assert len(pending) == 1
-        assert skipped == 1
+        assert skipped["already_checked"] == 0
+        assert skipped["empty_claims"] == 1
 
     def test_all_skipped_raises(self, service):
         """All items already checked → FilterError."""
