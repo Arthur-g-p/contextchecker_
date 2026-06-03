@@ -20,6 +20,60 @@ Input (list[dict])
   └─ _serialize()          →  Writes verdict + explanation directly into each triplet dict
 ```
 
+For a detailed view of error handling, client classification, retries, and dynamic claim-gap recovery, see the [Checker Flow Diagram](file:///c:/Users/Arthur/contextchecker/docs/checker_flow.md).
+
+### Single Mode Flow (`--no-joint`)
+
+```mermaid
+flowchart LR
+    Start([Input Data]) --> Validate{Validate Reference & Claims?}
+    Validate -->|No| Skip[Skip Item & Log Warning]
+    Validate -->|Yes| Filter{Filter Type}
+    
+    Filter -->|Already Checked| SkipDone[Skip - Return Existing]
+    Filter -->|Empty Claims| SkipEmpty[Return None Verdicts]
+    Filter -->|Pending| LLM[LLM Call: 1 Claim per Payload]
+    
+    LLM --> ErrorType{API Response?}
+    
+    ErrorType -->|FATAL: Auth / Model / Credit| Fatal[Save Cache & Kill Batch]
+    ErrorType -->|SKIP: Context / Policy| SkipPerm[Skip Claim - Return None Verdict]
+    ErrorType -->|RETRY / Parser Exception| ParseCheck{JSON Parsed OK?}
+    
+    ParseCheck -->|Yes| Success[Save Claim Verdict]
+    ParseCheck -->|No| RetryCheck{Worker Retries Left?}
+    
+    RetryCheck -->|Yes| RetryRound(Retry Claim: Higher Temp / Vanilla Prompt)
+    RetryRound --> LLM
+    RetryCheck -->|No| Exhausted[Save None Verdict for Claim]
+```
+
+### Joint Mode Flow (Default)
+
+```mermaid
+flowchart LR
+    Start([Input Data]) --> Validate{Validate Reference & Claims?}
+    Validate -->|No| Skip[Skip Item & Log Warning]
+    Validate -->|Yes| Filter{Filter Type}
+    
+    Filter -->|Already Checked| SkipDone[Skip - Return Existing]
+    Filter -->|Empty Claims| SkipEmpty[Return None Verdicts]
+    Filter -->|Pending| LLM[LLM Call: Bundled Claims Chunk]
+    
+    LLM --> ErrorType{API Response?}
+    
+    ErrorType -->|FATAL: Auth / Model / Credit| Fatal[Save Cache & Kill Batch]
+    ErrorType -->|SKIP: Context / Policy| SkipPerm[Skip Chunk - Return None Verdicts]
+    ErrorType -->|RETRY / Parser Exception| VerdictCheck{All Claim IDs Parsed?}
+    
+    VerdictCheck -->|Yes| Success[Save Claim Verdicts]
+    VerdictCheck -->|No / Gaps| RetryCheck{Worker Retries Left?}
+    
+    RetryCheck -->|Yes| RetryRound(Retry Missing Claims: Higher Temp / Shrink Joint Chunk)
+    RetryRound --> LLM
+    RetryCheck -->|No| Exhausted[Save None Verdicts for Remaining]
+```
+
 ---
 
 ## Pipeline Steps in Detail

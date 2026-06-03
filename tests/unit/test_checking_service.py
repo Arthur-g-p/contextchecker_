@@ -404,6 +404,43 @@ class TestCheckingFilter:
         with pytest.raises(FilterError):
             service._filter(valid)
 
+    def test_triplet_level_verdict_already_checked(self, service):
+        """Item is skipped if all triplets contain a non-None verdict."""
+        valid = [
+            {
+                "reference": ["r"],
+                KG_KEY: [
+                    {"subject": "A", "predicate": "B", "object": "C", "checker-model_checker_verdict": "Entailment"},
+                    {"subject": "X", "predicate": "Y", "object": "Z", "checker-model_checker_verdict": "Neutral"},
+                ],
+            }
+        ]
+        with pytest.raises(FilterError):
+            service._filter(valid)
+
+    def test_triplet_level_partial_verdict_is_pending(self, service):
+        """Item is NOT skipped if at least one triplet is missing a verdict or has a None verdict."""
+        valid = [
+            {
+                "reference": ["r"],
+                KG_KEY: [
+                    {"subject": "A", "predicate": "B", "object": "C", "checker-model_checker_verdict": "Entailment"},
+                    {"subject": "X", "predicate": "Y", "object": "Z"}, # missing
+                ],
+            },
+            {
+                "reference": ["r"],
+                KG_KEY: [
+                    {"subject": "A", "predicate": "B", "object": "C", "checker-model_checker_verdict": "Entailment"},
+                    {"subject": "X", "predicate": "Y", "object": "Z", "checker-model_checker_verdict": None}, # None
+                ],
+            }
+        ]
+        pending, skipped = service._filter(valid)
+        assert len(pending) == 2
+        assert skipped["already_checked"] == 0
+        assert skipped["empty_claims"] == 0
+
 
 # ── _build_payloads tests ────────────────────────────────────────────────────
 
@@ -452,3 +489,112 @@ class TestBuildPayloads:
         ]
         payloads = service._build_payloads(pending)
         assert payloads[0].reference == ["p1", "p2"]
+
+
+class TestClaimLevelResumption:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    @pytest.fixture
+    def service(self):
+        with patch("contextchecker.services.checking.Checker"):
+            return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
+
+    def test_single_mode_builds_payloads_only_for_unchecked(self, service):
+        """_build_payloads only includes triplets without non-None verdicts."""
+        pending = [
+            {
+                "reference": ["r1"],
+                KG_KEY: [
+                    {"subject": "A", "predicate": "is", "object": "B", "checker-model_checker_verdict": "Entailment"},
+                    {"subject": "C", "predicate": "has", "object": "D"}, # unchecked
+                    {"subject": "E", "predicate": "near", "object": "F", "checker-model_checker_verdict": None}, # None/failed -> unchecked
+                ]
+            }
+        ]
+        payloads = service._build_payloads(pending)
+        assert len(payloads) == 2
+        assert payloads[0].claim == "C has D"
+        assert payloads[0].claim_index == 1
+        assert payloads[1].claim == "E near F"
+        assert payloads[1].claim_index == 2
+
+    @pytest.mark.anyio
+    async def test_joint_mode_packages_only_unchecked(self, service):
+        """_execute_joint packages and checks only the unchecked claims."""
+        pending = [
+            {
+                "reference": ["r1"],
+                KG_KEY: [
+                    {"subject": "A", "predicate": "is", "object": "B", "checker-model_checker_verdict": "Entailment"},
+                    {"subject": "C", "predicate": "has", "object": "D"}, # unchecked (orig idx 1)
+                    {"subject": "E", "predicate": "near", "object": "F", "checker-model_checker_verdict": None}, # unchecked (orig idx 2)
+                ]
+            }
+        ]
+
+        from unittest.mock import AsyncMock
+        from contextchecker.workers.checker import ClaimVerdict, Verdict
+        mock_results = [{
+            2: ClaimVerdict(verdict=Verdict.CONTRADICTION, explanation="Explanation 1"),
+            3: ClaimVerdict(verdict=Verdict.NEUTRAL, explanation="Explanation 2")
+        }]
+
+        mock_check = AsyncMock(return_value=mock_results)
+        with patch.object(service._checker, "check_joint_batch", mock_check):
+            verdicts_map = await service._execute_joint(pending)
+            
+            # Verify mock call parameters: expected claim_ids are 2 and 3 (1-based from orig_idx + 1)
+            mock_check.assert_called_once()
+            called_chunks = mock_check.call_args[0][0]
+            assert len(called_chunks) == 1
+            numbered_claims = called_chunks[0][0]
+            assert numbered_claims == [(2, "C has D"), (3, "E near F")]
+
+            # Verify returned verdicts map back to original indices 1 and 2
+            assert verdicts_map == {
+                0: {
+                    1: ClaimVerdict(verdict=Verdict.CONTRADICTION, explanation="Explanation 1"),
+                    2: ClaimVerdict(verdict=Verdict.NEUTRAL, explanation="Explanation 2")
+                }
+            }
+
+    def test_serialize_merges_and_preserves_verdicts(self, service):
+        """_serialize updates new verdicts, preserves existing ones, and fills legacy root list."""
+        from contextchecker.workers.checker import ClaimVerdict, Verdict
+
+        items = [
+            {
+                KG_KEY: [
+                    {
+                        "subject": "A", "predicate": "is", "object": "B",
+                        "checker-model_checker_verdict": "Entailment",
+                        "checker-model_checker_explanation": "Existing explanation"
+                    },
+                    {
+                        "subject": "C", "predicate": "has", "object": "D"
+                    }
+                ]
+            }
+        ]
+
+        verdicts_map = {
+            0: {
+                1: ClaimVerdict(verdict=Verdict.CONTRADICTION, explanation="New explanation")
+            }
+        }
+
+        service._serialize(items, verdicts_map)
+
+        # First triplet should be unchanged
+        assert items[0][KG_KEY][0]["checker-model_checker_verdict"] == "Entailment"
+        assert items[0][KG_KEY][0]["checker-model_checker_explanation"] == "Existing explanation"
+
+        # Second triplet should be updated
+        assert items[0][KG_KEY][1]["checker-model_checker_verdict"] == "Contradiction"
+        assert items[0][KG_KEY][1]["checker-model_checker_explanation"] == "New explanation"
+
+        # Legacy parallel list at root should contain all verdicts
+        assert items[0]["checker-model_checker_verdicts"] == ["Entailment", "Contradiction"]

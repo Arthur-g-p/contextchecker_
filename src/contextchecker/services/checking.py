@@ -205,28 +205,28 @@ class CheckingService(BaseService):
         # Serialize verdicts + explanations into each triplet dict
         self._serialize(pending, verdicts_map)
 
-        # Count results for reporting
+        # Count results for reporting (only from the active execution)
         total_triplets = 0
         entailment = 0
         contradiction = 0
         neutral = 0
-        items_with_output = 0
+        items_with_output = len(verdicts_map)
 
-        for item in pending:
-            item_has_verdict = False
-            for triplet in item[self._kg_key]:
-                verdict = triplet.get(self._verdict_key)
-                if verdict is not None:
+        for item_idx, claim_verdicts in verdicts_map.items():
+            for claim_idx, cv in claim_verdicts.items():
+                if isinstance(cv, ClaimVerdict):
+                    verdict_val = cv.verdict.value if cv.verdict else None
+                else:
+                    verdict_val = cv.value if cv else None
+
+                if verdict_val is not None:
                     total_triplets += 1
-                    item_has_verdict = True
-                    if verdict == "Entailment":
+                    if verdict_val == "Entailment":
                         entailment += 1
-                    elif verdict == "Contradiction":
+                    elif verdict_val == "Contradiction":
                         contradiction += 1
-                    elif verdict == "Neutral":
+                    elif verdict_val == "Neutral":
                         neutral += 1
-            if item_has_verdict:
-                items_with_output += 1
 
         skipped = skip_stats["already_checked"] + skip_stats["empty_claims"]
 
@@ -241,6 +241,24 @@ class CheckingService(BaseService):
         )
 
         return data
+
+    def _is_claim_checked(self, item: dict, claim_idx: int) -> bool:
+        """Helper to determine if a specific claim has a valid non-None verdict.
+
+        Checks both the modern triplet-level key and the legacy top-level list.
+        """
+        triplet = item[self._kg_key][claim_idx]
+        if triplet.get(self._verdict_key) is not None:
+            return True
+
+        legacy_checked_key = f"{self.model}_checker_verdicts"
+        if legacy_checked_key in item:
+            legacy_list = item[legacy_checked_key]
+            if isinstance(legacy_list, list) and claim_idx < len(legacy_list):
+                if legacy_list[claim_idx] is not None:
+                    return True
+
+        return False
 
     # ── Pipeline steps (private) ─────────────────────────────────
 
@@ -327,15 +345,17 @@ class CheckingService(BaseService):
         empty_claims = 0
 
         for item in valid:
-            # Already checked: either legacy parallel list exists at root, or at least one triplet has the verdict key
-            legacy_checked_key = f"{self.model}_checker_verdicts"
-            if legacy_checked_key in item or any(self._verdict_key in t for t in item[self._kg_key]):
-                already_checked += 1
-                continue
             # Empty claims (abstention or extraction error) — nothing to check
             if not item[self._kg_key]:
                 empty_claims += 1
                 continue
+
+            # Item is skipped if all of its claims are already checked
+            has_unchecked = any(not self._is_claim_checked(item, claim_idx) for claim_idx in range(len(item[self._kg_key])))
+            if not has_unchecked:
+                already_checked += 1
+                continue
+
             pending.append(item)
 
         if not pending:
@@ -354,6 +374,8 @@ class CheckingService(BaseService):
         for item_idx, item in enumerate(pending):
             reference = item["reference"]
             for claim_idx, triplet in enumerate(item[self._kg_key]):
+                if self._is_claim_checked(item, claim_idx):
+                    continue
                 claim_text = self._triplet_to_text(triplet)
                 payloads.append(CheckingPayload(
                     claim=claim_text,
@@ -367,8 +389,6 @@ class CheckingService(BaseService):
     def _triplet_to_text(triplet: dict) -> str:
         """Flatten a canonical triplet dict to a claim string."""
         return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
-
-    # ── Joint execution ──────────────────────────────────────────
 
     async def _execute_joint(
         self, pending: list[dict]
@@ -384,24 +404,37 @@ class CheckingService(BaseService):
         for item_idx, item in enumerate(pending):
             claims = item[self._kg_key]
             reference = item["reference"]
-            claim_texts = [self._triplet_to_text(t) for t in claims]
+
+            # Filter unchecked claims and keep their original 0-based indices
+            unchecked = [
+                (claim_idx, self._triplet_to_text(t))
+                for claim_idx, t in enumerate(claims)
+                if not self._is_claim_checked(item, claim_idx)
+            ]
+
+            if not unchecked:
+                continue
+
+            unchecked_texts = [text for _, text in unchecked]
 
             # Compute effective chunk size based on context budget
             effective_num = _effective_joint_num(
-                reference, claim_texts, self.joint_num, self.max_words,
+                reference, unchecked_texts, self.joint_num, self.max_words,
             )
 
-            for chunk_start in range(0, len(claims), effective_num):
-                chunk_end = min(chunk_start + effective_num, len(claims))
+            for chunk_start in range(0, len(unchecked), effective_num):
+                chunk_end = min(chunk_start + effective_num, len(unchecked))
+                # For the prompt, we use claim_id = orig_idx + 1 so it remains a unique reference ID.
+                # Since the worker treats this ID as a black box (expects integer), this works perfectly.
                 numbered = [
-                    (claim_idx + 1, claim_texts[claim_idx])
-                    for claim_idx in range(chunk_start, chunk_end)
+                    (orig_idx + 1, text)
+                    for orig_idx, text in unchecked[chunk_start:chunk_end]
                 ]
                 chunks.append(_JointChunk(
                     numbered_claims=numbered,
                     reference=reference,
                     item_index=item_idx,
-                    chunk_start=chunk_start,
+                    chunk_start=0,  # Not used since claim_id is absolute map to orig_idx + 1
                 ))
 
         # Send all chunks as a single batch (progress bar + concurrency)
@@ -417,9 +450,10 @@ class CheckingService(BaseService):
             if item_idx not in all_verdicts:
                 all_verdicts[item_idx] = {}
 
-            for claim_idx_offset, (claim_id, _) in enumerate(chunk_meta.numbered_claims):
-                claim_idx = chunk_meta.chunk_start + claim_idx_offset
-                all_verdicts[item_idx][claim_idx] = id_verdicts.get(
+            # Map the returned claim_ids directly to their original indices (claim_id - 1)
+            for claim_id, _ in chunk_meta.numbered_claims:
+                orig_idx = claim_id - 1
+                all_verdicts[item_idx][orig_idx] = id_verdicts.get(
                     claim_id, ClaimVerdict(verdict=None)
                 )
 
@@ -463,18 +497,27 @@ class CheckingService(BaseService):
             item_verdicts = verdicts_map.get(item_idx, {})
             verdicts_list = []
             for claim_idx, triplet in enumerate(item[self._kg_key]):
-                cv = item_verdicts.get(claim_idx, ClaimVerdict(verdict=None))
+                if claim_idx in item_verdicts:
+                    cv = item_verdicts[claim_idx]
+                    # Determine raw verdict and explanation (support both ClaimVerdict and legacy Verdict/None)
+                    if isinstance(cv, ClaimVerdict):
+                        verdict_val = cv.verdict.value if cv.verdict else None
+                        explanation_val = cv.explanation
+                    else:
+                        verdict_val = cv.value if cv else None
+                        explanation_val = None
 
-                # Determine raw verdict and explanation (support both ClaimVerdict and legacy Verdict/None)
-                if isinstance(cv, ClaimVerdict):
-                    verdict_val = cv.verdict.value if cv.verdict else None
-                    explanation_val = cv.explanation
+                    triplet[self._verdict_key] = verdict_val
+                    triplet[self._explanation_key] = explanation_val
                 else:
-                    verdict_val = cv.value if cv else None
-                    explanation_val = None
+                    verdict_val = triplet.get(self._verdict_key)
+                    if verdict_val is None:
+                        legacy_checked_key = f"{self.model}_checker_verdicts"
+                        if legacy_checked_key in item:
+                            legacy_list = item[legacy_checked_key]
+                            if isinstance(legacy_list, list) and claim_idx < len(legacy_list):
+                                verdict_val = legacy_list[claim_idx]
 
-                triplet[self._verdict_key] = verdict_val
-                triplet[self._explanation_key] = explanation_val
                 verdicts_list.append(verdict_val)
 
             # Legacy test compatibility: write the parallel list of verdicts to root

@@ -13,6 +13,32 @@ Input (list[dict])
   └─ serialize    →  writes results back into the original dicts
 ```
 
+For a detailed view of error handling, client classification, and retries, see the [Extractor Flow Diagram](file:///c:/Users/Arthur/contextchecker/docs/extractor_flow.md).
+
+```mermaid
+flowchart LR
+    Start([Input Data]) --> Validate{Validate Response Key?}
+    Validate -->|No| Skip[Skip Item & Log Warning]
+    Validate -->|Yes| Filter{Filter Type}
+    
+    Filter -->|Already Checked| SkipDone[Skip - Return Existing]
+    Filter -->|Abstention| SkipEmpty[Return Empty Triplets]
+    Filter -->|Pending| LLM[LLM Client Call]
+    
+    LLM --> ErrorType{API Response?}
+    
+    ErrorType -->|FATAL: Auth / Model / Credit| Fatal[Save Cache & Kill Batch]
+    ErrorType -->|SKIP: Context / Policy| SkipPerm[Skip Item - Return Empty Triplets]
+    ErrorType -->|RETRY / Parser Exception| ParseCheck{JSON Parsed OK?}
+    
+    ParseCheck -->|Yes| Success[Save Extracted Triplets]
+    ParseCheck -->|No| RetryCheck{Worker Retries Left?}
+    
+    RetryCheck -->|Yes| RetryRound(Retry Round with Temp / Vanilla Prompt)
+    RetryRound --> LLM
+    RetryCheck -->|No| Exhausted[Save Empty Triplets]
+```
+
 ---
 
 ## Step 1: Validation (`_validate`)
