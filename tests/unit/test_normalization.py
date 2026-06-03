@@ -12,153 +12,183 @@ from contextchecker.services.base import BaseService
 from contextchecker.services.checking import _normalize_triplets
 
 
+# ── Test Fixtures ────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def legacy_item():
+    """Item in legacy format (all old-style keys)."""
+    return {
+        "query": "What is the capital of France?",
+        "context": ["France is a country in Europe.", "Paris is the capital of France."],
+        "response": "The capital of France is Paris.",
+        "claude2_response_kg": [
+            {"triplet": ["France", "has capital", "Paris"], "human_label": "Entailment"},
+            {"triplet": ["Paris", "is in", "Europe"], "human_label": "Neutral"}
+        ]
+    }
+
+
+@pytest.fixture
+def canonical_item():
+    """Item in canonical format (all new-style keys)."""
+    return {
+        "question": "What is the capital of France?",
+        "reference": ["France is a country in Europe.", "Paris is the capital of France."],
+        "response": "The capital of France is Paris.",
+        "claude2_response_kg": [
+            {"subject": "France", "predicate": "has capital", "object": "Paris", "human_label": "Entailment"}
+        ]
+    }
+
+
+@pytest.fixture
+def mixed_item():
+    """Item with mixed legacy and canonical elements in the same list."""
+    return {
+        "context": ["Some passage."],
+        "question": "Already canonical question",
+        "claude2_response_kg": [
+            {"triplet": ["A", "B", "C"], "human_label": "Entailment"},
+            {"subject": "X", "predicate": "Y", "object": "Z", "human_label": "Contradiction"}
+        ]
+    }
+
+
+@pytest.fixture
+def single_string_ref_item():
+    """Item with reference as a single string instead of a list."""
+    return {
+        "reference": "Single passage as a string, not a list.",
+        "claude2_response_kg": [
+            {"triplet": ["A", "B", "C"], "human_label": "Entailment"}
+        ]
+    }
+
+
 # ── _canonicalize_keys tests ─────────────────────────────────────────────────
 
 class TestCanonicalizeKeys:
 
-    def test_context_renamed_to_reference(self):
-        """'context' → 'reference' when 'reference' is absent."""
-        data = [{"context": ["passage one"], "response": "answer"}]
+    def test_canonicalize_context_to_reference(self, legacy_item):
+        """'context' key gets renamed to 'reference'."""
+        data = [legacy_item]
         BaseService._canonicalize_keys(data)
         assert "reference" in data[0]
         assert "context" not in data[0]
-        assert data[0]["reference"] == ["passage one"]
+        assert data[0]["reference"] == ["France is a country in Europe.", "Paris is the capital of France."]
 
-    def test_query_renamed_to_question(self):
-        """'query' → 'question' when 'question' is absent."""
-        data = [{"query": "what is X?", "response": "X is Y"}]
+    def test_canonicalize_query_to_question(self, legacy_item):
+        """'query' key gets renamed to 'question'."""
+        data = [legacy_item]
         BaseService._canonicalize_keys(data)
         assert "question" in data[0]
         assert "query" not in data[0]
-        assert data[0]["question"] == "what is X?"
+        assert data[0]["question"] == "What is the capital of France?"
 
-    def test_both_aliases_renamed(self):
-        """Both 'context' and 'query' are renamed in the same item."""
-        data = [{"context": ["ref"], "query": "q text", "response": "r"}]
-        BaseService._canonicalize_keys(data)
-        assert data[0]["reference"] == ["ref"]
-        assert data[0]["question"] == "q text"
-        assert "context" not in data[0]
-        assert "query" not in data[0]
-
-    def test_reference_already_exists_no_overwrite(self):
-        """If 'reference' already exists, 'context' is NOT renamed (no overwrite)."""
+    def test_canonicalize_preserves_existing_reference(self):
+        """If both 'context' AND 'reference' exist, 'reference' is NOT overwritten."""
         data = [{"reference": ["original"], "context": ["alias"]}]
         BaseService._canonicalize_keys(data)
         assert data[0]["reference"] == ["original"]
-        assert data[0]["context"] == ["alias"]  # untouched
+        assert data[0]["context"] == ["alias"]
 
-    def test_question_already_exists_no_overwrite(self):
-        """If 'question' already exists, 'query' is NOT renamed."""
+    def test_canonicalize_preserves_existing_question(self):
+        """If both 'question' AND 'query' exist, 'question' is NOT overwritten."""
         data = [{"question": "original", "query": "alias"}]
         BaseService._canonicalize_keys(data)
         assert data[0]["question"] == "original"
-        assert data[0]["query"] == "alias"  # untouched
+        assert data[0]["query"] == "alias"
 
-    def test_canonical_keys_already_present(self):
-        """Items with canonical keys are untouched."""
-        data = [{"reference": ["ref"], "question": "q", "response": "r"}]
-        BaseService._canonicalize_keys(data)
-        assert data[0] == {"reference": ["ref"], "question": "q", "response": "r"}
-
-    def test_no_relevant_keys(self):
-        """Items with neither alias nor canonical key — untouched."""
+    def test_canonicalize_no_side_effects(self):
+        """Items without context/query are untouched."""
         data = [{"response": "hello"}]
         BaseService._canonicalize_keys(data)
         assert data[0] == {"response": "hello"}
 
-    def test_empty_list(self):
+    def test_canonicalize_empty_list(self):
         """Empty list — no crash."""
         data = []
         BaseService._canonicalize_keys(data)
         assert data == []
 
-    def test_mixed_items(self):
-        """Multiple items with different key shapes."""
+    def test_canonicalize_mixed_items(self, legacy_item, canonical_item):
+        """Multiple items with different key shapes in the same list."""
         data = [
-            {"context": ["ref1"], "response": "r1"},
-            {"reference": ["ref2"], "query": "q2", "response": "r2"},
-            {"response": "r3"},
+            legacy_item,
+            canonical_item,
+            {"response": "untouched"}
         ]
         BaseService._canonicalize_keys(data)
-        assert data[0]["reference"] == ["ref1"]
-        assert data[1]["reference"] == ["ref2"]
-        assert data[1]["question"] == "q2"
+        assert data[0]["reference"] == ["France is a country in Europe.", "Paris is the capital of France."]
+        assert data[0]["question"] == "What is the capital of France?"
+        assert data[1]["reference"] == ["France is a country in Europe.", "Paris is the capital of France."]
         assert "reference" not in data[2]
 
-    def test_mutation_in_place(self):
-        """Canonicalization mutates the original list, not a copy."""
-        data = [{"context": ["ref"]}]
+    def test_canonicalize_mutation_in_place(self, legacy_item):
+        """Canonicalization mutates the original list items in-place."""
+        data = [legacy_item]
         original_item = data[0]
         BaseService._canonicalize_keys(data)
-        assert data[0] is original_item  # same object
+        assert data[0] is original_item
 
 
 # ── _normalize_triplets tests ────────────────────────────────────────────────
 
 class TestNormalizeTriplets:
 
-    def test_legacy_array_format(self):
-        """{"triplet": [s, p, o]} → {"subject": s, "predicate": p, "object": o}."""
-        kg = [{"triplet": ["France", "has capital", "Paris"]}]
+    def test_normalize_legacy_triplet_array(self, legacy_item):
+        """Legacy {"triplet": [s, p, o]} becomes {"subject": s, "predicate": p, "object": o}."""
+        kg = legacy_item["claude2_response_kg"]
         _normalize_triplets(kg)
-        assert kg[0] == {"subject": "France", "predicate": "has capital", "object": "Paris"}
-
-    def test_legacy_with_human_label_preserved(self):
-        """Extra keys like 'human_label' survive normalization."""
-        kg = [{"triplet": ["X", "is", "Y"], "human_label": "Entailment"}]
-        _normalize_triplets(kg)
-        assert kg[0]["subject"] == "X"
-        assert kg[0]["predicate"] == "is"
-        assert kg[0]["object"] == "Y"
-        assert kg[0]["human_label"] == "Entailment"
+        assert kg[0]["subject"] == "France"
+        assert kg[0]["predicate"] == "has capital"
+        assert kg[0]["object"] == "Paris"
         assert "triplet" not in kg[0]
 
-    def test_canonical_format_untouched(self):
-        """Already canonical dicts are left as-is."""
-        original = {"subject": "A", "predicate": "B", "object": "C"}
-        kg = [original.copy()]
+    def test_normalize_preserves_canonical_triplet(self, canonical_item):
+        """Already-canonical dicts are left untouched."""
+        kg = canonical_item["claude2_response_kg"]
+        original = kg[0].copy()
         _normalize_triplets(kg)
         assert kg[0] == original
 
-    def test_mixed_formats(self):
-        """Mix of legacy and canonical in the same list."""
-        kg = [
-            {"triplet": ["X", "is", "Y"]},
-            {"subject": "A", "predicate": "B", "object": "C"},
-        ]
+    def test_normalize_preserves_human_label(self, legacy_item):
+        """human_label survives normalization."""
+        kg = legacy_item["claude2_response_kg"]
         _normalize_triplets(kg)
-        assert kg[0] == {"subject": "X", "predicate": "is", "object": "Y"}
-        assert kg[1] == {"subject": "A", "predicate": "B", "object": "C"}
+        assert kg[0]["human_label"] == "Entailment"
+        assert kg[1]["human_label"] == "Neutral"
 
-    def test_empty_list(self):
-        """Empty kg list — no crash."""
+    def test_normalize_preserves_extra_fields(self):
+        """Extra custom fields like aliases survive normalization."""
+        kg = [{"triplet": ["X", "is", "Y"], "alias": "value"}]
+        _normalize_triplets(kg)
+        assert kg[0]["subject"] == "X"
+        assert kg[0]["alias"] == "value"
+
+    def test_normalize_mixed_list(self, mixed_item):
+        """Mix of legacy and canonical triplets in the same list are handled correctly."""
+        kg = mixed_item["claude2_response_kg"]
+        _normalize_triplets(kg)
+        assert kg[0] == {"subject": "A", "predicate": "B", "object": "C", "human_label": "Entailment"}
+        assert kg[1] == {"subject": "X", "predicate": "Y", "object": "Z", "human_label": "Contradiction"}
+
+    def test_normalize_empty_list(self):
+        """Empty list — no crash."""
         kg = []
         _normalize_triplets(kg)
         assert kg == []
 
-    def test_triplet_key_with_subject_already_present(self):
-        """If both 'triplet' and 'subject' exist, leave as-is (don't overwrite)."""
+    def test_normalize_triplet_key_with_subject_already_present(self):
+        """If both 'triplet' and 'subject' keys exist, do not overwrite 'subject'."""
         kg = [{"triplet": ["X", "Y", "Z"], "subject": "existing"}]
         _normalize_triplets(kg)
         assert kg[0]["subject"] == "existing"
-        assert kg[0]["triplet"] == ["X", "Y", "Z"]  # not popped
+        assert kg[0]["triplet"] == ["X", "Y", "Z"]
 
-    def test_mutation_in_place(self):
-        """Normalization mutates the original list items."""
-        kg = [{"triplet": ["A", "B", "C"]}]
+    def test_normalize_mutation_in_place(self, legacy_item):
+        """Normalization mutates the original list items in-place."""
+        kg = legacy_item["claude2_response_kg"]
         original_item = kg[0]
         _normalize_triplets(kg)
-        assert kg[0] is original_item  # same object
-
-    def test_multiple_legacy_items(self):
-        """Multiple legacy triplets all get normalized."""
-        kg = [
-            {"triplet": ["A", "is", "B"], "human_label": "Entailment"},
-            {"triplet": ["C", "has", "D"], "human_label": "Contradiction"},
-            {"triplet": ["E", "near", "F"], "human_label": "Neutral"},
-        ]
-        _normalize_triplets(kg)
-        assert all("subject" in c for c in kg)
-        assert all("triplet" not in c for c in kg)
-        assert all("human_label" in c for c in kg)
+        assert kg[0] is original_item
