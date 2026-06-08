@@ -77,6 +77,7 @@ class ExtractionService(BaseService):
         base_url: str | None = None,
         concurrency: int = 10,
         max_retries: int | None = None,
+        quiet: bool = False,
     ):
         # Fail-fast: validate config before creating any workers.
         api_key = self._require_api_key(
@@ -94,6 +95,7 @@ class ExtractionService(BaseService):
             max_retries=max_retries,
         )
 
+        self.quiet = quiet
     # ── Public API ───────────────────────────────────────────────
 
     async def run(self, data: list[dict]) -> list[dict]:
@@ -199,6 +201,8 @@ class ExtractionService(BaseService):
 
     def _log_validation(self, total: int, valid: int, abstained: int) -> None:
         """Print 📂 Validation section."""
+        if self.quiet:
+            return
         invalid = total - valid
         logger.info(" 📂 Validation")
         logger.info("    Total:       %d items", total)
@@ -211,6 +215,8 @@ class ExtractionService(BaseService):
 
     def _log_skip(self, valid: int, skipped: int, pending: int) -> None:
         """Print 🔄 Skip section. Hidden entirely when nothing was skipped."""
+        if self.quiet:
+            return
         if skipped == 0:
             return
         logger.info(" 🔄 Skip: items with existing extraction (≥1 claim)")
@@ -221,6 +227,8 @@ class ExtractionService(BaseService):
 
     def _log_config(self) -> None:
         """Print ⚙️  Config section."""
+        if self.quiet:
+            return
         location = f"{self.model}"
         if self.base_url:
             location += f" @ {self.base_url}"
@@ -274,6 +282,8 @@ class ExtractionService(BaseService):
         self, total: int, claims: int, abstentions: int, skipped: int
     ) -> None:
         """Print ✅ Done summary line."""
+        if self.quiet:
+            return
         parts = [f"{claims} claims"]
         if abstentions > 0:
             parts.append(f"{abstentions} abstentions")

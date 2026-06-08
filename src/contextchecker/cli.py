@@ -13,6 +13,8 @@ The CLI does NOT format validation/results output — services own that.
 """
 
 import json
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -140,6 +142,107 @@ def check(
 
     # Write output
     output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Results written to %s", output_file)
+
+
+# ── Eval subcommand group ────────────────────────────────────────────────────
+
+eval_app = typer.Typer(
+    name="eval",
+    help="Evaluate pipeline components against ground truth.",
+    no_args_is_help=True,
+)
+app.add_typer(eval_app)
+
+
+@eval_app.command("checker")
+def eval_checker(
+    input_file: Path = typer.Argument(
+        ..., help="Path to eval JSON with GT triplets + human_label."
+    ),
+    output_file: Path = typer.Option(
+        None, "--output", "-o", help="Output JSON path for eval results."
+    ),
+    checker_model: str = typer.Option(
+        ..., "--checker-model", "-m", help="Model name for the checker LLM."
+    ),
+    checker_base_api: str = typer.Option(
+        None, "--checker-base-api", help="Optional base URL for checker API."
+    ),
+    gt_key: str = typer.Option(
+        "claude2_response_kg", "--gt-key", help="Key containing GT triplets with human_label."
+    ),
+    joint: bool = typer.Option(
+        True, "--joint/--no-joint", help="Joint checking mode. Default: on."
+    ),
+    joint_num: int = typer.Option(
+        settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint call."
+    ),
+    max_words: int = typer.Option(
+        None, "--max-words", help="Word budget per call."
+    ),
+    max_retries: int = typer.Option(
+        None, "--max-retries", help="Max retry rounds for API/parsing failures."
+    ),
+    debug: bool = typer.Option(
+        False, "--debug", help="Enable debug output."
+    ),
+):
+    """Evaluate checker accuracy against human-labeled GT triplets."""
+    from contextchecker.eval.checkereval import CheckerEvaluator
+
+    settings.enable_logging(debug=debug)
+    _print_header("eval checker")
+
+    # Resolve output path
+    if output_file is None:
+        output_file = (
+            input_file.parent / "results" / f"checker_eval_{input_file.stem}.json"
+        )
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load input
+    try:
+        data = json.loads(input_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.error("Input file not found: %s", input_file)
+        raise typer.Exit(code=1)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid JSON in %s: %s", input_file, exc)
+        raise typer.Exit(code=1)
+
+    # Evaluate
+    try:
+        evaluator = CheckerEvaluator(
+            checker_model=checker_model,
+            gt_key=gt_key,
+            checker_base_url=checker_base_api,
+            joint=joint,
+            joint_num=joint_num,
+            max_words=max_words,
+            max_retries=max_retries,
+        )
+        result = evaluator.run_sync(data)
+    except ContextCheckerError as exc:
+        logger.error("")
+        logger.error("❌ %s: %s", type(exc).__name__, exc)
+        raise typer.Exit(code=1)
+
+    # Write JSON result
+    output = {
+        "_meta": {
+            "eval_type": "checker",
+            "checker_model": checker_model,
+            "gt_key": gt_key,
+            "joint": joint,
+            "timestamp": datetime.now().isoformat(),
+        },
+        **asdict(result),
+    }
+    output_file.write_text(
+        json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.info("")
     logger.info("Results written to %s", output_file)
 
 

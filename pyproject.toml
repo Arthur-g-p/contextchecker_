@@ -18,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 eval = [
     # GPU-accelerated evaluation dependencies
+    "torch",
+    "transformers",
+    "sentencepiece"
 ]
 test = [
     "pytest>=8.0",

@@ -144,6 +144,7 @@ class CheckingService(BaseService):
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         max_retries: int | None = None,
+        quiet: bool = False,
     ):
         api_key = self._require_api_key(
             settings.CHECKER_API_KEY, "CHECKER_API_KEY"
@@ -153,6 +154,7 @@ class CheckingService(BaseService):
         self.base_url = base_url
         self.joint = joint
         self.joint_num = joint_num
+        self.quiet = quiet
         # max_words: default only applies in joint mode
         self.max_words = max_words if max_words is not None else (
             settings.DEFAULT_MAX_WORDS if joint else None
@@ -187,9 +189,10 @@ class CheckingService(BaseService):
         valid = self._validate(data)
         pending, skip_stats = self._filter(valid)
 
-        self._log_validation(len(data), len(valid), abstained=0)
-        self._log_skip(len(valid), skip_stats, len(pending))
-        self._log_config()
+        if not self.quiet:
+            self._log_validation(len(data), len(valid), abstained=0)
+            self._log_skip(len(valid), skip_stats, len(pending))
+            self._log_config()
 
         # Execute
         mode = "joint" if self.joint else "single"
@@ -527,6 +530,8 @@ class CheckingService(BaseService):
 
     def _log_validation(self, total: int, valid: int, abstained: int) -> None:
         """Print 📂 Validation section."""
+        if self.quiet:
+            return
         invalid = total - valid
         logger.info(" 📂 Validation")
         logger.info("    Total:       %d items", total)
@@ -537,6 +542,8 @@ class CheckingService(BaseService):
 
     def _log_skip(self, valid: int, skip_stats: dict, pending: int) -> None:
         """Print 🔄 Skip section with breakdown. Hidden when nothing was skipped."""
+        if self.quiet:
+            return
         already = skip_stats["already_checked"]
         empty = skip_stats["empty_claims"]
         skipped = already + empty
@@ -555,6 +562,8 @@ class CheckingService(BaseService):
 
     def _log_config(self) -> None:
         """Print ⚙️  Config section."""
+        if self.quiet:
+            return
         location = f"{self.model}"
         if self.base_url:
             location += f" @ {self.base_url}"
@@ -612,6 +621,8 @@ class CheckingService(BaseService):
         self, total: int, total_triplets: int, skipped: int
     ) -> None:
         """Print ✅ Done summary line."""
+        if self.quiet:
+            return
         parts = [f"{total_triplets} triplets checked"]
         if skipped > 0:
             parts.append(f"{skipped} skipped")
