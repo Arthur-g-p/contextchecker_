@@ -446,7 +446,7 @@ class CheckerEvaluator:
         total_skipped = sum(result.skipped.values())
         logger.info("")
         logger.info(
-            " ✅ Done: %s claims evaluated (%d claim skipped, "
+            " ✅ Done: %s claims evaluated (%d claims skipped, "
             "%d parse errors)",
             f"{result.total_claims:,}",
             total_skipped,

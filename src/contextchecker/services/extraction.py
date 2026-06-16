@@ -20,7 +20,7 @@ from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.services.base import BaseService
 from contextchecker.models import ExtractionPayload
 from contextchecker.workers.extractor import Extractor, Triplet
-from contextchecker.stats import log_api_parsing, log_token_stats
+from contextchecker.stats import PhaseStats, log_api_parsing, log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -147,6 +147,7 @@ class ExtractionService(BaseService):
             successful=phase_stats.success,
             failed=phase_stats.total_errors,
             skipped=skipped,
+            phase_stats=phase_stats,
         )
 
         return data
@@ -246,10 +247,9 @@ class ExtractionService(BaseService):
         successful: int,
         failed: int,
         skipped: int,
+        phase_stats: PhaseStats,
     ) -> None:
         """Print the full results block: API summary, BL results, tokens, done line."""
-        phase_stats = self._extractor.last_stats
-
         logger.info("")
         logger.info("── EXTRACTOR RESULTS ────────────────────────────────────────")
         logger.info("")
