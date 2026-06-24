@@ -106,6 +106,30 @@ class TestValidate:
             ev._validate(data)
 
 
+# ── Test pred_key / gt_key collision guard ───────────────────────────────────
+
+class TestPredKeyCollisionGuard:
+    """The derived predicted-key (f'{extractor_model}_response_kg') must never
+    equal the GT key — otherwise extraction targets the GT slot and the
+    evaluator matches ground truth against itself, reporting a false perfect score."""
+
+    def test_collision_via_extractor_model_raises(self):
+        """extractor_model='claude2' derives 'claude2_response_kg', colliding with the default gt_key."""
+        with pytest.raises(InvalidInputError, match="collides"):
+            _evaluator(extractor_model="claude2", gt_key="claude2_response_kg")
+
+    def test_collision_via_gt_key_raises(self):
+        """A gt_key set to match the derived predicted-key also collides."""
+        with pytest.raises(InvalidInputError, match="collides"):
+            _evaluator(extractor_model="test-model", gt_key="test-model_response_kg")
+
+    def test_no_collision_constructs_ok(self):
+        """Distinct extractor_model and gt_key construct without raising."""
+        ev = _evaluator(extractor_model="gemini-3.1", gt_key="claude2_response_kg")
+        assert ev._pred_key == "gemini-3.1_response_kg"
+        assert ev._pred_key != ev._gt_key
+
+
 # ── Test _classify (post-extraction) ─────────────────────────────────────────
 
 class TestClassify:

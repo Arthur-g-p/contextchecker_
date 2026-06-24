@@ -8,9 +8,6 @@
 # Core package
 uv pip install contextchecker
 
-# With evaluation extras (GPU-accelerated metrics)
-uv pip install "contextchecker[eval]"
-
 # With test suite
 uv pip install "contextchecker[test]"
 ```

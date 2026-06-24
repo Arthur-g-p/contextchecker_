@@ -71,7 +71,6 @@ class ExtractorEvaluator:
         self,
         extractor_model: str,
         gt_key: str = "claude2_response_kg",
-        pred_key: str | None = None,
         # Extraction config
         extractor_base_url: str | None = None,
         extractor_max_retries: int | None = None,
@@ -88,8 +87,22 @@ class ExtractorEvaluator:
 
         self._extractor_model = extractor_model
         self._gt_key = gt_key
-        self._pred_key = pred_key or f"{extractor_model}_response_kg"
+        # Predictions are always written by ExtractionService(model=extractor_model)
+        # under this key — it is derived, never an override.
+        self._pred_key = f"{extractor_model}_response_kg"
         self._method = "llm"
+
+        # Guard: the predicted-triplet key must not collide with the GT key.
+        # On collision (e.g. extractor_model="claude2" with the default gt_key)
+        # extraction would target the GT slot and the evaluator would match
+        # ground truth against itself, silently reporting perfect P/R/F1.
+        if self._pred_key == self._gt_key:
+            raise InvalidInputError(
+                f"Predicted-triplet key collides with GT key: '{self._gt_key}'. "
+                f"The predicted key is derived as '{{extractor_model}}_response_kg' "
+                f"(here '{self._pred_key}'). Use a different --extractor-model or "
+                f"--gt-key so the two do not overlap."
+            )
 
         # Extraction service — always needed (quiet, evaluator owns logging)
         self._extraction_service = ExtractionService(

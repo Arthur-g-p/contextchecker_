@@ -53,3 +53,95 @@ For items in the `to_compare` bucket, evaluates extraction quality using a 2-pas
 Combines exact matches, LLM matching results, and abstention penalties into a final `ExtractorEvalResult` containing Precision, Recall, F1, and raw TP/FP/FN counts. 
 
 Disagreements (False Positives and False Negatives) are saved to a separate `<filename>_disagreements.json` file for debugging.
+
+---
+
+## Running the Evaluator (CLI)
+
+The evaluator is exposed as the **`extractor`** command inside the **`eval`** subcommand group:
+
+```bash
+contextchecker eval extractor <input_file> [options]
+```
+
+> **Note:** This requires **two** models — one to perform the live extraction (`--extractor-model`) and one to act as the LLM judge in the 2-pass matching step (`--checker-model`). They may be the same model. Both flags are required.
+
+### Arguments and Options
+
+| Parameter | Flag | Default | Description |
+|---|---|---|---|
+| **Input File** | `input_file` *(Argument)* | *Required* | Path to the eval JSON: items with a `response` and GT triplets. |
+| **Extractor Model** | `--extractor-model`, `-e` | *Required* | Model used to extract triplets live. Also the prefix for the predicted-triplet key (`{model}_response_kg`). |
+| **Checker Model** | `--checker-model` | *Required* | LLM judge used for the 2-pass semantic matching (Recall + Precision passes). |
+| **Extractor API Base** | `--extractor-base-api` | `None` | Base URL for the extractor LLM (OpenAI-SDK route). If unset, LiteLLM provider routing is used. |
+| **Checker API Base** | `--checker-base-api` | `None` | Base URL for the checker/matching LLM. |
+| **GT Key** | `--gt-key` | `claude2_response_kg` | Item key holding the ground-truth triplets. |
+| **Output File** | `--output`, `-o` | `results/extractor_eval_{input_stem}.json` | Summary metrics JSON. A `*_disagreements.json` is written alongside. |
+| **Joint Bundle Size** | `--joint-num` | `10` | Max claims bundled per joint matching call. |
+| **Word Budget** | `--max-words` | `None` | Word budget per matching call. |
+| **Max Retries** | `--max-retries` | `None` | Retry rounds for API/parse failures. |
+| **Debug Mode** | `--debug` | `False` | Timestamps + module names in logs. |
+
+> **Predicted-triplet key is derived, not configurable.** Live extraction always writes its output under `{extractor_model}_response_kg`, so that is the key the evaluator reads predictions from — there is no override flag. The evaluator guards against a collision: if `{extractor_model}_response_kg` equals `--gt-key` (e.g. `--extractor-model claude2` with the default GT key), it raises `InvalidInputError` immediately, because otherwise extraction would target the GT slot and the evaluator would match ground truth against itself and report a misleading perfect score.
+
+### Required environment (`.env`)
+
+| Variable | Used for |
+|---|---|
+| `EXTRACTOR_API_KEY` | Auth for the extractor LLM endpoint. |
+| `CHECKER_API_KEY` | Auth for the checker/matching LLM endpoint. |
+| `LLM_TIMEOUT` *(optional)* | Per-call timeout in seconds (default `120.0`). |
+
+Settings reads these eagerly at import; the service validates the relevant key before any work and raises `InvalidInputError` if missing.
+
+### Worked example
+
+Against a local LiteLLM proxy, using one model for both roles:
+
+```bash
+contextchecker eval extractor results/smaller_msmarco_gpt4_answers_corrected.json \
+  --extractor-model gemini-3.1 \
+  --checker-model gemini-3.1 \
+  --extractor-base-api http://localhost:4000/v1 \
+  --checker-base-api http://localhost:4000/v1
+```
+
+This reads GT from `claude2_response_kg`, extracts live into `gemini-3.1_response_kg`, runs the 2-pass match, then writes metrics + disagreements. (Because the input lives under `results/`, the default output lands under `results/results/` — pass `-o` to control this.)
+
+## Output Format
+
+Two files are written. The summary file wraps the `ExtractorEvalResult` dataclass with a `_meta` block:
+
+```json
+{
+  "_meta": {
+    "eval_type": "extractor",
+    "extractor_model": "gemini-3.1",
+    "gt_key": "claude2_response_kg",
+    "pred_key": "gemini-3.1_response_kg",
+    "method": "llm",
+    "checker_model": "gemini-3.1",
+    "timestamp": "..."
+  },
+  "precision": 0.0,
+  "recall": 0.0,
+  "f1": 0.0,
+  "tp": 0,
+  "fp": 0,
+  "fn": 0,
+  "total_items": 0,
+  "to_compare_items": 0,
+  "gt_stats": { "total_triplets": 0, "avg_per_item": 0.0 },
+  "pred_stats": { "total_triplets": 0, "avg_per_item": 0.0 },
+  "abstention_errors": {
+    "wrongful_answer": 0,
+    "wrongful_abstention": 0,
+    "wrongful_abstention_fn_penalty": 0,
+    "wrongful_answer_fp_penalty": 0
+  },
+  "correct_abstention": 0,
+  "method": "llm"
+}
+```
+
+The disagreements file (`{output_stem}_disagreements.json`) contains `_meta`, a `total_disagreements` count, and an `items` list of the individual False Positives / False Negatives for error analysis.

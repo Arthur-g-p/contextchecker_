@@ -267,10 +267,6 @@ def eval_extractor(
         "claude2_response_kg", "--gt-key",
         help="Key containing GT triplets.",
     ),
-    pred_key: str = typer.Option(
-        None, "--pred-key",
-        help="Key containing predicted triplets. Default: {extractor_model}_response_kg.",
-    ),
     # LLM matching config
     checker_model: str = typer.Option(
         ..., "--checker-model",
@@ -326,7 +322,6 @@ def eval_extractor(
         evaluator = ExtractorEvaluator(
             extractor_model=extractor_model,
             gt_key=gt_key,
-            pred_key=pred_key,
             extractor_base_url=extractor_base_api,
             checker_model=checker_model,
             checker_base_url=checker_base_api,
@@ -345,7 +340,7 @@ def eval_extractor(
         "eval_type": "extractor",
         "extractor_model": extractor_model,
         "gt_key": gt_key,
-        "pred_key": pred_key or f"{extractor_model}_response_kg",
+        "pred_key": f"{extractor_model}_response_kg",
         "method": "llm",
         "checker_model": checker_model,
         "timestamp": datetime.now().isoformat(),
