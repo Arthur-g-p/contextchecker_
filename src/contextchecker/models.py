@@ -52,3 +52,28 @@ class CheckerEvalResult:
     confusion_matrix: dict                 # {"labels": [...], "matrix": [[...]]}
     skipped: dict                          # {"missing_gt": N, "missing_context": N, "empty_gt": N}
 
+
+@dataclass
+class ExtractorEvalResult:
+    """Result of an extractor evaluation run.
+
+    Returned by ExtractorEvaluator.evaluate() alongside a disagreement list.
+    Uses IR metrics (Precision/Recall/F1) rather than classification metrics.
+    """
+
+    precision: float
+    recall: float
+    f1: float
+    tp: int
+    fp: int
+    fn: int
+    total_items: int                       # items in dataset
+    to_compare_items: int                  # items with GT + predictions to compare
+    gt_stats: dict                         # {"total_triplets": N, "avg_per_item": float}
+    pred_stats: dict                       # {"total_triplets": N, "avg_per_item": float}
+    abstention_errors: dict                # {"wrongful_answer": N, "wrongful_abstention": N,
+                                           #  "wrongful_abstention_fn_penalty": N,
+                                           #  "wrongful_answer_fp_penalty": N}
+    correct_abstention: int                # items with neither GT nor predictions
+    method: str                            # "nli" or "llm"
+

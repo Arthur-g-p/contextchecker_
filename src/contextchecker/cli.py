@@ -246,5 +246,148 @@ def eval_checker(
     logger.info("Results written to %s", output_file)
 
 
+
+@eval_app.command("extractor")
+def eval_extractor(
+    input_file: Path = typer.Argument(
+        ..., help="Path to eval JSON with GT triplets + response text."
+    ),
+    output_file: Path = typer.Option(
+        None, "--output", "-o", help="Output JSON path for eval results."
+    ),
+    extractor_model: str = typer.Option(
+        ..., "--extractor-model", "-e",
+        help="Model name for extraction.",
+    ),
+    extractor_base_api: str = typer.Option(
+        None, "--extractor-base-api",
+        help="Optional base URL for the extractor LLM API.",
+    ),
+    gt_key: str = typer.Option(
+        "claude2_response_kg", "--gt-key",
+        help="Key containing GT triplets.",
+    ),
+    pred_key: str = typer.Option(
+        None, "--pred-key",
+        help="Key containing predicted triplets. Default: {extractor_model}_response_kg.",
+    ),
+    # NLI matching config
+    nli_model: str = typer.Option(
+        "facebook/bart-large-mnli", "--nli-model",
+        help="HuggingFace NLI model for local matching. Default mode.",
+    ),
+    nli_threshold: float = typer.Option(
+        0.5, "--nli-threshold",
+        help="Entailment threshold for NLI matching.",
+    ),
+    # LLM matching config
+    checker_model: str = typer.Option(
+        None, "--checker-model",
+        help="LLM model for 2-pass matching. Enables LLM mode when set.",
+    ),
+    checker_base_api: str = typer.Option(
+        None, "--checker-base-api",
+        help="Optional base URL for the checker/matching LLM API.",
+    ),
+    joint_num: int = typer.Option(
+        settings.DEFAULT_JOINT_NUM, "--joint-num",
+        help="Max claims per joint LLM call.",
+    ),
+    max_words: int = typer.Option(
+        None, "--max-words", help="Word budget per call.",
+    ),
+    max_retries: int = typer.Option(
+        None, "--max-retries",
+        help="Max retry rounds for API/parsing failures.",
+    ),
+    debug: bool = typer.Option(
+        False, "--debug", help="Enable debug output.",
+    ),
+):
+    """Evaluate extractor quality: extract live, then match against GT (NLI or LLM)."""
+    from contextchecker.eval.extractoreval import ExtractorEvaluator
+
+    settings.enable_logging(debug=debug)
+    _print_header("eval extractor")
+
+    # Resolve output paths
+    if output_file is None:
+        output_file = (
+            input_file.parent / "results" / f"extractor_eval_{input_file.stem}.json"
+        )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    disagree_file = output_file.with_name(
+        output_file.stem + "_disagreements.json"
+    )
+
+    # Load input
+    try:
+        data = json.loads(input_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.error("Input file not found: %s", input_file)
+        raise typer.Exit(code=1)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid JSON in %s: %s", input_file, exc)
+        raise typer.Exit(code=1)
+
+    # Evaluate
+    try:
+        evaluator = ExtractorEvaluator(
+            extractor_model=extractor_model,
+            gt_key=gt_key,
+            pred_key=pred_key,
+            extractor_base_url=extractor_base_api,
+            nli_model=nli_model,
+            nli_threshold=nli_threshold,
+            checker_model=checker_model,
+            checker_base_url=checker_base_api,
+            joint_num=joint_num,
+            max_words=max_words,
+            max_retries=max_retries,
+        )
+        result, disagreements = evaluator.run_sync(data)
+    except ContextCheckerError as exc:
+        logger.error("")
+        logger.error("❌ %s: %s", type(exc).__name__, exc)
+        raise typer.Exit(code=1)
+
+    # Determine method for _meta
+    method = "llm" if checker_model else "nli"
+
+    # Write summary JSON
+    meta = {
+        "eval_type": "extractor",
+        "extractor_model": extractor_model,
+        "gt_key": gt_key,
+        "pred_key": pred_key or f"{extractor_model}_response_kg",
+        "method": method,
+        "timestamp": datetime.now().isoformat(),
+    }
+    if method == "llm":
+        meta["checker_model"] = checker_model
+    else:
+        meta["nli_model"] = nli_model
+        meta["nli_threshold"] = nli_threshold
+
+    output = {"_meta": meta, **asdict(result)}
+    output_file.write_text(
+        json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    # Write disagreements JSON
+    disagree_output = {
+        "_meta": meta,
+        "total_disagreements": len(disagreements),
+        "items": disagreements,
+    }
+    disagree_file.write_text(
+        json.dumps(disagree_output, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    logger.info("")
+    logger.info("Results written to %s", output_file)
+    logger.info("Disagreements written to %s", disagree_file)
+
+
 if __name__ == "__main__":
     app()

@@ -116,6 +116,7 @@ class _JointChunk:
     reference: list[str]
     item_index: int
     chunk_start: int   # 0-based index into the item's claims
+    extra_vars: dict | None = None  # additional template variables (e.g. {{response}})
 
 
 class CheckingService(BaseService):
@@ -145,6 +146,7 @@ class CheckingService(BaseService):
         max_words: int | None = None,
         max_retries: int | None = None,
         quiet: bool = False,
+        joint_prompt_key: str | None = None,
     ):
         api_key = self._require_api_key(
             settings.CHECKER_API_KEY, "CHECKER_API_KEY"
@@ -169,6 +171,7 @@ class CheckingService(BaseService):
             base_url=base_url,
             concurrency=concurrency,
             max_retries=max_retries,
+            joint_prompt_key=joint_prompt_key,
         )
 
     # ── Public API ───────────────────────────────────────────────
@@ -433,18 +436,26 @@ class CheckingService(BaseService):
                     (orig_idx + 1, text)
                     for orig_idx, text in unchecked[chunk_start:chunk_end]
                 ]
+                # Collect extra template vars from the item (e.g. response)
+                ev = {}
+                if item.get("response"):
+                    ev["response"] = item["response"]
                 chunks.append(_JointChunk(
                     numbered_claims=numbered,
                     reference=reference,
                     item_index=item_idx,
                     chunk_start=0,  # Not used since claim_id is absolute map to orig_idx + 1
+                    extra_vars=ev or None,
                 ))
 
         # Send all chunks as a single batch (progress bar + concurrency)
         batch_input = [
             (c.numbered_claims, c.reference) for c in chunks
         ]
-        batch_results = await self._checker.check_joint_batch(batch_input)
+        extra_vars_list = [c.extra_vars for c in chunks]
+        batch_results = await self._checker.check_joint_batch(
+            batch_input, extra_vars_list=extra_vars_list
+        )
 
         # Map results back: {item_index: {claim_index: ClaimVerdict}}
         all_verdicts: dict[int, dict[int, ClaimVerdict]] = {}

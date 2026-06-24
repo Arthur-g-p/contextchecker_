@@ -123,6 +123,7 @@ class Checker:
         base_url: str | None = None,
         concurrency: int = 10,
         max_retries: int | None = None,
+        joint_prompt_key: str | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -132,7 +133,11 @@ class Checker:
             concurrency=concurrency,
         )
         self._prompt_template = settings.PROMPTS["checker_prompt"]
-        self._joint_prompt_template = settings.PROMPTS["checker_prompt_joint"]
+        self._joint_prompt_template = (
+            settings.PROMPTS[joint_prompt_key]
+            if joint_prompt_key
+            else settings.PROMPTS["checker_prompt_joint"]
+        )
         self._vanilla_prompt = settings.PROMPTS.get("checker_prompt_vanilla", None)
         self._joint_vanilla_prompt = settings.PROMPTS.get("checker_prompt_joint_vanilla", None)
         self.last_stats: PhaseStats | None = None
@@ -296,6 +301,7 @@ class Checker:
         numbered_claims: list[tuple[int, str]],
         reference: list[str],
         prompt_type: str = "standard",
+        extra_vars: dict | None = None,
     ) -> list[dict]:
         """Build chat messages for a joint check call.
 
@@ -303,6 +309,8 @@ class Checker:
             numbered_claims: list of (claim_id, claim_text) tuples.
             reference: list of reference passages.
             prompt_type: standard or vanilla prompt template.
+            extra_vars: additional template variables merged with
+                        {claims, reference} before formatting.
         """
         template = self._joint_prompt_template
         if prompt_type == "vanilla" and self._joint_vanilla_prompt:
@@ -311,10 +319,14 @@ class Checker:
         claims_block = "\n".join(
             f"[{cid}] {text}" for cid, text in numbered_claims
         )
-        prompt = format_prompt(template, {
+        template_vars = {
             "claims": claims_block,
             "reference": _format_reference(reference),
-        })
+        }
+        if extra_vars:
+            template_vars.update(extra_vars)
+
+        prompt = format_prompt(template, template_vars)
         return [
             {"role": "system", "content": "You are a factual entailment judge."},
             {"role": "user", "content": prompt},
@@ -323,6 +335,7 @@ class Checker:
     async def check_joint_batch(
         self,
         chunks: list[tuple[list[tuple[int, str]], list[str]]],
+        extra_vars_list: list[dict] | None = None,
     ) -> list[dict[int, ClaimVerdict]]:
         """Check multiple joint chunks concurrently via generate_batch.
 
@@ -334,6 +347,8 @@ class Checker:
             chunks: list of (numbered_claims, reference) tuples.
                     numbered_claims: list of (claim_id, claim_text).
                     reference: list of reference passages.
+            extra_vars_list: optional per-chunk extra template variables.
+                    Must be same length as chunks if provided.
 
         Returns:
             List of dicts, one per chunk. Each dict maps
@@ -350,9 +365,10 @@ class Checker:
 
         # ── First pass ───────────────────────────────────────
         tasks = []
-        for numbered, ref in chunks:
+        for i, (numbered, ref) in enumerate(chunks):
+            ev = extra_vars_list[i] if extra_vars_list else None
             tasks.append({
-                "messages": self._build_joint_messages(numbered, ref),
+                "messages": self._build_joint_messages(numbered, ref, extra_vars=ev),
                 "schema": JointCheckResult,
                 "temperature": 0.0,
             })
