@@ -1,4 +1,4 @@
-"""Unit tests for ExtractorEvaluator — validation, classification, NLI matching, result building."""
+"""Unit tests for ExtractorEvaluator — validation, classification, LLM matching, result building."""
 
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -48,6 +48,7 @@ def _evaluator(**kwargs):
     defaults = dict(
         extractor_model="test-model",
         gt_key=GT_KEY,
+        checker_model="test-checker",
     )
     defaults.update(kwargs)
 
@@ -198,109 +199,6 @@ class TestTripletToStr:
     def test_canonical_preferred_over_legacy(self):
         t = {"subject": "A", "predicate": "B", "object": "C", "triplet": ["X", "Y", "Z"]}
         assert ExtractorEvaluator._triplet_to_str(t) == "A B C"
-
-
-# ── Test NLI matching ────────────────────────────────────────────────────────
-
-class TestNLIMatching:
-    """Test _match_item_nli with mocked NLI pipeline."""
-
-    def test_exact_match(self):
-        ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.0)
-
-        item = _make_item(
-            gt_triplets=[_make_triplet("dogs", "are", "animals")],
-            pred_triplets=[_make_canonical_triplet("dogs", "are", "animals")],
-        )
-        result = ev._match_item_nli(item)
-        assert result.tp == 1
-        assert result.fp == 0
-        assert result.fn == 0
-
-    def test_no_match(self):
-        ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.1)
-
-        item = _make_item(
-            gt_triplets=[_make_triplet("dogs", "are", "animals")],
-            pred_triplets=[_make_canonical_triplet("cats", "like", "fish")],
-        )
-        result = ev._match_item_nli(item)
-        assert result.tp == 0
-        assert result.fp == 1
-        assert result.fn == 1
-
-    def test_partial_match(self):
-        ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.1)
-
-        item = _make_item(
-            gt_triplets=[
-                _make_triplet("dogs", "are", "animals"),
-                _make_triplet("cats", "are", "pets"),
-            ],
-            pred_triplets=[
-                _make_canonical_triplet("dogs", "are", "animals"),
-                _make_canonical_triplet("fish", "swim", "water"),
-            ],
-        )
-        result = ev._match_item_nli(item)
-        assert result.tp == 1
-        assert result.fp == 1
-        assert result.fn == 1
-
-    def test_alias_match(self):
-        ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.1)
-
-        item = _make_item(
-            gt_triplets=[
-                _make_triplet("dogs", "are affected by", "anxiety",
-                              aliases=[["anxiety", "affects", "dogs"]]),
-            ],
-            pred_triplets=[
-                _make_canonical_triplet("anxiety", "affects", "dogs"),
-            ],
-        )
-        result = ev._match_item_nli(item)
-        assert result.tp == 1
-        assert result.fp == 0
-        assert result.fn == 0
-
-    def test_over_extraction(self):
-        ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.1)
-
-        item = _make_item(
-            gt_triplets=[_make_triplet("a", "b", "c")],
-            pred_triplets=[
-                _make_canonical_triplet("a", "b", "c"),
-                _make_canonical_triplet("d", "e", "f"),
-                _make_canonical_triplet("g", "h", "i"),
-            ],
-        )
-        result = ev._match_item_nli(item)
-        assert result.tp == 1
-        assert result.fp == 2
-        assert result.fn == 0
-
-    def test_under_extraction(self):
-        ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.1)
-
-        item = _make_item(
-            gt_triplets=[
-                _make_triplet("a", "b", "c"),
-                _make_triplet("d", "e", "f"),
-                _make_triplet("g", "h", "i"),
-            ],
-            pred_triplets=[_make_canonical_triplet("a", "b", "c")],
-        )
-        result = ev._match_item_nli(item)
-        assert result.tp == 1
-        assert result.fp == 0
-        assert result.fn == 2
 
 
 # ── Test _build_result ───────────────────────────────────────────────────────
@@ -462,7 +360,10 @@ class TestEvaluateIntegration:
     def test_perfect_score_with_mocked_extraction(self):
         """Extraction produces exact matches → P=R=F1=1.0."""
         ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.0)
+        
+        async def mock_match_all_llm(items):
+            return [_ItemMatchResult(tp=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
+        ev._match_all_llm = AsyncMock(side_effect=mock_match_all_llm)
 
         data = [
             _make_item(
@@ -493,7 +394,6 @@ class TestEvaluateIntegration:
     def test_wrongful_abstention_from_extraction(self):
         """Extraction produces empty results → wrongful abstention."""
         ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.0)
 
         data = [
             _make_item(
@@ -526,7 +426,6 @@ class TestEvaluateIntegration:
     def test_wrongful_answer_from_extraction(self):
         """Item has no GT but extraction produces triplets → wrongful answer."""
         ev = _evaluator()
-        ev._nli_score = MagicMock(return_value=0.0)
 
         data = [
             _make_item(

@@ -75,5 +75,5 @@ class ExtractorEvalResult:
                                            #  "wrongful_abstention_fn_penalty": N,
                                            #  "wrongful_answer_fp_penalty": N}
     correct_abstention: int                # items with neither GT nor predictions
-    method: str                            # "nli" or "llm"
+    method: str                            # "llm"
 

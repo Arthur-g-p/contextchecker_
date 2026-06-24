@@ -1,5 +1,5 @@
 """
-Checker Evaluator — triplet-level NLI classification accuracy.
+Checker Evaluator — triplet-level entailment classification accuracy.
 
 Runs the checker on GT triplets (with human_label) and compares
 the checker's predicted verdicts 1:1 against the human annotations.

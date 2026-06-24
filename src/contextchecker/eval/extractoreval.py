@@ -6,7 +6,7 @@ triplets against ground-truth using set-to-set IR matching.
 
 Architecture:
     - Delegates extraction to ExtractionService (quiet — evaluator owns logging).
-    - Two matching modes: NLI (local, default) or LLM (online, 2-pass checker).
+    - Matching mode: LLM (online, 2-pass checker).
     - Strict separation: _validate (fail-fast) → extract → _classify (bucket sort).
     - Owns: GT validation, matching orchestration, IR metric computation,
       disagreement collection, and the ── EXTRACTOR EVAL ── logging section.
@@ -30,10 +30,6 @@ logger = settings.get_logger(__name__)
 
 # Internal model name for the checking service's kg_key.
 _INTERNAL_EXT_MODEL = "_exteval"
-
-# NLI defaults
-DEFAULT_NLI_MODEL = "facebook/bart-large-mnli"
-DEFAULT_NLI_THRESHOLD = 0.5
 
 
 # ── Item classification ─────────────────────────────────────────────────────
@@ -62,11 +58,9 @@ class _ItemMatchResult:
 class ExtractorEvaluator:
     """Evaluates extraction quality by extracting live then matching against GT.
 
-    Flow: validate → extract (API) → classify → match (NLI or LLM) → metrics.
+    Flow: validate → extract (API) → classify → match (LLM) → metrics.
 
-    Two matching modes:
-        - NLI (default): Local zero-shot NLI model for matching.
-          Requires contextchecker[eval] (torch, transformers).
+    Matching mode:
         - LLM: 2-pass batched checker with semantic equivalence prompt.
           Pass 1: GT→Pred (recall). Pass 2: Pred→GT (precision).
 
@@ -81,10 +75,7 @@ class ExtractorEvaluator:
         # Extraction config
         extractor_base_url: str | None = None,
         extractor_max_retries: int | None = None,
-        # NLI matching config
-        nli_model: str = DEFAULT_NLI_MODEL,
-        nli_threshold: float = DEFAULT_NLI_THRESHOLD,
-        # LLM matching config (enables LLM mode when checker_model is set)
+        # LLM matching config
         checker_model: str | None = None,
         checker_base_url: str | None = None,
         concurrency: int = 10,
@@ -92,10 +83,13 @@ class ExtractorEvaluator:
         max_words: int | None = None,
         max_retries: int | None = None,
     ):
+        if not checker_model:
+            raise ValueError("checker_model is required for evaluation matching.")
+
         self._extractor_model = extractor_model
         self._gt_key = gt_key
         self._pred_key = pred_key or f"{extractor_model}_response_kg"
-        self._method = "llm" if checker_model else "nli"
+        self._method = "llm"
 
         # Extraction service — always needed (quiet, evaluator owns logging)
         self._extraction_service = ExtractionService(
@@ -105,11 +99,6 @@ class ExtractorEvaluator:
             max_retries=extractor_max_retries,
             quiet=True,
         )
-
-        # NLI config
-        self._nli_model_name = nli_model
-        self._nli_threshold = nli_threshold
-        self._nli_pipeline = None  # lazy-loaded
 
         # LLM config — CheckingService built on demand in _match_all_llm
         self._checker_model = checker_model
@@ -159,12 +148,9 @@ class ExtractorEvaluator:
                 len(buckets.wrongful_abstention),
             )
 
-        # Step 5: Match to_compare items (NLI or LLM)
+        # Step 5: Match to_compare items (LLM)
         if buckets.to_compare:
-            if self._method == "nli":
-                item_results = self._match_all_nli(buckets.to_compare)
-            else:
-                item_results = await self._match_all_llm(buckets.to_compare)
+            item_results = await self._match_all_llm(buckets.to_compare)
         else:
             item_results = []
 
@@ -315,156 +301,6 @@ class ExtractorEvaluator:
             correct_abstention=len(buckets.correct_abstention),
             method=self._method,
         )
-
-    # ── NLI matching ─────────────────────────────────────────────
-
-    @staticmethod
-    def _triplet_to_str(triplet: dict) -> str:
-        """Convert a triplet dict to a natural-language string.
-
-        Supports both legacy (triplet: [s,p,o]) and canonical formats.
-        """
-        if "subject" in triplet:
-            return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
-        t = triplet.get("triplet", [])
-        if t and len(t) >= 3:
-            return f"{t[0]} {t[1]} {t[2]}"
-        return str(triplet)
-
-    @staticmethod
-    def _triplet_aliases(triplet: dict) -> list[str]:
-        """Get alias strings for a GT triplet."""
-        aliases = triplet.get("aliases", [])
-        return [
-            f"{a[0]} {a[1]} {a[2]}" for a in aliases
-            if isinstance(a, list) and len(a) >= 3
-        ]
-
-    def _get_nli_pipeline(self):
-        """Lazy-load the NLI pipeline. Requires contextchecker[eval]."""
-        if self._nli_pipeline is not None:
-            return self._nli_pipeline
-
-        try:
-            from transformers import pipeline as hf_pipeline
-        except ImportError:
-            raise ImportError(
-                "NLI mode requires transformers and torch. "
-                "Install with: pip install contextchecker[eval]"
-            )
-
-        logger.info("  Loading NLI model: %s ...", self._nli_model_name)
-        self._nli_pipeline = hf_pipeline(
-            "zero-shot-classification",
-            model=self._nli_model_name,
-        )
-        return self._nli_pipeline
-
-    def _nli_score(self, premise: str, hypothesis: str) -> float:
-        """Compute NLI entailment score between premise and hypothesis."""
-        pipe = self._get_nli_pipeline()
-        result = pipe(
-            premise,
-            candidate_labels=["entailment"],
-            hypothesis_template=f"This implies that {hypothesis}",
-        )
-        return result["scores"][0]
-
-    def _match_item_nli(self, item: dict) -> _ItemMatchResult:
-        """Greedy 1:1 NLI matching for a single item.
-
-        For each predicted triplet, scan all unmatched GT triplets.
-        Exact lowercase match → instant 1.0 score (skip NLI).
-        Otherwise, NLI zero-shot with threshold.
-        """
-        gt_triplets = item[self._gt_key]
-        pred_triplets = item[self._pred_key]
-
-        gt_strings = [self._triplet_to_str(t) for t in gt_triplets]
-        pred_strings = [self._triplet_to_str(t) for t in pred_triplets]
-        gt_aliases = [self._triplet_aliases(t) for t in gt_triplets]
-
-        matched_gt: set[int] = set()
-        false_positives: list[dict] = []
-
-        for pred_idx, pred_str in enumerate(pred_strings):
-            best_score = 0.0
-            best_gt_idx = -1
-
-            for gt_idx in range(len(gt_strings)):
-                if gt_idx in matched_gt:
-                    continue
-
-                # Exact match shortcut
-                if pred_str.lower() == gt_strings[gt_idx].lower():
-                    best_score = 1.0
-                    best_gt_idx = gt_idx
-                    break
-
-                # Check aliases
-                alias_match = False
-                for alias in gt_aliases[gt_idx]:
-                    if pred_str.lower() == alias.lower():
-                        best_score = 1.0
-                        best_gt_idx = gt_idx
-                        alias_match = True
-                        break
-                if alias_match:
-                    break
-
-                # NLI score against main string
-                score = self._nli_score(gt_strings[gt_idx], pred_str)
-
-                # NLI score against aliases — take best
-                for alias in gt_aliases[gt_idx]:
-                    alias_score = self._nli_score(alias, pred_str)
-                    score = max(score, alias_score)
-
-                if score > best_score:
-                    best_score = score
-                    best_gt_idx = gt_idx
-
-            if best_score >= self._nli_threshold and best_gt_idx >= 0:
-                matched_gt.add(best_gt_idx)
-            else:
-                false_positives.append({
-                    "pred_triplet": pred_triplets[pred_idx],
-                    "best_gt_match": (
-                        gt_triplets[best_gt_idx] if best_gt_idx >= 0 else None
-                    ),
-                    "score": round(best_score, 4),
-                    "verdict": "no comparison made.",
-                    "reason": "Below threshold" if best_gt_idx >= 0 else "No GT candidate",
-                })
-
-        # Unmatched GT = FN
-        false_negatives = []
-        for gt_idx in range(len(gt_triplets)):
-            if gt_idx not in matched_gt:
-                false_negatives.append({
-                    "gt_triplet": gt_triplets[gt_idx],
-                    "score": None,
-                    "verdict": "no comparison made.",
-                    "reason": "Not matched by any prediction",
-                })
-
-        tp = len(matched_gt)
-        fp = len(false_positives)
-        fn = len(false_negatives)
-
-        return _ItemMatchResult(
-            tp=tp, fp=fp, fn=fn,
-            false_positives=false_positives,
-            false_negatives=false_negatives,
-        )
-
-    def _match_all_nli(self, valid_items: list[dict]) -> list[_ItemMatchResult]:
-        """Run NLI matching across all valid items."""
-        logger.info("── Matching (NLI) ────────────────────────────────────────────")
-        results = []
-        for item in valid_items:
-            results.append(self._match_item_nli(item))
-        return results
 
     # ── LLM matching (2-pass) ────────────────────────────────────
 
@@ -640,6 +476,19 @@ class ExtractorEvaluator:
 
         return pass_items
 
+    @staticmethod
+    def _triplet_to_str(triplet: dict) -> str:
+        """Convert a triplet dict to a natural-language string.
+
+        Supports both legacy (triplet: [s,p,o]) and canonical formats.
+        """
+        if "subject" in triplet:
+            return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
+        t = triplet.get("triplet", [])
+        if t and len(t) >= 3:
+            return f"{t[0]} {t[1]} {t[2]}"
+        return str(triplet)
+
     # ── Disagreement collection ──────────────────────────────────
 
     def _build_disagreements(
@@ -740,7 +589,7 @@ class ExtractorEvaluator:
         logger.info("    Total:       %d items", total)
         if dropped > 0:
             logger.info("    ├─ dropped:  %d  (missing response)", dropped)
-        logger.info("    └─ valid:    %d items", valid)
+        logger.info("    └─ to_extract: %d items", valid)
         logger.info("")
 
     def _log_data_post(self, buckets: _ItemBucket) -> None:
@@ -763,7 +612,7 @@ class ExtractorEvaluator:
                 wab, fn_penalty,
             )
         if ca > 0:
-            logger.info("    ├─ correct abstentions:  %d items  (no GT and no predictions)", ca)
+            logger.info("    ├─ correct abstention:   %d items  (no GT and no predictions)", ca)
         logger.info(
             "    └─ to_compare:    %d items  (GT + predictions present)", to_compare
         )
@@ -779,16 +628,10 @@ class ExtractorEvaluator:
         logger.info("    Extractor:   %s", ext_location)
         logger.info("    GT key:      %s", self._gt_key)
 
-        if self._method == "nli":
-            logger.info(
-                "    Matching:    NLI (%s, threshold=%.2f)",
-                self._nli_model_name, self._nli_threshold,
-            )
-        else:
-            location = self._checker_model
-            if self._checker_base_url:
-                location += f" @ {self._checker_base_url}"
-            logger.info("    Matching:    LLM 2-pass (%s)", location)
+        location = self._checker_model
+        if self._checker_base_url:
+            location += f" @ {self._checker_base_url}"
+        logger.info("    Matching:    LLM 2-pass (%s)", location)
 
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
@@ -840,7 +683,10 @@ class ExtractorEvaluator:
             logger.info("")
             logger.info(" ⚠️  Abstention Errors")
             if wa > 0:
-                logger.info("    Wrongful answers:     %d items", wa)
+                logger.info(
+                    "    Wrongful answers:     %d items → %d FP added",
+                    wa, result.abstention_errors["wrongful_answer_fp_penalty"],
+                )
             if wab > 0:
                 logger.info(
                     "    Wrongful abstentions: %d items → %d FN added",

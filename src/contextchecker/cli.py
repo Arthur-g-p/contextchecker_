@@ -271,19 +271,10 @@ def eval_extractor(
         None, "--pred-key",
         help="Key containing predicted triplets. Default: {extractor_model}_response_kg.",
     ),
-    # NLI matching config
-    nli_model: str = typer.Option(
-        "facebook/bart-large-mnli", "--nli-model",
-        help="HuggingFace NLI model for local matching. Default mode.",
-    ),
-    nli_threshold: float = typer.Option(
-        0.5, "--nli-threshold",
-        help="Entailment threshold for NLI matching.",
-    ),
     # LLM matching config
     checker_model: str = typer.Option(
-        None, "--checker-model",
-        help="LLM model for 2-pass matching. Enables LLM mode when set.",
+        ..., "--checker-model",
+        help="LLM model for 2-pass matching.",
     ),
     checker_base_api: str = typer.Option(
         None, "--checker-base-api",
@@ -304,7 +295,7 @@ def eval_extractor(
         False, "--debug", help="Enable debug output.",
     ),
 ):
-    """Evaluate extractor quality: extract live, then match against GT (NLI or LLM)."""
+    """Evaluate extractor quality: extract live, then match against GT using LLM 2-pass."""
     from contextchecker.eval.extractoreval import ExtractorEvaluator
 
     settings.enable_logging(debug=debug)
@@ -337,8 +328,6 @@ def eval_extractor(
             gt_key=gt_key,
             pred_key=pred_key,
             extractor_base_url=extractor_base_api,
-            nli_model=nli_model,
-            nli_threshold=nli_threshold,
             checker_model=checker_model,
             checker_base_url=checker_base_api,
             joint_num=joint_num,
@@ -351,23 +340,16 @@ def eval_extractor(
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Determine method for _meta
-    method = "llm" if checker_model else "nli"
-
     # Write summary JSON
     meta = {
         "eval_type": "extractor",
         "extractor_model": extractor_model,
         "gt_key": gt_key,
         "pred_key": pred_key or f"{extractor_model}_response_kg",
-        "method": method,
+        "method": "llm",
+        "checker_model": checker_model,
         "timestamp": datetime.now().isoformat(),
     }
-    if method == "llm":
-        meta["checker_model"] = checker_model
-    else:
-        meta["nli_model"] = nli_model
-        meta["nli_threshold"] = nli_threshold
 
     output = {"_meta": meta, **asdict(result)}
     output_file.write_text(

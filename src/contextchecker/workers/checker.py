@@ -28,7 +28,7 @@ logger = settings.get_logger(__name__)
 # ── LLM Response Schemas (Pydantic — structured output) ─────────────────────
 
 class Verdict(str, Enum):
-    """Entailment verdict for a single claim against a reference."""
+    """Verdict for a single claim against a reference."""
     ENTAILMENT = "Entailment"
     CONTRADICTION = "Contradiction"
     NEUTRAL = "Neutral"
