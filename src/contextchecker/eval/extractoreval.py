@@ -47,8 +47,14 @@ class _ItemBucket:
 
 @dataclass
 class _ItemMatchResult:
-    """Matching outcome for a single valid item."""
-    tp: int
+    """Matching outcome for a single valid item.
+
+    RAGChecker uses two independent coverage counts (no shared TP / no min):
+      - tp_recall:    GT triplets entailed by the predictions  (recall numerator)
+      - tp_precision: pred triplets entailed by the GT         (precision numerator)
+    """
+    tp_recall: int
+    tp_precision: int
     fp: int
     fn: int
     false_positives: list[dict]     # disagreement detail per FP
@@ -249,29 +255,38 @@ class ExtractorEvaluator:
         buckets: _ItemBucket,
         total_items: int,
     ) -> ExtractorEvalResult:
-        """Aggregate TP/FP/FN from matching + abstention penalties, compute P/R/F1."""
-        # Accumulate from matched items
-        tp, fp, fn = 0, 0, 0
+        """Aggregate the two coverage counts + abstention penalties, compute P/R/F1.
+
+        RAGChecker semantics:
+            recall    = entailed_GT   / total_GT      (coverage of ground truth)
+            precision = entailed_pred / total_pred    (correctness of predictions)
+        Two independent ratios — no shared TP, no min().
+        """
+        # Accumulate the two numerators + the two error counts from matched items
+        tp_recall, tp_precision, fp, fn = 0, 0, 0, 0
         for ir in item_results:
-            tp += ir.tp
+            tp_recall += ir.tp_recall
+            tp_precision += ir.tp_precision
             fp += ir.fp
             fn += ir.fn
 
-        # Wrongful abstention: every GT triplet is an FN
+        # Wrongful abstention: every GT triplet is an uncovered GT claim (FN)
         abstention_fn_penalty = sum(
             len(item[self._gt_key]) for item in buckets.wrongful_abstention
         )
         fn += abstention_fn_penalty
 
-        # Wrongful answer: every predicted triplet is an FP
+        # Wrongful answer: every predicted triplet is an unsupported prediction (FP)
         answer_fp_penalty = sum(
             len(item[self._pred_key]) for item in buckets.wrongful_answer
         )
         fp += answer_fp_penalty
 
-        # Compute aggregate metrics
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        # Two independent ratios. Denominators:
+        #   tp_recall + fn    == total GT claims    (incl. wrongful-abstention GT)
+        #   tp_precision + fp == total pred claims  (incl. wrongful-answer preds)
+        recall = tp_recall / (tp_recall + fn) if (tp_recall + fn) > 0 else 0.0
+        precision = tp_precision / (tp_precision + fp) if (tp_precision + fp) > 0 else 0.0
         f1 = (2 * precision * recall / (precision + recall)
                if (precision + recall) > 0 else 0.0)
 
@@ -292,7 +307,8 @@ class ExtractorEvaluator:
             precision=round(precision, 4),
             recall=round(recall, 4),
             f1=round(f1, 4),
-            tp=tp,
+            tp_recall=tp_recall,
+            tp_precision=tp_precision,
             fp=fp,
             fn=fn,
             total_items=total_items,
@@ -420,14 +436,17 @@ class ExtractorEvaluator:
                         "reason": t.get(explanation_key) or verdict or "Parse error",
                     })
 
-            # TP is the minimum of both passes — a true match must be
-            # confirmed from both directions
-            tp = min(tp_from_recall, tp_from_precision)
-            fp = len(pred_triplets) - tp_from_precision
+            # RAGChecker: two independent coverage counts, no shared TP, no min().
+            #   recall  side: GT triplets entailed by predictions (tp_from_recall)
+            #   precision side: pred triplets entailed by GT      (tp_from_precision)
+            # FN = GT not covered; FP = predictions not supported.
             fn = len(gt_triplets) - tp_from_recall
+            fp = len(pred_triplets) - tp_from_precision
 
             results.append(_ItemMatchResult(
-                tp=tp, fp=fp, fn=fn,
+                tp_recall=tp_from_recall,
+                tp_precision=tp_from_precision,
+                fp=fp, fn=fn,
                 false_positives=fp_list,
                 false_negatives=fn_list,
             ))
@@ -525,7 +544,8 @@ class ExtractorEvaluator:
                 "id": item.get("id", f"to-compare-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "tp": ir.tp,
+                "tp_recall": ir.tp_recall,
+                "tp_precision": ir.tp_precision,
                 "fp": ir.fp,
                 "fn": ir.fn,
                 "gt_triplets": [
@@ -661,11 +681,11 @@ class ExtractorEvaluator:
         logger.info(" 🔎 Matching Quality")
         logger.info(
             "    Precision:  %.3f   (%d / %d)",
-            result.precision, result.tp, result.tp + result.fp,
+            result.precision, result.tp_precision, result.tp_precision + result.fp,
         )
         logger.info(
             "    Recall:     %.3f   (%d / %d)",
-            result.recall, result.tp, result.tp + result.fn,
+            result.recall, result.tp_recall, result.tp_recall + result.fn,
         )
         logger.info("    F1:         %.3f", result.f1)
 
@@ -710,6 +730,7 @@ class ExtractorEvaluator:
         """Print ✅ Done summary line."""
         logger.info("")
         logger.info(
-            " ✅ Done: %d items matched (%d TP, %d FP, %d FN)",
-            result.to_compare_items, result.tp, result.fp, result.fn,
+            " ✅ Done: %d items matched (%d GT covered, %d preds correct, %d FP, %d FN)",
+            result.to_compare_items, result.tp_recall, result.tp_precision,
+            result.fp, result.fn,
         )

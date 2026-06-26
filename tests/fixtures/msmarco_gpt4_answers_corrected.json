@@ -367,14 +367,6 @@
       {
         "triplet": [
           "Instagram account",
-          "owned by",
-          "her mom"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Instagram account",
           "has over",
           "921,000 followers"
         ],
@@ -600,14 +592,6 @@
           "depression"
         ],
         "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Heavy use of marijuana",
-          "is associated with an increased risk of",
-          "psychosis"
-        ],
-        "human_label": "Entailment"
       }
     ],
     "question": "can marijuana mental illness",
@@ -665,14 +649,6 @@
           "snake odor when not kept clean",
           "strength",
           "not strong"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "snakes whose waste is not cleaned up",
-          "can start to",
-          "smell"
         ],
         "human_label": "Entailment"
       },

@@ -64,6 +64,14 @@ class ErrorAction(Enum):
 
 
 class LLMClient:
+    # ── Process-level capability memo (shared across all instances) ──────────
+    # Endpoint reachability and the working request strategy are idempotent and
+    # deterministic per (base_url, model). We discover them once and reuse, so
+    # the 2nd/3rd worker hitting the same endpoint skips the /models probe and
+    # the strategy-discovery round-trips. Workers still own their own client.
+    _VERIFIED_ENDPOINTS: set[str] = set()
+    _STRATEGY_CACHE: dict[tuple[str | None, str], int] = {}
+
     def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10, cache_file: str | None = None):
         self.base_url = base_url
         self.api_key = api_key
@@ -88,6 +96,17 @@ class LLMClient:
         self._discovery_lock = asyncio.Lock()  # Serializes strategy discovery
         self._cache_hit_logged = False  # Only log cache hint once
         self._fatal_error_occurred = False
+
+        # Reuse a strategy already discovered this process for the same endpoint+model.
+        _cached_idx = LLMClient._STRATEGY_CACHE.get((self.base_url, self.model))
+        if _cached_idx is not None:
+            self._strategy_index = _cached_idx
+            self._strategy_discovered = True
+            self._discovery_succeeded = True
+            logger.info(
+                "   🔒 Strategy cache hit — reusing '%s' for %s (skipping discovery)",
+                self.strategy.name, self.model,
+            )
 
         self._session_cache = {}
         self._new_cache_entries = 0
@@ -413,6 +432,7 @@ class LLMClient:
                         if discovering and not self._strategy_discovered:
                             self._strategy_discovered = True
                             self._discovery_succeeded = True
+                            LLMClient._STRATEGY_CACHE[(self.base_url, self.model)] = self._strategy_index
                             logger.info("   🔒 Strategy locked: '%s'", self.strategy.name)
 
                         # Cache hint (only log once to avoid spam) Catch it properly
@@ -631,11 +651,21 @@ class LLMClient:
             self._connection_verified = True
             return
 
+        if self.base_url in LLMClient._VERIFIED_ENDPOINTS:
+            # Already probed this endpoint earlier in the process — skip the round-trip.
+            self._connection_verified = True
+            logger.debug(
+                "   📡 Connection cache hit — %s already verified, skipping pre-flight",
+                self.base_url,
+            )
+            return
+
         logger.info("📡 Testing connection to %s/models...", self.base_url)
         try:
             models_response = await self.client.models.list()
             logger.info("   ✅ Connection confirmed. Server reachable")
             self._connection_verified = True
+            LLMClient._VERIFIED_ENDPOINTS.add(self.base_url)
 
             # Show available models in debug mode — helps diagnose model name typos
             model_ids = sorted([m.id for m in models_response.data])
@@ -660,6 +690,7 @@ class LLMClient:
             # /v1/models may not exist on all custom endpoints
             logger.info("   ⚡ /models endpoint not available — skipping pre-flight check.")
             self._connection_verified = True
+            LLMClient._VERIFIED_ENDPOINTS.add(self.base_url)
 
         except APITimeoutError as e:
             # APITimeoutError extends APIConnectionError — must be caught FIRST

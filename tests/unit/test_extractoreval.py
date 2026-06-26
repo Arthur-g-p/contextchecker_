@@ -241,13 +241,14 @@ class TestBuildResult:
             wrongful_abstention=[],
             correct_abstention=[],
         )
-        item_results = [_ItemMatchResult(tp=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
+        item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
         result = ev._build_result(item_results, buckets, total_items=1)
         assert result.precision == 1.0
         assert result.recall == 1.0
         assert result.f1 == 1.0
-        assert result.tp == 1
+        assert result.tp_recall == 1
+        assert result.tp_precision == 1
         assert result.fp == 0
         assert result.fn == 0
         assert result.to_compare_items == 1
@@ -267,10 +268,10 @@ class TestBuildResult:
             ],
             correct_abstention=[],
         )
-        item_results = [_ItemMatchResult(tp=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
+        item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
         result = ev._build_result(item_results, buckets, total_items=2)
-        assert result.tp == 1
+        assert result.tp_recall == 1
         assert result.fn == 2  # penalty from abstention
         assert result.abstention_errors["wrongful_abstention_fn_penalty"] == 2
 
@@ -288,10 +289,10 @@ class TestBuildResult:
             wrongful_abstention=[],
             correct_abstention=[],
         )
-        item_results = [_ItemMatchResult(tp=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
+        item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
         result = ev._build_result(item_results, buckets, total_items=2)
-        assert result.tp == 1
+        assert result.tp_precision == 1
         assert result.fp == 1  # penalty from wrongful answer
         assert result.abstention_errors["wrongful_answer_fp_penalty"] == 1
 
@@ -318,7 +319,7 @@ class TestBuildDisagreements:
             wrongful_abstention=[],
             correct_abstention=[],
         )
-        results = [_ItemMatchResult(tp=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
+        results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
         disagreements = ev._build_disagreements(buckets, results)
         assert len(disagreements) == 0
 
@@ -334,7 +335,7 @@ class TestBuildDisagreements:
             wrongful_abstention=[],
             correct_abstention=[],
         )
-        results = [_ItemMatchResult(tp=0, fp=1, fn=1,
+        results = [_ItemMatchResult(tp_recall=0, tp_precision=0, fp=1, fn=1,
                                      false_positives=[fp_detail],
                                      false_negatives=[])]
         disagreements = ev._build_disagreements(buckets, results)
@@ -386,7 +387,7 @@ class TestEvaluateIntegration:
         ev = _evaluator()
         
         async def mock_match_all_llm(items):
-            return [_ItemMatchResult(tp=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
+            return [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
         ev._match_all_llm = AsyncMock(side_effect=mock_match_all_llm)
 
         data = [
@@ -440,7 +441,7 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_done"):
             result, disagreements = ev.run_sync(data)
 
-        assert result.tp == 0
+        assert result.tp_recall == 0
         assert result.fn == 2
         assert result.abstention_errors["wrongful_abstention"] == 1
         assert result.abstention_errors["wrongful_abstention_fn_penalty"] == 2

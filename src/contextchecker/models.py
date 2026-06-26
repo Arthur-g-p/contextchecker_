@@ -64,9 +64,10 @@ class ExtractorEvalResult:
     precision: float
     recall: float
     f1: float
-    tp: int
-    fp: int
-    fn: int
+    tp_recall: int                         # GT triplets entailed by predictions (recall numerator)
+    tp_precision: int                      # pred triplets entailed by GT (precision numerator)
+    fp: int                                # predictions not supported by GT
+    fn: int                                # GT triplets not covered by predictions
     total_items: int                       # items in dataset
     to_compare_items: int                  # items with GT + predictions to compare
     gt_stats: dict                         # {"total_triplets": N, "avg_per_item": float}
