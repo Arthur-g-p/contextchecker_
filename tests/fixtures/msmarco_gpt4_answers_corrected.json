@@ -1478,7 +1478,15 @@
         "triplet": [
           "bass",
           "defined as",
-          "person or instrument that produces very low range of musical notes"
+          "instrument that produces very low range of musical notes"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bass",
+          "defined as",
+          "person that produces very low range of musical notes"
         ],
         "human_label": "Entailment"
       },
@@ -1518,7 +1526,15 @@
         "triplet": [
           "bass",
           "refers to",
-          "certain types of edible marine or freshwater bony fishes"
+          "certain types of edible marine bony fishes"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bass",
+          "refers to",
+          "certain types of edible freshwater bony fishes"
         ],
         "human_label": "Entailment"
       }
@@ -2279,14 +2295,6 @@
       },
       {
         "triplet": [
-          "25 percent of total hospital spending in the United States",
-          "is over",
-          "$200 billion"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
           "administrative costs",
           "account for more than",
           "$200 billion"
@@ -2670,7 +2678,15 @@
         "triplet": [
           "Carry-on luggage dimensions",
           "include",
-          "handles and wheels"
+          "handles"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Carry-on luggage dimensions",
+          "include",
+          "wheels"
         ],
         "human_label": "Entailment"
       },
@@ -3453,7 +3469,31 @@
         "triplet": [
           "processor",
           "performs",
-          "basic arithmetic, logical, control and input/output operations"
+          "basic arithmetic operations"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "processor",
+          "performs",
+          "logical operations"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "processor",
+          "performs",
+          "control operations"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "processor",
+          "performs",
+          "input/output operations"
         ],
         "human_label": "Entailment"
       },
@@ -3499,7 +3539,7 @@
       },
       {
         "triplet": [
-          "basic arithmetic, logical, control and input/output operations",
+          "basic arithmetic operations",
           "are specified by",
           "instructions"
         ],
@@ -3507,7 +3547,23 @@
       },
       {
         "triplet": [
-          "basic arithmetic, logical, control and input/output operations",
+          "logical operations",
+          "are specified by",
+          "instructions"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "control operations",
+          "are specified by",
+          "instructions"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "input/output operations",
           "are specified by",
           "instructions"
         ],
@@ -3611,7 +3667,15 @@
         "triplet": [
           "do it yourself grout cleaning",
           "method is",
-          "scrub the grout with an electric floor washer or polisher-scrubber"
+          "scrub the grout with a polisher-scrubber"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "do it yourself grout cleaning",
+          "method is",
+          "scrub the grout with an electric floor washer"
         ],
         "human_label": "Entailment"
       },
@@ -3710,7 +3774,15 @@
         "triplet": [
           "slate",
           "used as",
-          "roofing and paving material"
+          "paving material"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "slate",
+          "used as",
+          "roofing material"
         ],
         "human_label": "Entailment"
       },
@@ -3751,30 +3823,6 @@
           "slate",
           "was used by",
           "children"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "slate",
-          "was used as",
-          "writing surface"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "writing slate",
-          "was",
-          "small, thin, rectangular piece"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "slate",
-          "was used as",
-          "writing surface"
         ],
         "human_label": "Entailment"
       },
@@ -3833,103 +3881,23 @@
         "triplet": [
           "cosmogeny",
           "refers to",
-          "branch of astrophysics that studies origin, evolution, and structure of universe"
+          "branch of astrophysics that studies origin of universe"
         ],
         "human_label": "Entailment"
       },
       {
         "triplet": [
           "cosmogeny",
-          "can refer to",
-          "specific theory of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "model of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "myth of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "specific theory of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "model of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "myth of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "account of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "specific theory of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "model of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "myth of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
           "refers to",
-          "branch of astrophysics studying the origin, evolution, and structure of the universe"
+          "branch of astrophysics that studies evolution of universe"
         ],
         "human_label": "Entailment"
       },
       {
         "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "theory of the origin of the universe"
+          "cosmogeny",
+          "refers to",
+          "branch of astrophysics that studies structure of universe"
         ],
         "human_label": "Entailment"
       },
@@ -3954,6 +3922,14 @@
           "Cosmogeny",
           "can refer to",
           "account of the origin of the universe"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "cosmogeny",
+          "can refer to",
+          "specific theory of the origin of the universe"
         ],
         "human_label": "Entailment"
       },
@@ -3962,6 +3938,22 @@
           "cosmogeny",
           "refers to",
           "branch of astrophysics"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "cosmogeny",
+          "studies",
+          "origin of the universe"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "cosmogeny",
+          "studies",
+          "structure of the universe"
         ],
         "human_label": "Entailment"
       },
@@ -3986,134 +3978,6 @@
           "cosmogeny",
           "studies",
           "structure of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "theory of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "model of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "myth of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "refers to",
-          "branch of astrophysics studying the origin, evolution, and structure of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "theory of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "model of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "myth of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cosmogeny",
-          "can refer to",
-          "account of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "refers to",
-          "branch of astrophysics"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "studies",
-          "origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "studies",
-          "evolution of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "studies",
-          "structure of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "theory of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "model of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "myth of the origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "can refer to",
-          "account of the origin of the universe"
         ],
         "human_label": "Entailment"
       }
@@ -4652,7 +4516,15 @@
         "triplet": [
           "food-grade diatomaceous earth",
           "is",
-          "safe for humans and pets"
+          "safe for pets"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "food-grade diatomaceous earth",
+          "is",
+          "safe for humans"
         ],
         "human_label": "Entailment"
       },
@@ -4715,14 +4587,6 @@
         "triplet": [
           "pests",
           "may hide",
-          "behind and beneath refrigerators"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "pests",
-          "may hide",
           "behind and beneath cabinets"
         ],
         "human_label": "Entailment"
@@ -4763,7 +4627,15 @@
         "triplet": [
           "pests",
           "may hide",
-          "in attics and basements"
+          "in attics"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "pests",
+          "may hide",
+          "in basements"
         ],
         "human_label": "Entailment"
       },
@@ -5185,7 +5057,47 @@
         "triplet": [
           "Miniature American Shepherd",
           "has same as Miniature Australian Shepherd",
-          "look, working style, intelligence, energy level, personality, grooming requirements"
+          "look"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Miniature American Shepherd",
+          "has same as Miniature Australian Shepherd",
+          "working style"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Miniature American Shepherd",
+          "has same as Miniature Australian Shepherd",
+          "intelligence"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Miniature American Shepherd",
+          "has same as Miniature Australian Shepherd",
+          "energy level"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Miniature American Shepherd",
+          "has same as Miniature Australian Shepherd",
+          "opersonality"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Miniature American Shepherd",
+          "has same as Miniature Australian Shepherd",
+          "grooming requirements"
         ],
         "human_label": "Entailment"
       },
@@ -5202,22 +5114,6 @@
           "Miniature American Shepherd",
           "stands",
           "13-18 inches tall at the shoulder"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Miniature Australian Shepherds",
-          "achieved recognition by",
-          "AKC"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Miniature Australian Shepherds",
-          "were renamed as",
-          "Miniature American Shepherds"
         ],
         "human_label": "Entailment"
       },
@@ -5579,7 +5475,15 @@
         "triplet": [
           "Nike",
           "offers",
-          "cleats & spikes"
+          "spikes"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Nike",
+          "offers",
+          "cleats"
         ],
         "human_label": "Entailment"
       },
@@ -5742,15 +5646,55 @@
         "triplet": [
           "Egyptians",
           "are blend of cultures",
-          "Greek, Arab, Armenian, Turkish, African, Syrian, Palestinian, European, Turkish"
+          "Greek"
         ],
         "human_label": "Entailment"
       },
       {
         "triplet": [
           "Egyptians",
-          "have",
-          "a variety of Egyptian Arabic"
+          "are blend of cultures",
+          "Arab"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Egyptians",
+          "are blend of cultures",
+          "African"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Egyptians",
+          "are blend of cultures",
+          "Syrian"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Egyptians",
+          "are blend of cultures",
+          "Palestinian"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Egyptians",
+          "are blend of cultures",
+          "European"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "Egyptians",
+          "are blend of cultures",
+          "Turkish"
         ],
         "human_label": "Entailment"
       },

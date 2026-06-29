@@ -145,6 +145,68 @@ def check(
     logger.info("Results written to %s", output_file)
 
 
+@app.command()
+def atomize(
+    input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    model: str = typer.Option(None, "--model", "-m", help="Model name for the atomizer LLM."),
+    source_kg_key: str = typer.Option(..., "--source-kg-key", "-s", help="Key containing triplets to atomize (e.g. 'gemini-3.1_response_kg')."),
+    atomizer_base_api: str = typer.Option(None, "--atomizer-base-api", help="Optional base URL for the atomizer LLM API."),
+    max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2."),
+    trace: bool = typer.Option(True, "--trace/--no-trace", help="Also write a per-triplet decision trace to {output}_decisions.json."),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
+):
+    """Atomize compound triplets into atomic facts."""
+    from contextchecker.services.atomization import AtomizationService
+
+    # Activate logging
+    settings.enable_logging(debug=debug)
+
+    _print_header("atomize")
+
+    # Resolve output path — default: results/{filename} next to input
+    if output_file is None:
+        output_file = input_file.parent / "results" / input_file.name
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load input
+    try:
+        data = json.loads(input_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.error("Input file not found: %s", input_file)
+        raise typer.Exit(code=1)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid JSON in %s: %s", input_file, exc)
+        raise typer.Exit(code=1)
+
+    # Call service
+    try:
+        service = AtomizationService(
+            model=model,
+            source_kg_key=source_kg_key,
+            base_url=atomizer_base_api,
+            max_retries=max_retries,
+        )
+        result = service.run_sync(data)
+    except ContextCheckerError as exc:
+        logger.error("")
+        logger.error("❌ %s: %s", type(exc).__name__, exc)
+        raise typer.Exit(code=1)
+
+    # Write output
+    output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Results written to %s", output_file)
+
+    # Write the decision trace artifact (one record per item: full input
+    # triplets, every decision + reasoning + children, superficial collisions).
+    if trace:
+        trace_file = output_file.with_name(output_file.stem + "_decisions.json")
+        trace_file.write_text(
+            json.dumps(service.last_trace, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.info("Decision trace written to %s", trace_file)
+
+
 # ── Eval subcommand group ────────────────────────────────────────────────────
 
 eval_app = typer.Typer(

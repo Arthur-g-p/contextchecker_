@@ -34,6 +34,28 @@ class CheckingPayload:
     claim_index: int        # which claim within that item
 
 
+# ── Atomization ──────────────────────────────────────────────────────────────
+
+@dataclass
+class AtomizationPayload:
+    """Contract: AtomizationService → Atomizer worker.
+
+    One payload per triplet. The worker decides if the triplet is
+    already atomic or needs splitting into multiple atomic facts.
+
+    Carries structured S/P/O so the LLM never has to re-guess
+    role boundaries. Response text provides context for ambiguity
+    resolution.
+    """
+
+    subject: str            # triplet subject
+    predicate: str          # triplet predicate
+    object: str             # triplet object
+    response: str           # item's response text — context for the LLM
+    item_index: int         # which item in the dataset this triplet belongs to
+    triplet_index: int      # which triplet within that item
+
+
 # ── Evaluation ───────────────────────────────────────────────────────────────
 
 @dataclass

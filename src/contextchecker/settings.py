@@ -82,6 +82,7 @@ def get_logger(name: str) -> logging.Logger:
 
 EXTRACTOR_API_KEY: str | None = os.getenv("EXTRACTOR_API_KEY")
 CHECKER_API_KEY: str | None = os.getenv("CHECKER_API_KEY")
+ATOMIZER_API_KEY: str | None = os.getenv("ATOMIZER_API_KEY")
 
 LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "120.0"))
 
