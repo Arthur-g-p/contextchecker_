@@ -317,6 +317,10 @@ class LLMClient:
         - All subsequent requests use the locked strategy concurrently.
         """
         prompt_text = messages[-1]["content"] if isinstance(messages, list) and messages and "content" in messages[-1] else None
+        # TODO: cache key only covers model + last user message. It ignores the
+        # system prompt, the schema, and `task`, so two calls that share a final
+        # user message but differ in schema/system prompt collide and return the
+        # wrong cached response. Widen the key (hash of full messages + schema).
         cache_key = f"{self.model}:{prompt_text}" if prompt_text else None
         if self._cache_loaded_from_disk and cache_key and cache_key in self._session_cache:
             return self._session_cache[cache_key]
@@ -342,6 +346,14 @@ class LLMClient:
         try:
             last_error = None
             async with self.sem:
+                # Fast-fail: a sibling task already hit a fatal error while we were
+                # queued (behind the discovery lock or the semaphore). The whole
+                # batch is doomed — abort now instead of firing a doomed request.
+                # Raising (not returning a value) keeps this task off the progress
+                # bar, so the bar only ever counts genuinely-completed work.
+                if self._fatal_error_occurred:
+                    raise LLMClientError("aborted: a fatal error already occurred in this batch")
+
                 attempt = 0
                 schema_retries = 0
                 server_err_count = 0
@@ -456,6 +468,15 @@ class LLMClient:
 
                     except Exception as e:
                         last_error = e
+
+                        # A sibling task already triggered a fatal abort for this
+                        # client. Don't reclassify our error as a per-item SKIP —
+                        # that returns a value and falsely advances the progress
+                        # bar. Propagate quietly so the batch stops immediately and
+                        # the bar reflects only genuinely-completed work.
+                        if self._fatal_error_occurred:
+                            raise LLMClientError("aborted: a fatal error already occurred in this batch") from e
+
                         action = self._handle_api_error(e, attempt, max_retries)
 
                         if action != ErrorAction.SERVER_ERROR:

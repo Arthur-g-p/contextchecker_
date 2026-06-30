@@ -99,4 +99,7 @@ class ExtractorEvalResult:
                                            #  "wrongful_answer_fp_penalty": N}
     correct_abstention: int                # items with neither GT nor predictions
     method: str                            # "llm"
+    atomicity: dict | None = None          # {"extracted_claims", "atomic_units",
+                                           #  "non_atomic", "failed", "atomicity_rate",
+                                           #  "information_density"} or None if skipped
 

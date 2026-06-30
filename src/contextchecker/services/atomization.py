@@ -85,7 +85,8 @@ class AtomizationService(BaseService):
         self._log_skip(len(valid), skipped, len(pending))
 
         if not pending:
-            logger.info(" ✨ All items already atomized. Nothing to do.")
+            if not self.quiet:
+                logger.info(" ✨ All items already atomized. Nothing to do.")
             return data
 
         self._log_config()

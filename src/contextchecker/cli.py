@@ -349,6 +349,14 @@ def eval_extractor(
         None, "--max-retries",
         help="Max retry rounds for API/parsing failures.",
     ),
+    atomizer_model: str = typer.Option(
+        None, "--atomizer-model",
+        help="Optional: model for the atomicity axis. Needs ATOMIZER_API_KEY; skipped if unset.",
+    ),
+    atomizer_base_api: str = typer.Option(
+        None, "--atomizer-base-api",
+        help="Optional base URL for the atomizer LLM API.",
+    ),
     debug: bool = typer.Option(
         False, "--debug", help="Enable debug output.",
     ),
@@ -390,6 +398,8 @@ def eval_extractor(
             joint_num=joint_num,
             max_words=max_words,
             max_retries=max_retries,
+            atomizer_model=atomizer_model,
+            atomizer_base_url=atomizer_base_api,
         )
         result, disagreements = evaluator.run_sync(data)
     except ContextCheckerError as exc:

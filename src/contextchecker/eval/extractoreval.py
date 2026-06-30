@@ -14,6 +14,7 @@ Architecture:
 """
 
 import asyncio
+import copy
 from dataclasses import dataclass
 
 from contextchecker import settings
@@ -22,6 +23,7 @@ from contextchecker.models import ExtractorEvalResult
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
+from contextchecker.services.atomization import AtomizationService
 
 logger = settings.get_logger(__name__)
 
@@ -87,6 +89,9 @@ class ExtractorEvaluator:
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         max_retries: int | None = None,
+        # Atomicity axis (optional, orthogonal to coverage)
+        atomizer_model: str | None = None,
+        atomizer_base_url: str | None = None,
     ):
         if not checker_model:
             raise ValueError("checker_model is required for evaluation matching.")
@@ -127,6 +132,26 @@ class ExtractorEvaluator:
         self._max_words = max_words
         self._max_retries = max_retries
 
+        # Atomicity axis — OPTIONAL. Built only if an atomizer model is given AND
+        # the key is configured (AtomizationService.__init__ would otherwise raise
+        # on a missing key). Measured on a throwaway copy of the predictions, so
+        # coverage numbers and the output file are never affected.
+        self._atomizer_model = atomizer_model
+        self._atomization_service = None
+        self._atomizer_skip_reason = None
+        if not atomizer_model:
+            self._atomizer_skip_reason = "no --atomizer-model"
+        elif not settings.ATOMIZER_API_KEY:
+            self._atomizer_skip_reason = "ATOMIZER_API_KEY not set"
+        else:
+            self._atomization_service = AtomizationService(
+                model=atomizer_model,
+                source_kg_key=self._pred_key,
+                base_url=atomizer_base_url,
+                concurrency=concurrency,
+                quiet=True,
+            )
+
     # ── Public API ───────────────────────────────────────────────
 
     async def evaluate(
@@ -153,6 +178,10 @@ class ExtractorEvaluator:
         # Step 2: Run extraction (quiet — evaluator owns the logging)
         await self._extraction_service.run(valid)
 
+        # Step 2b: Atomicity axis (optional, orthogonal). Measured on a COPY so
+        # coverage and the output file keep the raw predictions untouched.
+        atomicity = await self._measure_atomicity(valid)
+
         # Step 3: Classify into buckets (now that pred exists)
         buckets = self._classify(valid)
 
@@ -174,7 +203,7 @@ class ExtractorEvaluator:
             item_results = []
 
         # Step 6: Build result (encapsulated)
-        result = self._build_result(item_results, buckets, len(data))
+        result = self._build_result(item_results, buckets, len(data), atomicity)
 
         # Step 7: Build disagreement list
         disagreements = self._build_disagreements(buckets, item_results)
@@ -190,6 +219,57 @@ class ExtractorEvaluator:
     ) -> tuple[ExtractorEvalResult, list[dict]]:
         """Sync wrapper — same pattern as BaseService.run_sync."""
         return asyncio.run(self.evaluate(data))
+
+    # ── Atomicity axis (optional, orthogonal to coverage) ────────
+
+    async def _measure_atomicity(self, valid: list[dict]) -> dict | None:
+        """Measure how atomic the extractor's predictions are.
+
+        Runs the atomizer on a DEEP COPY of the items so the predictions used
+        for coverage matching (and the output file) are never mutated — this is
+        a pure measurement side-channel. Skipped (returns None) when no atomizer
+        is configured.
+        """
+        if self._atomization_service is None:
+            logger.info(
+                " ⏭️  Atomicity skipped (%s)", self._atomizer_skip_reason
+            )
+            return None
+
+        # Nothing to measure if no item carries predictions yet.
+        if not any(item.get(self._pred_key) for item in valid):
+            logger.info(" ⏭️  Atomicity skipped (no predictions to measure)")
+            return None
+
+        sandbox = copy.deepcopy(valid)
+        await self._atomization_service.run(sandbox)
+        trace = self._atomization_service.last_trace
+
+        keep = split = failed = atomic_units = 0
+        for item in trace:
+            for d in item.get("decisions", []):
+                dec = d.get("decision")
+                if dec == "split":
+                    split += 1
+                    atomic_units += len(d.get("children", []))
+                elif dec == "failed":
+                    failed += 1
+                    atomic_units += 1
+                else:
+                    keep += 1
+                    atomic_units += 1
+
+        extracted = keep + split + failed
+        rate = keep / (keep + split) if (keep + split) else 1.0
+        density = atomic_units / extracted if extracted else 0.0
+        return {
+            "extracted_claims": extracted,
+            "atomic_units": atomic_units,
+            "non_atomic": split,
+            "failed": failed,
+            "atomicity_rate": round(rate, 4),
+            "information_density": round(density, 2),
+        }
 
     # ── Validation (fail-fast) ───────────────────────────────────
 
@@ -254,6 +334,7 @@ class ExtractorEvaluator:
         item_results: list[_ItemMatchResult],
         buckets: _ItemBucket,
         total_items: int,
+        atomicity: dict | None = None,
     ) -> ExtractorEvalResult:
         """Aggregate the two coverage counts + abstention penalties, compute P/R/F1.
 
@@ -329,6 +410,7 @@ class ExtractorEvaluator:
             },
             correct_abstention=len(buckets.correct_abstention),
             method=self._method,
+            atomicity=atomicity,
         )
 
     # ── LLM matching (2-pass) ────────────────────────────────────
@@ -666,6 +748,11 @@ class ExtractorEvaluator:
             location += f" @ {self._checker_base_url}"
         logger.info("    Matching:    LLM 2-pass (%s)", location)
 
+        if self._atomization_service is not None:
+            logger.info("    Atomicity:   %s", self._atomizer_model)
+        else:
+            logger.info("    Atomicity:   skipped (%s)", self._atomizer_skip_reason)
+
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
@@ -725,6 +812,23 @@ class ExtractorEvaluator:
                     "    Wrongful abstentions: %d items → %d FN added",
                     wab, result.abstention_errors["wrongful_abstention_fn_penalty"],
                 )
+
+        # ── Atomicity (orthogonal to coverage; only if measured)
+        a = result.atomicity
+        if a:
+            logger.info("")
+            logger.info(" 🧬 Atomicity")
+            logger.info(
+                "    Extracted:   %d triplets → %d atomic units",
+                a["extracted_claims"], a["atomic_units"],
+            )
+            logger.info(
+                "    Non-atomic:  %d  (atomicity %.1f%%)",
+                a["non_atomic"], a["atomicity_rate"] * 100,
+            )
+            logger.info("    Density:     %.2f facts/triplet", a["information_density"])
+            if a.get("failed"):
+                logger.info("    ⚠️  %d triplets failed atomization", a["failed"])
 
     def _log_done(self, result: ExtractorEvalResult) -> None:
         """Print ✅ Done summary line."""

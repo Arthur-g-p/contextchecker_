@@ -395,3 +395,81 @@ class TestCacheSavedOnFatal:
 
             assert len(results) == 3
             mock_save.assert_not_called()
+
+
+# ── Group 1d: Fatal abort is honest — no fake progress, no doomed calls ──
+
+
+@pytest.mark.integration
+class TestFatalAbortReporting:
+    """Once one task hits a fatal error, sibling tasks must abort quietly.
+
+    Regression guard for the bug where post-fatal peers were downgraded to a
+    per-item SKIP: SKIP returns a value (not a raise), which marked the task
+    'completed' and ticked the progress bar — so a total failure rendered as
+    '16/17 done'. Peers must instead propagate the fatal so the batch stops
+    fast and the bar only ever counts genuinely-completed work.
+    """
+
+    async def test_fatal_flag_aborts_before_calling_llm(self, client_and_mock):
+        """If the fatal flag is already set, generate() must not fire a request.
+
+        Catches tasks that were queued behind the discovery lock / semaphore
+        when a sibling died — they should bail out before wasting an API call.
+        """
+        client, mock_call = client_and_mock
+        client._fatal_error_occurred = True
+        mock_call.return_value = _fake_response()  # would succeed if ever called
+
+        with pytest.raises(LLMClientError):
+            await client.generate([{"role": "user", "content": "hi"}])
+
+        mock_call.assert_not_called()
+
+    async def test_inflight_error_after_fatal_propagates_as_fatal(self, client_and_mock):
+        """An in-flight error arriving after the fatal flag flips must raise
+        LLMClientError — NOT be reclassified into a per-item ParsingError value.
+
+        ParsingError is a sibling of LLMClientError, so `pytest.raises(
+        LLMClientError)` fails on the old (buggy) SKIP-to-value path and passes
+        only once the post-fatal guard propagates the abort.
+        """
+        client, mock_call = client_and_mock
+
+        def _flag_then_raise(*args, **kwargs):
+            # Simulate a sibling task flipping the fatal flag mid-flight, then
+            # this task's own (otherwise per-item) error arriving afterward.
+            client._fatal_error_occurred = True
+            raise BadRequestError(
+                message="some generic bad request",
+                response=_fake_httpx_response(400),
+                body={"error": "generic"},
+            )
+
+        mock_call.side_effect = _flag_then_raise
+
+        with pytest.raises(LLMClientError):
+            await client.generate([{"role": "user", "content": "hi"}])
+
+    async def test_fatal_batch_does_not_advance_progress_bar(self, client_and_mock):
+        """A wholly-fatal batch must not tick the progress bar for any task.
+
+        Every task fails with the same fatal auth error. The batch must raise
+        and the bar's update() must never be called — total failure should
+        not look like partial success.
+        """
+        client, mock_call = client_and_mock
+        mock_call.side_effect = AuthenticationError(
+            message="bad key",
+            response=_fake_httpx_response(401),
+            body=None,
+        )
+
+        with patch("contextchecker.llmclient.tqdm") as mock_tqdm:
+            pbar = MagicMock()
+            mock_tqdm.return_value = pbar
+
+            with pytest.raises(LLMClientError):
+                await client.generate_batch(_make_tasks(5))
+
+            pbar.update.assert_not_called()
