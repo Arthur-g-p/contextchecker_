@@ -99,6 +99,24 @@ Only applies in joint mode by default. Single mode has no budget
 unless the user explicitly sets --max-words."""
 
 
+# ── Console formatting ───────────────────────────────────────────────────────
+
+SECTION_WIDTH: int = 60
+"""Column width for console section banners (── LABEL ───…)."""
+
+
+def section_rule(label: str, width: int = SECTION_WIDTH) -> str:
+    """Render a fixed-width section banner: ``── LABEL ───…`` padded to `width`.
+
+    Centralizes the divider so every phase/result banner lines up regardless of
+    label length.
+    """
+    prefix = f"── {label} "
+    if len(prefix) >= width:
+        return prefix
+    return prefix + "─" * (width - len(prefix))
+
+
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
 PROMPT_PATH: Path = Path(__file__).parent / "prompt_map.json"

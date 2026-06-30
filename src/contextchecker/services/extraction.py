@@ -127,7 +127,7 @@ class ExtractionService(BaseService):
         payloads = [ExtractionPayload(text=item["response"]) for item in pending]
 
         # Execute — fatal errors (auth, connection) propagate to CLI
-        logger.info("── Extraction ────────────────────────────────────────")
+        logger.info(settings.section_rule("Extraction"))
         batch_results = await self._extractor.extract_batch(payloads)
         phase_stats = self._extractor.last_stats
 
@@ -251,7 +251,7 @@ class ExtractionService(BaseService):
     ) -> None:
         """Print the full results block: API summary, BL results, tokens, done line."""
         logger.info("")
-        logger.info("── EXTRACTOR RESULTS ────────────────────────────────────────")
+        logger.info(settings.section_rule("EXTRACTOR RESULTS"))
         logger.info("")
         log_api_parsing(pending_count, phase_stats)
         worker_empty = phase_stats.empty if phase_stats else 0

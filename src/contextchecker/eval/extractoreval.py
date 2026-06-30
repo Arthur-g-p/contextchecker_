@@ -427,7 +427,7 @@ class ExtractorEvaluator:
 
         Uses checker_prompt_EVAL_JOINT with {{response}} context.
         """
-        logger.info("── Matching (LLM 2-pass) ─────────────────────────────────────")
+        logger.info(settings.section_rule("Matching (LLM 2-pass)"))
 
         # Build a CheckingService with the eval prompt
         service = CheckingService(
@@ -759,9 +759,7 @@ class ExtractorEvaluator:
     def _log_eval_results(self, result: ExtractorEvalResult) -> None:
         """Print ── EXTRACTOR EVAL ── section: P/R/F1, stats, abstentions."""
         logger.info("")
-        logger.info(
-            "── EXTRACTOR EVAL ──────────────────────────────────────────"
-        )
+        logger.info(settings.section_rule("EXTRACTOR EVAL"))
         logger.info("")
 
         # ── Matching quality

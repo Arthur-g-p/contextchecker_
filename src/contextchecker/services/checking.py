@@ -199,7 +199,7 @@ class CheckingService(BaseService):
 
         # Execute
         mode = "joint" if self.joint else "single"
-        logger.info("── Checking (%s) ─────────────────────────────────────", mode)
+        logger.info(settings.section_rule(f"Checking ({mode})"))
 
         if self.joint:
             verdicts_map = await self._execute_joint(pending)
@@ -605,7 +605,7 @@ class CheckingService(BaseService):
         phase_stats = self._checker.last_stats
 
         logger.info("")
-        logger.info("── CHECKER RESULTS ──────────────────────────────────────────")
+        logger.info(settings.section_rule("CHECKER RESULTS"))
         logger.info("")
         if phase_stats:
             log_api_parsing(phase_stats.first_pass_count, phase_stats)

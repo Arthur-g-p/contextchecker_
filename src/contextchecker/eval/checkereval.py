@@ -392,9 +392,7 @@ class CheckerEvaluator:
     ) -> None:
         """Print ── CHECKER EVAL ── section: accuracy, report, matrix."""
         logger.info("")
-        logger.info(
-            "── CHECKER EVAL ──────────────────────────────────────────"
-        )
+        logger.info(settings.section_rule("CHECKER EVAL"))
         logger.info("")
 
         # ── Accuracy

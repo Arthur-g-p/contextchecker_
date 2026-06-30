@@ -225,7 +225,7 @@ def log_token_stats() -> None:
     stats = GLOBAL_STATS.snapshot()
     phases = stats.get("phases", {})
 
-    logger.info("── Execution Stats ────────────────────────────────")
+    logger.info(settings.section_rule("Execution Stats"))
     logger.info("")
     logger.info(" 📊 Tokens")
 

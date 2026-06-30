@@ -100,7 +100,7 @@ class AtomizationService(BaseService):
         payloads = self._build_payloads(pending)
 
         # Execute — fatal errors (auth, connection) propagate to CLI
-        logger.info("── Atomization ───────────────────────────────────────")
+        logger.info(settings.section_rule("Atomization"))
         batch_results = await self._atomizer.atomize_batch(payloads)
         phase_stats = self._atomizer.last_stats
 
@@ -391,7 +391,7 @@ class AtomizationService(BaseService):
     ) -> None:
         """Print the full results block."""
         logger.info("")
-        logger.info("── ATOMIZER RESULTS ─────────────────────────────────────────")
+        logger.info(settings.section_rule("ATOMIZER RESULTS"))
         logger.info("")
         log_api_parsing(total_triplets, phase_stats)
         self._log_bl_results(total_triplets, phase_stats)
