@@ -11,7 +11,7 @@ Input (list[dict])
   │
   ├─ _canonicalize_keys()  →  Normalizes key aliases in-place ('context' → 'reference')
   ├─ _validate()           →  Keeps valid items, normalizes triplets, runs context checks
-  │   ├─ _normalize_triplets()     → Normalizes legacy triplet arrays to canonical dicts
+  │   ├─ canonicalize_triplets()  → Normalizes legacy triplet arrays to canonical dicts (shared util)
   │   └─ _warn_oversized_references() → Advisory warning if reference exceeds context budget
   ├─ _filter()             →  Splits valid items into: pending / empty claims / already-checked
   ├─ Execution             →  Delegates to the Checker worker (async + concurrency + progress bar)
@@ -87,7 +87,7 @@ Different datasets use different key naming conventions for the same logical con
 ### Step 1: Validation & Normalization (`_validate`)
 Ensures that all items contain the necessary data to perform entailment checking.
 1. **Required Keys**: An item must have a `reference` key (the reference passage) and the specified `{extractor_model}_response_kg` key. Items missing either of these are dropped with a warning.
-2. **Triplet Normalization (`_normalize_triplets`)**: Supports converting legacy flat-triplet arrays to canonical dictionaries in-place.
+2. **Triplet Canonicalization (`canonicalize_triplets`)**: Supports converting legacy flat-triplet arrays to canonical dictionaries in-place using the shared `utils.py` function.
    * **Legacy format**: `{"triplet": ["renewal of nexus card", "takes", "anywhere from a couple of weeks to about 3 months"], "human_label": "Entailment"}`
    * **Canonical format**: `{"subject": "renewal of nexus card", "predicate": "takes", "object": "anywhere from a couple of weeks to about 3 months", "human_label": "Entailment"}`
 3. **Global Gate**: At least one item in the batch must survive validation and contain non-empty claims. If zero items survive, `InvalidInputError` is raised (hard stop).

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
+from contextchecker.utils import canonicalize_triplets, find_duplicate_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
@@ -115,13 +116,16 @@ class ExtractorEvaluator:
                 f"--gt-key so the two do not overlap."
             )
 
-        # Extraction service — always needed (quiet, evaluator owns logging)
+        # Extraction service — always needed (quiet, evaluator owns logging).
+        # dedup=False: the eval measures duplicates as an independent dimension,
+        # so predictions must stay raw — we never evaluate on deduplicated data.
         self._extraction_service = ExtractionService(
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
             max_retries=extractor_max_retries,
             quiet=True,
+            dedup=False,
         )
 
         # LLM config — CheckingService built on demand in _match_all_llm
@@ -171,6 +175,10 @@ class ExtractorEvaluator:
         # Step 1: Validate — fail-fast on bad input
         valid = self._validate(data)
 
+        for item in valid:
+            if item.get(self._gt_key):
+                canonicalize_triplets(item[self._gt_key])
+
         # Pre-extraction logging
         self._log_data_pre(len(data), len(data) - len(valid), len(valid))
         self._log_eval_config()
@@ -178,9 +186,17 @@ class ExtractorEvaluator:
         # Step 2: Run extraction (quiet — evaluator owns the logging)
         await self._extraction_service.run(valid)
 
+        for item in valid:
+            if item.get(self._pred_key):
+                canonicalize_triplets(item[self._pred_key])
+
         # Step 2b: Atomicity axis (optional, orthogonal). Measured on a COPY so
         # coverage and the output file keep the raw predictions untouched.
         atomicity = await self._measure_atomicity(valid)
+
+        # Step 2c: Duplicate-claims axis (orthogonal, read-only). The eval never
+        # evaluates on deduplicated data — it only reports the duplicates.
+        duplicates = self._measure_duplicates(valid)
 
         # Step 3: Classify into buckets (now that pred exists)
         buckets = self._classify(valid)
@@ -203,7 +219,7 @@ class ExtractorEvaluator:
             item_results = []
 
         # Step 6: Build result (encapsulated)
-        result = self._build_result(item_results, buckets, len(data), atomicity)
+        result = self._build_result(item_results, buckets, len(data), atomicity, duplicates)
 
         # Step 7: Build disagreement list
         disagreements = self._build_disagreements(buckets, item_results)
@@ -254,21 +270,57 @@ class ExtractorEvaluator:
                     atomic_units += len(d.get("children", []))
                 elif dec == "failed":
                     failed += 1
-                    atomic_units += 1
                 else:
                     keep += 1
                     atomic_units += 1
 
         extracted = keep + split + failed
-        rate = keep / (keep + split) if (keep + split) else 1.0
-        density = atomic_units / extracted if extracted else 0.0
+        evaluated = keep + split
+        rate = keep / evaluated if evaluated else 1.0
+        density = atomic_units / evaluated if evaluated else 0.0
         return {
             "extracted_claims": extracted,
+            "evaluated_claims": evaluated,
             "atomic_units": atomic_units,
             "non_atomic": split,
             "failed": failed,
             "atomicity_rate": round(rate, 4),
             "information_density": round(density, 2),
+        }
+
+    # ── Duplicate-claims axis (orthogonal, read-only) ────────────
+
+    def _measure_duplicates(self, valid: list[dict]) -> dict | None:
+        """Count exact (syntactic) duplicate claims in the predictions.
+
+        Fully independent of coverage: read-only, never mutates predictions, the
+        eval is never run on deduplicated data. The duplicate triplets are listed
+        per item so they land in the results file. Returns None when no item
+        carries predictions.
+        """
+        if not any(item.get(self._pred_key) for item in valid):
+            return None
+
+        predicted = duplicate = 0
+        items_out: list[dict] = []
+        for item in valid:
+            preds = item.get(self._pred_key) or []
+            predicted += len(preds)
+            dups = find_duplicate_triplets(preds)
+            if dups:
+                duplicate += len(dups)
+                items_out.append({
+                    "id": item.get("id"),
+                    "duplicates": [self._triplet_to_str(t) for t in dups],
+                })
+
+        rate = duplicate / predicted if predicted else 0.0
+        return {
+            "predicted_claims": predicted,
+            "unique_claims": predicted - duplicate,
+            "duplicate_claims": duplicate,
+            "duplicate_rate": round(rate, 4),
+            "items": items_out,
         }
 
     # ── Validation (fail-fast) ───────────────────────────────────
@@ -335,6 +387,7 @@ class ExtractorEvaluator:
         buckets: _ItemBucket,
         total_items: int,
         atomicity: dict | None = None,
+        duplicates: dict | None = None,
     ) -> ExtractorEvalResult:
         """Aggregate the two coverage counts + abstention penalties, compute P/R/F1.
 
@@ -411,6 +464,7 @@ class ExtractorEvaluator:
             correct_abstention=len(buckets.correct_abstention),
             method=self._method,
             atomicity=atomicity,
+            duplicates=duplicates,
         )
 
     # ── LLM matching (2-pass) ────────────────────────────────────
@@ -572,9 +626,9 @@ class ExtractorEvaluator:
                 # Claims = triplets to check, under the service's kg_key
                 service_kg_key: [
                     {
-                        "subject": t.get("subject", t.get("triplet", [""])[0] if "triplet" in t else ""),
-                        "predicate": t.get("predicate", t.get("triplet", ["", ""])[1] if "triplet" in t else ""),
-                        "object": t.get("object", t.get("triplet", ["", "", ""])[2] if "triplet" in t else ""),
+                        "subject": t["subject"],
+                        "predicate": t["predicate"],
+                        "object": t["object"],
                     }
                     for t in claim_triplets
                 ],
@@ -592,16 +646,8 @@ class ExtractorEvaluator:
 
     @staticmethod
     def _triplet_to_str(triplet: dict) -> str:
-        """Convert a triplet dict to a natural-language string.
-
-        Supports both legacy (triplet: [s,p,o]) and canonical formats.
-        """
-        if "subject" in triplet:
-            return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
-        t = triplet.get("triplet", [])
-        if t and len(t) >= 3:
-            return f"{t[0]} {t[1]} {t[2]}"
-        return str(triplet)
+        """Convert a triplet dict to a natural-language string."""
+        return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
 
     # ── Disagreement collection ──────────────────────────────────
 
@@ -816,17 +862,32 @@ class ExtractorEvaluator:
         if a:
             logger.info("")
             logger.info(" 🧬 Atomicity")
+            if a.get("failed"):
+                logger.info("    ⚠️  %d triplets failed atomization (omitted from stats)", a["failed"])
             logger.info(
-                "    Extracted:   %d triplets → %d atomic units",
-                a["extracted_claims"], a["atomic_units"],
+                "    Evaluated:   %d triplets → %d atomic units",
+                a.get("evaluated_claims", a["extracted_claims"] - a.get("failed", 0)), 
+                a["atomic_units"],
             )
             logger.info(
                 "    Non-atomic:  %d  (atomicity %.1f%%)",
                 a["non_atomic"], a["atomicity_rate"] * 100,
             )
             logger.info("    Density:     %.2f facts/triplet", a["information_density"])
-            if a.get("failed"):
-                logger.info("    ⚠️  %d triplets failed atomization", a["failed"])
+
+        # ── Duplicates (orthogonal to coverage; read-only, never deduped here)
+        d = result.duplicates
+        if d:
+            logger.info("")
+            logger.info(" 🔁 Duplicates")
+            logger.info(
+                "    Found %d syntactic duplicates  (%.1f%% of %d predicted)",
+                d["duplicate_claims"], d["duplicate_rate"] * 100, d["predicted_claims"],
+            )
+            for entry in d["items"]:
+                logger.info("    item %s:", entry["id"])
+                for triplet_str in entry["duplicates"]:
+                    logger.info("      • %s", triplet_str)
 
     def _log_done(self, result: ExtractorEvalResult) -> None:
         """Print ✅ Done summary line."""

@@ -9,8 +9,10 @@ The Extractor Evaluator assesses the quality of knowledge graph extraction by ru
 ```
 Input (list[dict])
   │
-  ├─ _validate()  →  Drops invalid items (missing 'response'). Keeps items missing GT (for wrongful answer checks).
+  ├─ _canonicalize_keys() →  Normalizes key aliases in-place ('context' → 'reference')
+  ├─ _validate()  →  Drops invalid items. Canonicalizes existing Ground Truth triplets.
   ├─ extract      →  Runs `ExtractionService` (in quiet mode) to generate predicted triplets.
+  ├─ _canonicalize_preds() → Canonicalizes the newly generated predicted triplets.
   ├─ _classify()  →  Sorts items into buckets: to_compare, correct_abstention, wrongful_abstention, wrongful_answer.
   ├─ Match (LLM)  →  2-pass batched semantic equivalence check for items in `to_compare`.
   └─ Metrics      →  Computes precision, recall, F1, and tracks abstention penalties.
@@ -18,14 +20,15 @@ Input (list[dict])
 
 ## Step 1: Validation (`_validate`)
 
-Ensures the data has the minimum required structure before attempting extraction.
+Ensures the data has the minimum required structure before attempting extraction, and normalizes inputs to canonical format.
 
 - Keeps: Items with a `response`. (Missing GT is allowed and acts as a trap for hallucinated answers).
 - Drops: Items missing `response`.
+- Canonicalizes: Key aliases (`context` -> `reference`) and any existing Ground Truth triplets (`{"triplet": [s,p,o]}` -> `{"subject", "predicate", "object"}`).
 
 ## Step 2: Extraction
 
-Delegates to `ExtractionService` to extract triplets live using the configured `extractor_model`. Runs silently without printing progress bars to avoid cluttering the evaluator's output.
+Delegates to `ExtractionService` to extract triplets live using the configured `extractor_model`. Runs silently without printing progress bars to avoid cluttering the evaluator's output. After extraction, any newly predicted triplets are also forced through `canonicalize_triplets` to guarantee a uniform format for the downstream LLM judge.
 
 ## Step 3: Classification (`_classify`)
 

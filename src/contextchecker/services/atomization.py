@@ -16,6 +16,7 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.services.base import BaseService
 from contextchecker.models import AtomizationPayload
+from contextchecker.utils import canonicalize_triplets, triplet_key
 from contextchecker.workers.atomizer import Atomizer, AtomicTriplet, AtomizationDecision
 from contextchecker.stats import PhaseStats, log_api_parsing, log_token_stats
 
@@ -100,7 +101,8 @@ class AtomizationService(BaseService):
         payloads = self._build_payloads(pending)
 
         # Execute — fatal errors (auth, connection) propagate to CLI
-        logger.info(settings.section_rule("Atomization"))
+        if not self.quiet:
+            logger.info("── Atomization ───────────────────────────────────────")
         batch_results = await self._atomizer.atomize_batch(payloads)
         phase_stats = self._atomizer.last_stats
 
@@ -152,6 +154,9 @@ class AtomizationService(BaseService):
             raise InvalidInputError(
                 f"No items contain a non-empty '{self._source_kg_key}' key with a 'response'."
             )
+
+        for item in valid:
+            canonicalize_triplets(item[self._source_kg_key])
         return valid
 
     def _filter(self, valid: list[dict]) -> tuple[list[dict], int]:
@@ -179,12 +184,7 @@ class AtomizationService(BaseService):
     def _build_payloads(
         self, pending: list[dict],
     ) -> list[AtomizationPayload]:
-        """Step 3: Build structured payloads — one per triplet.
-
-        Extracts S/P/O from both legacy [s,p,o] and canonical
-        {subject, predicate, object} formats. Passes response text
-        as context.
-        """
+        """Step 3: Build structured payloads — one per triplet."""
         payloads = []
         for item_idx, item in enumerate(pending):
             triplets = item[self._source_kg_key]
@@ -203,17 +203,8 @@ class AtomizationService(BaseService):
 
     @staticmethod
     def _extract_spo(triplet: dict) -> tuple[str, str, str]:
-        """Extract (subject, predicate, object) from a triplet dict.
-
-        Supports both canonical {subject, predicate, object} and
-        legacy {triplet: [s, p, o]} formats.
-        """
-        if "subject" in triplet:
-            return triplet["subject"], triplet["predicate"], triplet["object"]
-        t = triplet.get("triplet", [])
-        if t and len(t) >= 3:
-            return str(t[0]), str(t[1]), str(t[2])
-        return str(triplet), "", ""
+        """Extract (subject, predicate, object) from a canonical triplet dict."""
+        return triplet["subject"], triplet["predicate"], triplet["object"]
 
     def _serialize(
         self,
@@ -298,7 +289,7 @@ class AtomizationService(BaseService):
             # Superficial (string-level) collisions in this item's output.
             counts: dict[tuple, int] = {}
             for t in new_triplets:
-                k = self._triplet_key(t)
+                k = triplet_key(t, case_insensitive=True)
                 counts[k] = counts.get(k, 0) + 1
             collisions = [
                 {"triplet": list(k), "count": n} for k, n in counts.items() if n > 1
@@ -318,28 +309,11 @@ class AtomizationService(BaseService):
             item[self._source_kg_key] = new_triplets
 
     @staticmethod
-    def _triplet_key(t: dict) -> tuple:
-        """Normalized (s,p,o) key for duplicate detection (legacy or canonical)."""
-        if "triplet" in t:
-            return tuple(str(x).strip().lower() for x in t["triplet"])
-        return tuple(
-            str(t.get(k, "")).strip().lower() for k in ("subject", "predicate", "object")
-        )
-
-    @staticmethod
     def _apply_spo(target: dict, child: AtomicTriplet) -> None:
-        """Write S/P/O from an AtomicTriplet into a target dict.
-
-        Handles both legacy {triplet: [s,p,o]} and canonical
-        {subject, predicate, object} formats. Updates whichever
-        format the original used.
-        """
-        if "triplet" in target:
-            target["triplet"] = [child.subject, child.predicate, child.object]
-        else:
-            target["subject"] = child.subject
-            target["predicate"] = child.predicate
-            target["object"] = child.object
+        """Write S/P/O from an AtomicTriplet into a canonical target dict."""
+        target["subject"] = child.subject
+        target["predicate"] = child.predicate
+        target["object"] = child.object
 
     # ── Logging ─────────────────────────────────────────────────
 
@@ -391,7 +365,7 @@ class AtomizationService(BaseService):
     ) -> None:
         """Print the full results block."""
         logger.info("")
-        logger.info(settings.section_rule("ATOMIZER RESULTS"))
+        logger.info("── ATOMIZER RESULTS ─────────────────────────────────────────")
         logger.info("")
         log_api_parsing(total_triplets, phase_stats)
         self._log_bl_results(total_triplets, phase_stats)

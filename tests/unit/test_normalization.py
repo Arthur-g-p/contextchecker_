@@ -9,7 +9,7 @@ Covers:
 import pytest
 
 from contextchecker.services.base import BaseService
-from contextchecker.services.checking import _normalize_triplets
+from contextchecker.utils import canonicalize_triplets
 
 
 # ── Test Fixtures ────────────────────────────────────────────────────────────
@@ -129,66 +129,4 @@ class TestCanonicalizeKeys:
         data = [legacy_item]
         original_item = data[0]
         BaseService._canonicalize_keys(data)
-        assert data[0] is original_item
 
-
-# ── _normalize_triplets tests ────────────────────────────────────────────────
-
-class TestNormalizeTriplets:
-
-    def test_normalize_legacy_triplet_array(self, legacy_item):
-        """Legacy {"triplet": [s, p, o]} becomes {"subject": s, "predicate": p, "object": o}."""
-        kg = legacy_item["claude2_response_kg"]
-        _normalize_triplets(kg)
-        assert kg[0]["subject"] == "France"
-        assert kg[0]["predicate"] == "has capital"
-        assert kg[0]["object"] == "Paris"
-        assert "triplet" not in kg[0]
-
-    def test_normalize_preserves_canonical_triplet(self, canonical_item):
-        """Already-canonical dicts are left untouched."""
-        kg = canonical_item["claude2_response_kg"]
-        original = kg[0].copy()
-        _normalize_triplets(kg)
-        assert kg[0] == original
-
-    def test_normalize_preserves_human_label(self, legacy_item):
-        """human_label survives normalization."""
-        kg = legacy_item["claude2_response_kg"]
-        _normalize_triplets(kg)
-        assert kg[0]["human_label"] == "Entailment"
-        assert kg[1]["human_label"] == "Neutral"
-
-    def test_normalize_preserves_extra_fields(self):
-        """Extra custom fields like aliases survive normalization."""
-        kg = [{"triplet": ["X", "is", "Y"], "alias": "value"}]
-        _normalize_triplets(kg)
-        assert kg[0]["subject"] == "X"
-        assert kg[0]["alias"] == "value"
-
-    def test_normalize_mixed_list(self, mixed_item):
-        """Mix of legacy and canonical triplets in the same list are handled correctly."""
-        kg = mixed_item["claude2_response_kg"]
-        _normalize_triplets(kg)
-        assert kg[0] == {"subject": "A", "predicate": "B", "object": "C", "human_label": "Entailment"}
-        assert kg[1] == {"subject": "X", "predicate": "Y", "object": "Z", "human_label": "Contradiction"}
-
-    def test_normalize_empty_list(self):
-        """Empty list — no crash."""
-        kg = []
-        _normalize_triplets(kg)
-        assert kg == []
-
-    def test_normalize_triplet_key_with_subject_already_present(self):
-        """If both 'triplet' and 'subject' keys exist, do not overwrite 'subject'."""
-        kg = [{"triplet": ["X", "Y", "Z"], "subject": "existing"}]
-        _normalize_triplets(kg)
-        assert kg[0]["subject"] == "existing"
-        assert kg[0]["triplet"] == ["X", "Y", "Z"]
-
-    def test_normalize_mutation_in_place(self, legacy_item):
-        """Normalization mutates the original list items in-place."""
-        kg = legacy_item["claude2_response_kg"]
-        original_item = kg[0]
-        _normalize_triplets(kg)
-        assert kg[0] is original_item

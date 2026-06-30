@@ -1,15 +1,16 @@
 """
-Unit tests for ExtractionService._validate() and _filter().
+Unit tests for ExtractionService._validate(), _filter(), and _serialize() dedup.
 
-Tests the service's input validation and skip logic directly.
-The Extractor worker is mocked out at construction — these tests
-never touch the LLM.
+Tests the service's input validation, skip logic, and the destructive
+dedup pass directly. The Extractor worker is mocked out at construction —
+these tests never touch the LLM.
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
 
 from contextchecker.services.extraction import ExtractionService
+from contextchecker.workers.extractor import Triplet
 from contextchecker.exceptions import InvalidInputError, FilterError
 
 
@@ -28,9 +29,20 @@ def _patch_api_key(monkeypatch):
 
 @pytest.fixture
 def service():
-    """ExtractionService with the Extractor worker stubbed out."""
+    """ExtractionService with the Extractor worker stubbed out (dedup on)."""
     with patch("contextchecker.services.extraction.Extractor"):
         return ExtractionService(model=MODEL)
+
+
+@pytest.fixture
+def service_no_dedup():
+    """ExtractionService with dedup disabled (the evaluator's path)."""
+    with patch("contextchecker.services.extraction.Extractor"):
+        return ExtractionService(model=MODEL, dedup=False)
+
+
+def _trip(s, p, o):
+    return Triplet(subject=s, predicate=p, object=o)
 
 
 # ── Validation fixtures ──────────────────────────────────────────────────────
@@ -177,3 +189,47 @@ class TestFilter:
         assert len(pending) == 0
         assert len(abstained) == 2
         assert skipped == 0
+
+
+# ── Serialize / dedup tests ──────────────────────────────────────────────────
+
+class TestSerializeDedup:
+
+    def test_default_is_dedup_on(self, service):
+        assert service._dedup is True
+
+    def test_dedup_on_removes_exact_duplicates(self, service):
+        items = [{}]
+        results = [[_trip("a", "b", "c"), _trip("a", "b", "c"), _trip("d", "e", "f")]]
+        removed = service._serialize(items, results)
+        assert removed == 1
+        assert len(items[0][KG_KEY]) == 2
+
+    def test_dedup_on_keeps_first_occurrence(self, service):
+        items = [{}]
+        results = [[_trip("a", "b", "c"), _trip("a", "b", "c")]]
+        service._serialize(items, results)
+        assert items[0][KG_KEY] == [{"subject": "a", "predicate": "b", "object": "c"}]
+
+    def test_dedup_off_keeps_duplicates(self, service_no_dedup):
+        items = [{}]
+        results = [[_trip("a", "b", "c"), _trip("a", "b", "c")]]
+        removed = service_no_dedup._serialize(items, results)
+        assert removed == 0
+        assert len(items[0][KG_KEY]) == 2
+
+    def test_removed_count_aggregates_across_items(self, service):
+        items = [{}, {}]
+        results = [
+            [_trip("a", "b", "c"), _trip("a", "b", "c")],
+            [_trip("x", "y", "z"), _trip("x", "y", "z"), _trip("x", "y", "z")],
+        ]
+        removed = service._serialize(items, results)
+        assert removed == 3
+
+    def test_no_duplicates_removes_nothing(self, service):
+        items = [{}]
+        results = [[_trip("a", "b", "c"), _trip("d", "e", "f")]]
+        removed = service._serialize(items, results)
+        assert removed == 0
+        assert len(items[0][KG_KEY]) == 2

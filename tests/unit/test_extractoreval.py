@@ -216,13 +216,52 @@ class TestTripletToStr:
         t = {"subject": "dogs", "predicate": "are", "object": "animals"}
         assert ExtractorEvaluator._triplet_to_str(t) == "dogs are animals"
 
-    def test_legacy_format(self):
-        t = {"triplet": ["dogs", "are", "animals"]}
-        assert ExtractorEvaluator._triplet_to_str(t) == "dogs are animals"
+    def test_legacy_dict_raises(self):
+        # Triplets are canonicalized at ingestion; an un-canonicalized legacy
+        # dict reaching this method is a contract violation, not a fallback.
+        with pytest.raises(KeyError):
+            ExtractorEvaluator._triplet_to_str({"triplet": ["dogs", "are", "animals"]})
 
-    def test_canonical_preferred_over_legacy(self):
-        t = {"subject": "A", "predicate": "B", "object": "C", "triplet": ["X", "Y", "Z"]}
-        assert ExtractorEvaluator._triplet_to_str(t) == "A B C"
+
+# ── Test _measure_duplicates (orthogonal, read-only) ──────────────────────────
+
+class TestMeasureDuplicates:
+    def test_none_when_no_predictions(self):
+        ev = _evaluator()
+        valid = [_make_item(gt_triplets=[_make_canonical_triplet("a", "b", "c")])]
+        assert ev._measure_duplicates(valid) is None
+
+    def test_counts_and_lists_duplicates(self):
+        ev = _evaluator()
+        valid = [_make_item(item_id="x", pred_triplets=[
+            _make_canonical_triplet("a", "b", "c"),
+            _make_canonical_triplet("a", "b", "c"),
+            _make_canonical_triplet("d", "e", "f"),
+        ])]
+        d = ev._measure_duplicates(valid)
+        assert d["predicted_claims"] == 3
+        assert d["duplicate_claims"] == 1
+        assert d["unique_claims"] == 2
+        assert d["duplicate_rate"] == round(1 / 3, 4)
+        assert d["items"][0]["id"] == "x"
+        assert d["items"][0]["duplicates"] == ["a b c"]
+
+    def test_no_duplicates_gives_empty_listing(self):
+        ev = _evaluator()
+        valid = [_make_item(pred_triplets=[
+            _make_canonical_triplet("a", "b", "c"),
+            _make_canonical_triplet("d", "e", "f"),
+        ])]
+        d = ev._measure_duplicates(valid)
+        assert d["duplicate_claims"] == 0
+        assert d["items"] == []
+
+    def test_read_only_never_mutates_predictions(self):
+        ev = _evaluator()
+        preds = [_make_canonical_triplet("a", "b", "c"), _make_canonical_triplet("a", "b", "c")]
+        valid = [_make_item(pred_triplets=preds)]
+        ev._measure_duplicates(valid)
+        assert len(preds) == 2  # the eval never deduplicates its data
 
 
 # ── Test _build_result ───────────────────────────────────────────────────────
@@ -328,7 +367,7 @@ class TestBuildDisagreements:
         fp_detail = {"pred_triplet": {"subject": "x"}, "verdict": "no comparison made.", "reason": "No match"}
         buckets = _ItemBucket(
             to_compare=[_make_item(
-                gt_triplets=[_make_triplet("a", "b", "c")],
+                gt_triplets=[_make_canonical_triplet("a", "b", "c")],
                 pred_triplets=[_make_canonical_triplet("x", "y", "z")],
             )],
             wrongful_answer=[],
@@ -365,7 +404,7 @@ class TestBuildDisagreements:
             to_compare=[],
             wrongful_answer=[],
             wrongful_abstention=[_make_item(
-                gt_triplets=[_make_triplet("a", "b", "c"), _make_triplet("d", "e", "f")],
+                gt_triplets=[_make_canonical_triplet("a", "b", "c"), _make_canonical_triplet("d", "e", "f")],
                 pred_triplets=None,
             )],
             correct_abstention=[],

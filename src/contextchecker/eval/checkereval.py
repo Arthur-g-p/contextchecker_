@@ -20,6 +20,7 @@ from contextchecker.eval.metrics import (
     confusion_matrix,
 )
 from contextchecker.models import CheckerEvalResult
+from contextchecker.utils import canonicalize_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 
@@ -94,6 +95,10 @@ class CheckerEvaluator:
         """
         # Step 0: Canonicalize key aliases (context→reference, query→question)
         BaseService._canonicalize_keys(data)
+
+        for item in data:
+            if item.get(self._gt_key):
+                canonicalize_triplets(item[self._gt_key])
 
         # Steps 1-2: Validate GT data + extract human labels
         evaluable, gt_labels_map, skip_info = self._prepare_gt(data)
@@ -174,14 +179,8 @@ class CheckerEvaluator:
             # 3. Extract triplets with human_label — track by index
             labels: dict[int, str] = {}
             for j, t in enumerate(item[self._gt_key]):
-                # Support both legacy (triplet: [s,p,o]) and canonical formats
-                triplet = t.get("triplet", [])
-                if not triplet and "subject" in t:
-                    triplet = [t["subject"], t["predicate"], t["object"]]
-
                 label = t.get("human_label")
-
-                if triplet and len(triplet) >= 3 and label:
+                if label:
                     labels[j] = label
 
             if not labels:

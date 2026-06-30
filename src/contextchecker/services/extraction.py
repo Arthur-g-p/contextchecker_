@@ -19,6 +19,7 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.services.base import BaseService
 from contextchecker.models import ExtractionPayload
+from contextchecker.utils import deduplicate_triplets
 from contextchecker.workers.extractor import Extractor, Triplet
 from contextchecker.stats import PhaseStats, log_api_parsing, log_token_stats
 
@@ -78,6 +79,7 @@ class ExtractionService(BaseService):
         concurrency: int = 10,
         max_retries: int | None = None,
         quiet: bool = False,
+        dedup: bool = True,
     ):
         # Fail-fast: validate config before creating any workers.
         api_key = self._require_api_key(
@@ -96,6 +98,7 @@ class ExtractionService(BaseService):
         )
 
         self.quiet = quiet
+        self._dedup = dedup
     # ── Public API ───────────────────────────────────────────────
 
     async def run(self, data: list[dict]) -> list[dict]:
@@ -131,8 +134,8 @@ class ExtractionService(BaseService):
         batch_results = await self._extractor.extract_batch(payloads)
         phase_stats = self._extractor.last_stats
 
-        # Serialize results back into dicts
-        self._serialize(pending, batch_results)
+        # Serialize results back into dicts (dedups when enabled)
+        dups_removed = self._serialize(pending, batch_results)
 
         # Abstained items get empty triplets
         for item in abstained:
@@ -148,6 +151,7 @@ class ExtractionService(BaseService):
             failed=phase_stats.total_errors,
             skipped=skipped,
             phase_stats=phase_stats,
+            dups_removed=dups_removed,
         )
 
         return data
@@ -193,10 +197,22 @@ class ExtractionService(BaseService):
         self,
         items: list[dict],
         results: list[list[Triplet]],
-    ) -> None:
-        """Step 6: Write triplets back into the source dicts."""
+    ) -> int:
+        """Step 6: Write triplets back into the source dicts.
+
+        When ``dedup`` is enabled (default), exact (s, p, o) duplicates are
+        dropped before writing — a loss-free cleanup of the extractor's output.
+        Returns the total number of duplicate triplets removed.
+        """
+        dups_removed = 0
         for item, triplets in zip(items, results):
-            item[self._kg_key] = [t.model_dump() for t in triplets]
+            claims = [t.model_dump() for t in triplets]
+            if self._dedup:
+                unique = deduplicate_triplets(claims)
+                dups_removed += len(claims) - len(unique)
+                claims = unique
+            item[self._kg_key] = claims
+        return dups_removed
 
     # ── Logging ─────────────────────────────────────────────────
 
@@ -248,6 +264,7 @@ class ExtractionService(BaseService):
         failed: int,
         skipped: int,
         phase_stats: PhaseStats,
+        dups_removed: int = 0,
     ) -> None:
         """Print the full results block: API summary, BL results, tokens, done line."""
         logger.info("")
@@ -256,35 +273,49 @@ class ExtractionService(BaseService):
         log_api_parsing(pending_count, phase_stats)
         worker_empty = phase_stats.empty if phase_stats else 0
         total_output = successful + worker_empty + abstained_count
-        self._log_bl_results(total_output, total_claims, successful, worker_empty + abstained_count)
+        # Claims actually stored = raw extracted minus duplicates dropped.
+        unique_claims = total_claims - dups_removed
+        self._log_bl_results(
+            total_output, unique_claims, successful,
+            worker_empty + abstained_count, dups_removed,
+        )
         log_token_stats()
-        self._log_done(total, total_claims, abstained_count, skipped)
+        self._log_done(total, unique_claims, abstained_count, skipped, dups_removed)
 
     def _log_bl_results(
-        self, valid_items: int, claims: int, with_claims: int, empty_count: int
+        self, valid_items: int, claims: int, with_claims: int, empty_count: int,
+        dups_removed: int = 0,
     ) -> None:
         """Print 📝 Extraction summary.
 
-        Shows items with output: how many generated claims vs empty.
+        Shows items with output: how many generated claims vs empty, and any
+        syntactic duplicates removed by the dedup pass.
         """
         logger.info(" 📝 Extraction:")
         logger.info("    %d items with output", valid_items)
-        has_empty = empty_count > 0
-        # Items with claims
-        prefix = "├─" if has_empty else "└─"
+        # Sub-lines after the 💎 line; the last one gets the └─ connector.
+        tail = []
+        if dups_removed > 0:
+            tail.append(("🔁", f"{dups_removed} syntactic duplicates removed"))
+        if empty_count > 0:
+            tail.append(("⚪", f"{empty_count} items → 0 claims (empty)"))
+        prefix = "├─" if tail else "└─"
         logger.info("     %s 💎 %d items → %d triplets", prefix, with_claims, claims)
-        # Empty items (abstentions / model returned 0 claims)
-        if has_empty:
-            logger.info("     └─ ⚪ %d items → 0 claims (empty)", empty_count)
+        for i, (icon, text) in enumerate(tail):
+            prefix = "└─" if i == len(tail) - 1 else "├─"
+            logger.info("     %s %s %s", prefix, icon, text)
         logger.info("")
 
     def _log_done(
-        self, total: int, claims: int, abstentions: int, skipped: int
+        self, total: int, claims: int, abstentions: int, skipped: int,
+        dups_removed: int = 0,
     ) -> None:
         """Print ✅ Done summary line."""
         if self.quiet:
             return
         parts = [f"{claims} claims"]
+        if dups_removed > 0:
+            parts.append(f"{dups_removed} dups removed")
         if abstentions > 0:
             parts.append(f"{abstentions} abstentions")
         if skipped > 0:

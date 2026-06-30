@@ -102,4 +102,7 @@ class ExtractorEvalResult:
     atomicity: dict | None = None          # {"extracted_claims", "atomic_units",
                                            #  "non_atomic", "failed", "atomicity_rate",
                                            #  "information_density"} or None if skipped
+    duplicates: dict | None = None         # {"predicted_claims", "unique_claims",
+                                           #  "duplicate_claims", "duplicate_rate",
+                                           #  "items": [{"id", "duplicates": [str]}]} or None
 

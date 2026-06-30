@@ -23,6 +23,7 @@ from contextchecker import settings
 from contextchecker.settings import DEFAULT_MAX_WORDS
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.models import CheckingPayload
+from contextchecker.utils import canonicalize_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.workers.checker import (
     Checker, Verdict, ClaimVerdict, _reference_word_count,
@@ -35,27 +36,6 @@ logger = settings.get_logger(__name__)
 # max_words, we reduce the chunk size. Word count is a proxy for
 # tokens since not all endpoints support tokenization.
 CONTEXT_BUDGET_RATIO = 0.75
-
-
-# ── Normalization helpers ────────────────────────────────────────────────────
-
-def _normalize_triplets(kg_list: list[dict]) -> None:
-    """Normalize triplet format in-place to canonical {subject, predicate, object}.
-
-    Handles the legacy format where triplets are stored as:
-        {"triplet": [subject, predicate, object], "human_label": "Entailment"}
-
-    Converts to:
-        {"subject": subject, "predicate": predicate, "object": object, "human_label": "Entailment"}
-
-    Already-canonical dicts (with 'subject' key) are left untouched.
-    """
-    for claim in kg_list:
-        if "triplet" in claim and "subject" not in claim:
-            t = claim.pop("triplet")
-            claim["subject"] = t[0]
-            claim["predicate"] = t[1]
-            claim["object"] = t[2]
 
 
 # ── Context budget helpers ───────────────────────────────────────────────────
@@ -295,10 +275,9 @@ class CheckingService(BaseService):
                 f"No items contain both '{self._kg_key}' and 'reference'."
             )
 
-        # Step 1.5: Normalize triplet format to canonical {subject, predicate, object}
         for item in valid:
             if item[self._kg_key]:
-                _normalize_triplets(item[self._kg_key])
+                canonicalize_triplets(item[self._kg_key])
 
         # Global gate: at least one item must have actual claims
         has_claims = any(len(item[self._kg_key]) > 0 for item in valid)
