@@ -98,15 +98,7 @@ class LLMClient:
         self._fatal_error_occurred = False
 
         # Reuse a strategy already discovered this process for the same endpoint+model.
-        _cached_idx = LLMClient._STRATEGY_CACHE.get((self.base_url, self.model))
-        if _cached_idx is not None:
-            self._strategy_index = _cached_idx
-            self._strategy_discovered = True
-            self._discovery_succeeded = True
-            logger.info(
-                "   🔒 Strategy cache hit — reusing '%s' for %s (skipping discovery)",
-                self.strategy.name, self.model,
-            )
+        self._try_adopt_cached_strategy()
 
         self._session_cache = {}
         self._new_cache_entries = 0
@@ -136,6 +128,29 @@ class LLMClient:
     def strategy(self) -> RetryStrategy:
         """Current retry strategy."""
         return RETRY_MATRIX[self._strategy_index]
+
+
+    def _try_adopt_cached_strategy(self) -> bool:
+        """Adopt a strategy already discovered this process for our (base_url, model).
+
+        Returns True if a cached strategy was adopted, else False. Safe to call
+        repeatedly: a sibling client may populate the cache *after* we were
+        constructed (e.g. an atomizer built at boot whose sibling extractor
+        discovers first), so we re-check at request time, not only in __init__.
+        """
+        if self._strategy_discovered:
+            return False
+        cached_idx = LLMClient._STRATEGY_CACHE.get((self.base_url, self.model))
+        if cached_idx is None:
+            return False
+        self._strategy_index = cached_idx
+        self._strategy_discovered = True
+        self._discovery_succeeded = True
+        logger.info(
+            "   🔒 Strategy cache hit — reusing '%s' for %s (skipping discovery)",
+            self.strategy.name, self.model,
+        )
+        return True
 
 
     def _next_strategy(self) -> bool:
@@ -331,6 +346,12 @@ class LLMClient:
         # ── Discovery: serialize the first request to walk the matrix alone ──
         # All other requests wait at the lock until discovery is done.
         discovering = False
+        # A sibling client for the same (base_url, model) may have discovered a
+        # strategy after we were constructed (e.g. an atomizer built at boot whose
+        # sibling extractor discovers first). Adopt it before paying for our own.
+        if not self._strategy_discovered:
+            self._try_adopt_cached_strategy()
+
         if not self._strategy_discovered:
             await self._discovery_lock.acquire()
             if self._strategy_discovered:
