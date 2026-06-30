@@ -584,14 +584,6 @@
           "psychosis"
         ],
         "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Heavy use of marijuana",
-          "is associated with an increased risk of",
-          "depression"
-        ],
-        "human_label": "Entailment"
       }
     ],
     "question": "can marijuana mental illness",
@@ -1036,14 +1028,6 @@
           "passport issued to holder 16 years or older",
           "is valid for",
           "10 years"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "passport issued to holder 15 years or younger",
-          "is valid for",
-          "5 years"
         ],
         "human_label": "Entailment"
       },
@@ -1664,22 +1648,6 @@
       {
         "triplet": [
           "Polysys",
-          "invests in",
-          "new technologies"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Polysys",
-          "makes",
-          "applications available to its customers"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Polysys",
           "is a",
           "company"
         ],
@@ -1749,14 +1717,6 @@
           "new threshold for concierge medical fees being tax deductible",
           "increasing to",
           "10 percent"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "health care expenses",
-          "must exceed",
-          "7.5 percent of adjusted gross income"
         ],
         "human_label": "Entailment"
       },
@@ -2062,22 +2022,6 @@
           "Rachel Carson",
           "wrote",
           "\"The Obligation to Endure\""
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Rachel Carson",
-          "believed",
-          "man's attempts to eliminate unwanted insects and weeds were causing more problems by polluting the environment"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Rachel Carson",
-          "believed",
-          "man's attempts to eliminate unwanted insects and weeds were causing more problems by harming living things"
         ],
         "human_label": "Entailment"
       },
@@ -2596,22 +2540,6 @@
           "average beagle male weight at 1 year",
           "between",
           "10 kg and 10.9 kg"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "average beagle female weight at 3 months",
-          "between",
-          "3.9 and 4.3 kg"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "average beagle male weight at 3 months",
-          "between",
-          "4.3 and 4.7 kg"
         ],
         "human_label": "Entailment"
       }
@@ -3258,14 +3186,6 @@
           "gout",
           "does not have a direct relationship with",
           "triglyceride levels"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "triglyceride",
-          "is not definitively affected by",
-          "gout"
         ],
         "human_label": "Entailment"
       },
@@ -3961,23 +3881,7 @@
         "triplet": [
           "cosmogeny",
           "studies",
-          "origin of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "studies",
           "evolution of the universe"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "cosmogeny",
-          "studies",
-          "structure of the universe"
         ],
         "human_label": "Entailment"
       }
@@ -4013,14 +3917,6 @@
           "The passages",
           "do not provide",
           "specific result of what color is made when gray and pink are mixed"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "mixing gray and pink",
-          "results in",
-          "no specific color"
         ],
         "human_label": "Entailment"
       },
@@ -4925,96 +4821,8 @@
       {
         "triplet": [
           "Cat's claw",
-          "has been used for",
-          "diverticulitis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
           "treats",
           "colitis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "gastritis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "hemorrhoids"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "parasites"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "leaky bowel syndrome"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "diverticulitis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "treats",
-          "colitis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "gastritis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "hemorrhoids"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "parasites"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Cat's claw",
-          "has been used for",
-          "leaky bowel syndrome"
         ],
         "human_label": "Entailment"
       }
@@ -5239,14 +5047,6 @@
           "consulting with a board-certified veterinary behaviorist"
         ],
         "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "methods to break dogs from chasing cars",
-          "include",
-          "consulting with a board-certified veterinary behaviorist"
-        ],
-        "human_label": "Entailment"
       }
     ],
     "question": "can you break dogs chasing cars",
@@ -5288,14 +5088,6 @@
           "experts",
           "recommend",
           "rotating between a variety of repellents"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Some Arkansas gardeners",
-          "suggest",
-          "human urine can act as a deer deterrent"
         ],
         "human_label": "Entailment"
       },
@@ -5926,22 +5718,6 @@
           "standard shipping"
         ],
         "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "$50 fee for FSM passport renewal",
-          "covers",
-          "processing"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "$50 fee for FSM passport renewal",
-          "covers",
-          "standard shipping"
-        ],
-        "human_label": "Entailment"
       }
     ],
     "question": "how to renew your passport on guam",
@@ -6015,14 +5791,6 @@
           "Range of notarization fee",
           "depends on",
           "the state"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "Some real estate offices",
-          "offer free notarization",
-          "hoping to get your business in the future"
         ],
         "human_label": "Entailment"
       },
