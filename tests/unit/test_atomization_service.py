@@ -1,23 +1,19 @@
-"""
-Tests for the AtomizationService — validation, filtering, serialization, and pipeline.
+"""Unit tests for the AtomizationService private pipeline methods: _validate, _filter, _build_payloads, and _serialize."""
 
-Mirrors test patterns from test_extraction_service.py.
-"""
-
-import json
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, MagicMock
 
 from contextchecker.services.atomization import AtomizationService
 from contextchecker.models import AtomizationPayload
-from contextchecker.workers.atomizer import AtomicTriplet
+from contextchecker.workers.atomizer import AtomicTriplet, AtomizationDecision
+from contextchecker.stats import PhaseStats
 from contextchecker.exceptions import InvalidInputError
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
 SOURCE_KEY = "test-model_response_kg"
-TARGET_KEY = "test-model_response_kg_atomized"
+ARCHIVE_KEY = "test-model_response_kg_not_atomized"
 MODEL = "test-model"
 
 
@@ -33,7 +29,6 @@ def _service(**kwargs) -> AtomizationService:
     with patch("contextchecker.services.atomization.settings") as mock_settings:
         mock_settings.ATOMIZER_API_KEY = "test-key"
         mock_settings.PROMPT_PATH = "/fake/prompts.json"
-        mock_settings.PROMPTS = {"atomizer_prompt": "test {{triplet}}"}
         mock_settings.get_logger = MagicMock(return_value=MagicMock())
         with patch("contextchecker.services.atomization.Atomizer"):
             return AtomizationService(**defaults)
@@ -41,26 +36,34 @@ def _service(**kwargs) -> AtomizationService:
 
 def _make_item(
     triplets: list[dict] | None = None,
-    atomized: list[dict] | None = None,
     item_id: str = "1",
+    response: str | None = "test response",
 ) -> dict:
     """Build a test item dict."""
-    item = {"id": item_id, "response": "test response"}
+    item = {"id": item_id}
+    if response is not None:
+        item["response"] = response
     if triplets is not None:
         item[SOURCE_KEY] = triplets
-    if atomized is not None:
-        item[TARGET_KEY] = atomized
     return item
 
 
-def _triplet(s: str, p: str, o: str) -> dict:
-    return {"subject": s, "predicate": p, "object": o}
+def _triplet(s: str, p: str, o: str, **meta) -> dict:
+    t = {"subject": s, "predicate": p, "object": o}
+    t.update(meta)
+    return t
+
+
+def _legacy_triplet(s: str, p: str, o: str, **meta) -> dict:
+    t = {"triplet": [s, p, o]}
+    t.update(meta)
+    return t
 
 
 # ── Test _validate ───────────────────────────────────────────────────────────
 
 class TestValidate:
-    """_validate drops items without the source kg key."""
+    """_validate drops invalid items and canonicalizes valid ones."""
 
     def test_valid_items_pass(self):
         svc = _service()
@@ -76,6 +79,7 @@ class TestValidate:
         ]
         valid = svc._validate(data)
         assert len(valid) == 1
+        assert valid[0]["id"] == "1"
 
     def test_empty_triplets_dropped(self):
         svc = _service()
@@ -83,17 +87,37 @@ class TestValidate:
         with pytest.raises(InvalidInputError):
             svc._validate(data)
 
+    def test_missing_response_dropped(self):
+        svc = _service()
+        data = [
+            _make_item(triplets=[_triplet("a", "b", "c")], response=None),
+            _make_item(triplets=[_triplet("x", "y", "z")], response=""),
+            _make_item(triplets=[_triplet("d", "e", "f")], response="valid"),
+        ]
+        valid = svc._validate(data)
+        assert len(valid) == 1
+        assert valid[0]["response"] == "valid"
+
     def test_all_missing_raises(self):
         svc = _service()
         data = [_make_item(triplets=None)]
         with pytest.raises(InvalidInputError, match="No items contain"):
             svc._validate(data)
 
+    def test_canonicalizes_triplets_on_validate(self):
+        svc = _service()
+        data = [_make_item(triplets=[_legacy_triplet("france", "has capital", "paris")])]
+        valid = svc._validate(data)
+        assert "triplet" not in valid[0][SOURCE_KEY][0]
+        assert valid[0][SOURCE_KEY][0]["subject"] == "france"
+        assert valid[0][SOURCE_KEY][0]["predicate"] == "has capital"
+        assert valid[0][SOURCE_KEY][0]["object"] == "paris"
+
 
 # ── Test _filter ─────────────────────────────────────────────────────────────
 
 class TestFilter:
-    """_filter skips items that already have the target atomized key."""
+    """_filter skips items whose triplets are already atomized."""
 
     def test_no_skip(self):
         svc = _service()
@@ -104,23 +128,33 @@ class TestFilter:
 
     def test_already_atomized_skipped(self):
         svc = _service()
-        data = [_make_item(
-            triplets=[_triplet("a", "b", "c")],
-            atomized=[_triplet("a", "b", "c")],
-        )]
+        data = [
+            _make_item(triplets=[
+                _triplet("a", "b", "c", atomized=True),
+                _triplet("d", "e", "f", atomized="failed"),
+            ])
+        ]
         pending, skipped = svc._filter(data)
         assert len(pending) == 0
         assert skipped == 1
+
+    def test_partial_atomized_not_skipped(self):
+        svc = _service()
+        data = [
+            _make_item(triplets=[
+                _triplet("a", "b", "c", atomized=True),
+                _triplet("d", "e", "f"),  # missing atomized flag
+            ])
+        ]
+        pending, skipped = svc._filter(data)
+        assert len(pending) == 1
+        assert skipped == 0
 
     def test_mixed(self):
         svc = _service()
         data = [
             _make_item(triplets=[_triplet("a", "b", "c")], item_id="1"),
-            _make_item(
-                triplets=[_triplet("d", "e", "f")],
-                atomized=[_triplet("d", "e", "f")],
-                item_id="2",
-            ),
+            _make_item(triplets=[_triplet("d", "e", "f", atomized=True)], item_id="2"),
         ]
         pending, skipped = svc._filter(data)
         assert len(pending) == 1
@@ -131,201 +165,191 @@ class TestFilter:
 # ── Test _build_payloads ─────────────────────────────────────────────────────
 
 class TestBuildPayloads:
-    def test_single_item_single_triplet(self):
+    def test_payload_structure(self):
         svc = _service()
-        items = [_make_item(triplets=[_triplet("cats", "are", "animals")])]
+        items = [_make_item(triplets=[_triplet("cats", "are", "animals")], response="cats response")]
         payloads = svc._build_payloads(items)
         assert len(payloads) == 1
-        assert payloads[0].triplet == "cats are animals"
-        assert payloads[0].item_index == 0
-        assert payloads[0].triplet_index == 0
+        p = payloads[0]
+        assert isinstance(p, AtomizationPayload)
+        assert p.subject == "cats"
+        assert p.predicate == "are"
+        assert p.object == "animals"
+        assert p.response == "cats response"
+        assert p.item_index == 0
+        assert p.triplet_index == 0
 
-    def test_multiple_triplets_per_item(self):
-        svc = _service()
-        items = [_make_item(triplets=[
-            _triplet("cats", "are", "animals"),
-            _triplet("dogs", "are", "animals"),
-        ])]
-        payloads = svc._build_payloads(items)
-        assert len(payloads) == 2
-        assert payloads[1].triplet_index == 1
-
-    def test_multiple_items(self):
+    def test_multiple_items_and_triplets(self):
         svc = _service()
         items = [
-            _make_item(triplets=[_triplet("a", "b", "c")], item_id="1"),
-            _make_item(triplets=[_triplet("d", "e", "f")], item_id="2"),
+            _make_item(triplets=[_triplet("a", "b", "c"), _triplet("d", "e", "f")], item_id="1"),
+            _make_item(triplets=[_triplet("x", "y", "z")], item_id="2"),
         ]
         payloads = svc._build_payloads(items)
-        assert len(payloads) == 2
+        assert len(payloads) == 3
         assert payloads[0].item_index == 0
-        assert payloads[1].item_index == 1
-
-    def test_legacy_triplet_format(self):
-        svc = _service()
-        items = [_make_item(triplets=[{"triplet": ["cats", "are", "animals"]}])]
-        payloads = svc._build_payloads(items)
-        assert payloads[0].triplet == "cats are animals"
-
-
-# ── Test _triplet_to_str ─────────────────────────────────────────────────────
-
-class TestTripletToStr:
-    def test_canonical(self):
-        result = AtomizationService._triplet_to_str(
-            {"subject": "cats", "predicate": "are", "object": "animals"}
-        )
-        assert result == "cats are animals"
-
-    def test_legacy(self):
-        result = AtomizationService._triplet_to_str(
-            {"triplet": ["cats", "are", "animals"]}
-        )
-        assert result == "cats are animals"
-
-    def test_fallback(self):
-        result = AtomizationService._triplet_to_str({"something": "else"})
-        assert "something" in result
+        assert payloads[0].triplet_index == 0
+        assert payloads[1].item_index == 0
+        assert payloads[1].triplet_index == 1
+        assert payloads[2].item_index == 1
+        assert payloads[2].triplet_index == 0
 
 
 # ── Test _serialize ──────────────────────────────────────────────────────────
 
 class TestSerialize:
-    def test_groups_by_item(self):
+    def test_keep_decision_preserves_original(self):
         svc = _service()
-        items = [
-            _make_item(triplets=[_triplet("a", "b", "c"), _triplet("d", "e", "f")]),
-        ]
-
+        items = [_make_item(triplets=[_triplet("a", "b", "c", custom="meta")])]
         payloads = [
-            AtomizationPayload(triplet="a b c", item_index=0, triplet_index=0),
-            AtomizationPayload(triplet="d e f", item_index=0, triplet_index=1),
+            AtomizationPayload(subject="a", predicate="b", object="c", response="t", item_index=0, triplet_index=0)
         ]
         results = [
-            [AtomicTriplet(subject="a", predicate="b", object="c")],
-            [AtomicTriplet(subject="d1", predicate="e1", object="f1"),
-             AtomicTriplet(subject="d2", predicate="e2", object="f2")],
+            AtomizationDecision(reasoning="is atomic", is_atomic=True, split=[])
         ]
+        phase_stats = PhaseStats(failed_indices=[])
 
-        svc._serialize(items, payloads, results)
+        stats = svc._serialize(items, payloads, results, phase_stats)
 
-        assert TARGET_KEY in items[0]
-        assert len(items[0][TARGET_KEY]) == 3  # 1 + 2 split
+        # Output mutated in place, original keys (custom="meta") preserved, atomized=True flag added
+        output = items[0][SOURCE_KEY]
+        assert len(output) == 1
+        assert output[0]["subject"] == "a"
+        assert output[0]["custom"] == "meta"
+        assert output[0]["atomized"] is True
+        assert ARCHIVE_KEY not in items[0]  # No split occurred
 
-    def test_multi_item_serialize(self):
+        assert stats["keep"] == 1
+        assert stats["split"] == 0
+        assert stats["failed"] == 0
+
+    def test_failed_decision_preserves_original(self):
         svc = _service()
-        items = [
-            _make_item(triplets=[_triplet("a", "b", "c")], item_id="1"),
-            _make_item(triplets=[_triplet("x", "y", "z")], item_id="2"),
-        ]
-
+        items = [_make_item(triplets=[_triplet("a", "b", "c", custom="meta")])]
         payloads = [
-            AtomizationPayload(triplet="a b c", item_index=0, triplet_index=0),
-            AtomizationPayload(triplet="x y z", item_index=1, triplet_index=0),
+            AtomizationPayload(subject="a", predicate="b", object="c", response="t", item_index=0, triplet_index=0)
         ]
         results = [
-            [AtomicTriplet(subject="a", predicate="b", object="c")],
-            [AtomicTriplet(subject="x", predicate="y", object="z")],
+            AtomizationDecision(reasoning="error", is_atomic=True, split=[])
         ]
+        phase_stats = PhaseStats(failed_indices=[0])
 
-        svc._serialize(items, payloads, results)
-        assert len(items[0][TARGET_KEY]) == 1
-        assert len(items[1][TARGET_KEY]) == 1
+        stats = svc._serialize(items, payloads, results, phase_stats)
 
+        output = items[0][SOURCE_KEY]
+        assert len(output) == 1
+        assert output[0]["subject"] == "a"
+        assert output[0]["custom"] == "meta"
+        assert output[0]["atomized"] == "failed"
+        assert ARCHIVE_KEY not in items[0]
 
-# ── Integration-lite tests ───────────────────────────────────────────────────
+        assert stats["keep"] == 0
+        assert stats["split"] == 0
+        assert stats["failed"] == 1
 
-class TestRunIntegration:
-    """Test run() flow with mocked atomizer worker."""
-
-    @pytest.mark.asyncio
-    async def test_full_pipeline(self):
+    def test_split_decision_emits_children(self):
         svc = _service()
-
-        data = [
-            _make_item(
-                triplets=[_triplet("cats and dogs", "are", "animals")],
-                item_id="1",
-            ),
+        items = [_make_item(triplets=[_triplet("a", "b", "c", custom="meta")])]
+        payloads = [
+            AtomizationPayload(subject="a", predicate="b", object="c", response="t", item_index=0, triplet_index=0)
         ]
-
-        # Mock atomizer: splits compound triplet
-        async def mock_atomize(payloads):
-            return [
-                [
-                    AtomicTriplet(subject="cats", predicate="are", object="animals"),
-                    AtomicTriplet(subject="dogs", predicate="are", object="animals"),
+        results = [
+            AtomizationDecision(
+                reasoning="needs split",
+                is_atomic=False,
+                split=[
+                    AtomicTriplet(subject="s1", predicate="p1", object="o1"),
+                    AtomicTriplet(subject="s2", predicate="p2", object="o2"),
                 ]
-            ]
-
-        svc._atomizer.atomize_batch = AsyncMock(side_effect=mock_atomize)
-        svc._atomizer.last_stats = MagicMock(
-            total_items=2, success=1, empty=0, total_errors=0,
-            http_requests=1, first_pass_count=1, first_pass_ok=1,
-            parse_error=0, context_too_long=0, content_policy=0,
-            rounds=[], failed_indices=[],
-        )
-
-        with patch.object(svc, "_log_validation"), \
-             patch.object(svc, "_log_skip"), \
-             patch.object(svc, "_log_config"), \
-             patch.object(svc, "_log_results"):
-            result = await svc.run(data)
-
-        assert TARGET_KEY in result[0]
-        assert len(result[0][TARGET_KEY]) == 2
-        assert result[0][TARGET_KEY][0]["subject"] == "cats"
-        assert result[0][TARGET_KEY][1]["subject"] == "dogs"
-
-    @pytest.mark.asyncio
-    async def test_already_atomized_skipped(self):
-        svc = _service()
-
-        data = [
-            _make_item(
-                triplets=[_triplet("cats", "are", "animals")],
-                atomized=[_triplet("cats", "are", "animals")],
-                item_id="1",
-            ),
+            )
         ]
+        phase_stats = PhaseStats(failed_indices=[])
 
-        with patch.object(svc, "_log_validation"), \
-             patch.object(svc, "_log_skip"):
-            result = await svc.run(data)
+        stats = svc._serialize(items, payloads, results, phase_stats)
 
-        # Should not have called atomizer at all
-        svc._atomizer.atomize_batch.assert_not_called()
+        # Output mutated to children, metadata (custom="meta") preserved on both, archive original created
+        output = items[0][SOURCE_KEY]
+        assert len(output) == 2
+        assert output[0] == {"subject": "s1", "predicate": "p1", "object": "o1", "custom": "meta", "atomized": True}
+        assert output[1] == {"subject": "s2", "predicate": "p2", "object": "o2", "custom": "meta", "atomized": True}
 
-    @pytest.mark.asyncio
-    async def test_atomic_passthrough(self):
-        """Already-atomic triplet → returned unchanged."""
+        assert items[0][ARCHIVE_KEY] == [_triplet("a", "b", "c", custom="meta")]
+
+        assert stats["keep"] == 0
+        assert stats["split"] == 1
+        assert stats["children"] == 2
+        assert stats["output"] == 2
+
+    def test_deduplication_enabled(self):
         svc = _service()
-
-        data = [
-            _make_item(
-                triplets=[_triplet("cats", "are", "animals")],
-                item_id="1",
-            ),
+        items = [_make_item(triplets=[_triplet("a", "b", "c")])]
+        payloads = [
+            AtomizationPayload(subject="a", predicate="b", object="c", response="t", item_index=0, triplet_index=0)
         ]
+        results = [
+            AtomizationDecision(
+                reasoning="split to dups",
+                is_atomic=False,
+                split=[
+                    AtomicTriplet(subject="dup", predicate="is", object="dup"),
+                    AtomicTriplet(subject="dup", predicate="is", object="dup"),
+                ]
+            )
+        ]
+        phase_stats = PhaseStats(failed_indices=[])
 
-        async def mock_atomize(payloads):
-            return [
-                [AtomicTriplet(subject="cats", predicate="are", object="animals")]
-            ]
+        stats = svc._serialize(items, payloads, results, phase_stats)
 
-        svc._atomizer.atomize_batch = AsyncMock(side_effect=mock_atomize)
-        svc._atomizer.last_stats = MagicMock(
-            total_items=1, success=1, empty=0, total_errors=0,
-            http_requests=1, first_pass_count=1, first_pass_ok=1,
-            parse_error=0, context_too_long=0, content_policy=0,
-            rounds=[], failed_indices=[],
-        )
+        output = items[0][SOURCE_KEY]
+        assert len(output) == 1  # Deduplicated down to 1
+        assert output[0]["subject"] == "dup"
 
-        with patch.object(svc, "_log_validation"), \
-             patch.object(svc, "_log_skip"), \
-             patch.object(svc, "_log_config"), \
-             patch.object(svc, "_log_results"):
-            result = await svc.run(data)
+        assert stats["dups"] == 1
+        assert stats["output"] == 1
 
-        assert len(result[0][TARGET_KEY]) == 1
-        assert result[0][TARGET_KEY][0]["subject"] == "cats"
+    def test_deduplication_disabled(self):
+        svc = _service(dedup=False)
+        items = [_make_item(triplets=[_triplet("a", "b", "c")])]
+        payloads = [
+            AtomizationPayload(subject="a", predicate="b", object="c", response="t", item_index=0, triplet_index=0)
+        ]
+        results = [
+            AtomizationDecision(
+                reasoning="split to dups",
+                is_atomic=False,
+                split=[
+                    AtomicTriplet(subject="dup", predicate="is", object="dup"),
+                    AtomicTriplet(subject="dup", predicate="is", object="dup"),
+                ]
+            )
+        ]
+        phase_stats = PhaseStats(failed_indices=[])
+
+        stats = svc._serialize(items, payloads, results, phase_stats)
+
+        output = items[0][SOURCE_KEY]
+        assert len(output) == 2  # Duplicates preserved
+
+        assert stats["dups"] == 1
+        assert stats["output"] == 2
+
+    def test_trace_populated(self):
+        svc = _service()
+        items = [_make_item(triplets=[_triplet("a", "b", "c")], item_id="trace_id")]
+        payloads = [
+            AtomizationPayload(subject="a", predicate="b", object="c", response="t", item_index=0, triplet_index=0)
+        ]
+        results = [
+            AtomizationDecision(reasoning="reason", is_atomic=True, split=[])
+        ]
+        phase_stats = PhaseStats(failed_indices=[])
+
+        svc._serialize(items, payloads, results, phase_stats)
+
+        assert len(svc.last_trace) == 1
+        t = svc.last_trace[0]
+        assert t["id"] == "trace_id"
+        assert t["duplicates_removed"] == 0
+        assert len(t["decisions"]) == 1
+        assert t["decisions"][0]["decision"] == "keep"
+        assert t["decisions"][0]["reasoning"] == "reason"
