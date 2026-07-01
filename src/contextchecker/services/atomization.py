@@ -78,10 +78,13 @@ class AtomizationService(BaseService):
         Raises:
             InvalidInputError: No items contain the source kg key.
         """
-        # Step 0: Normalize key aliases
+        # Step 0: Normalize key aliases (context→reference, query→question)
         self._canonicalize_keys(data)
 
+        # Step 1: Validate — drop items missing the source kg key or response
         valid = self._validate(data)
+
+        # Step 2: Filter — skip items already atomized on a prior run
         pending, skipped = self._filter(valid)
 
         self._log_validation(len(data), len(valid))
@@ -99,19 +102,19 @@ class AtomizationService(BaseService):
             len(item[self._source_kg_key]) for item in pending
         )
 
-        # Build payloads — one per triplet, flattened across all items
+        # Step 3: Build payloads — one structured AtomizationPayload per triplet
         payloads = self._build_payloads(pending)
 
-        # Execute — fatal errors (auth, connection) propagate to CLI
+        # Step 4: Execute — delegate to the Atomizer worker (fatal errors propagate to CLI)
         if not self.quiet:
             logger.info("── Atomization ───────────────────────────────────────")
         batch_results = await self._atomizer.atomize_batch(payloads)
         phase_stats = self._atomizer.last_stats
 
-        # Serialize results back into dicts (dedups output when enabled)
+        # Step 5: Serialize results back into dicts (dedups output when enabled)
         atom_stats = self._serialize(pending, payloads, batch_results, phase_stats)
 
-        # Log results
+        # Step 6: Report — log validation, config, results, done line
         self._log_results(
             pending_count=len(pending),
             total_triplets=total_triplets,
