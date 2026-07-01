@@ -179,7 +179,15 @@
         "triplet": [
           "software like SurveilStar",
           "can",
-          "secretly record all Skype incoming and outgoing text chats"
+          "secretly record all Skype outgoing text chats"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "software like SurveilStar",
+          "can",
+          "secretly record all Skype incoming text chats"
         ],
         "human_label": "Entailment"
       },

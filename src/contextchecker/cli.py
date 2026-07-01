@@ -154,6 +154,7 @@ def atomize(
     source_kg_key: str = typer.Option(..., "--source-kg-key", "-s", help="Key containing triplets to atomize (e.g. 'gemini-3.1_response_kg')."),
     atomizer_base_api: str = typer.Option(None, "--atomizer-base-api", help="Optional base URL for the atomizer LLM API."),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2."),
+    dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Remove exact duplicate claims from the atomized output (e.g. a split reproducing an existing fact). On by default (loss-free)."),
     trace: bool = typer.Option(True, "--trace/--no-trace", help="Also write a per-triplet decision trace to {output}_decisions.json."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
@@ -187,6 +188,7 @@ def atomize(
             source_kg_key=source_kg_key,
             base_url=atomizer_base_api,
             max_retries=max_retries,
+            dedup=dedup,
         )
         result = service.run_sync(data)
     except ContextCheckerError as exc:
@@ -199,7 +201,7 @@ def atomize(
     logger.info("Results written to %s", output_file)
 
     # Write the decision trace artifact (one record per item: full input
-    # triplets, every decision + reasoning + children, superficial collisions).
+    # triplets, every decision + reasoning + children, duplicates_removed).
     if trace:
         trace_file = output_file.with_name(output_file.stem + "_decisions.json")
         trace_file.write_text(
