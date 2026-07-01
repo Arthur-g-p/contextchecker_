@@ -1,7 +1,9 @@
 import asyncio
 import os
+import random
 import sqlite3
 import sys
+import time
 import traceback
 from dataclasses import dataclass
 from enum import Enum
@@ -96,6 +98,17 @@ class LLMClient:
         self._discovery_lock = asyncio.Lock()  # Serializes strategy discovery
         self._cache_hit_logged = False  # Only log cache hint once
         self._fatal_error_occurred = False
+        self._discovering = False  # True while this client is walking the retry matrix
+
+        # drop_params is a LiteLLM-proxy-only field. A direct endpoint rejects it.
+        # We learn which we're talking to during discovery (A/B): None = unknown,
+        # True = proxy (keep sending it), False = direct endpoint (never send it).
+        self._drop_params_supported: bool | None = None
+
+        # Rate-limit backoff state (429 handling). Never drops an item.
+        self._rate_limit_wait = 0.0          # seconds to sleep on the pending 429
+        self._rate_limited_since: float | None = None  # monotonic start of current episode
+        self._rate_limit_last_log = 0.0      # monotonic time of last 429 console message
 
         # Reuse a strategy already discovered this process for the same endpoint+model.
         self._try_adopt_cached_strategy()
@@ -162,6 +175,60 @@ class LLMClient:
         return False
 
 
+    def _parse_retry_after(self, e: Exception) -> float | None:
+        """Extract a Retry-After backoff (seconds) from a rate-limit response.
+
+        Honors the standard `Retry-After` header (integer seconds) and the
+        `retry-after-ms` variant some providers send. Returns None when neither
+        is present or parseable (an HTTP-date form is treated as absent).
+        """
+        response = getattr(e, "response", None)
+        headers = getattr(response, "headers", None) if response is not None else None
+        if not headers:
+            return None
+        seconds = headers.get("retry-after")
+        if seconds is not None:
+            try:
+                return float(seconds)
+            except (TypeError, ValueError):
+                pass  # HTTP-date form — fall back to the configured wait
+        ms = headers.get("retry-after-ms")
+        if ms is not None:
+            try:
+                return float(ms) / 1000.0
+            except (TypeError, ValueError):
+                pass
+        return None
+
+
+    def _log_rate_limit(self, wait: float, from_header: bool) -> None:
+        """Throttled 429 console output.
+
+        One clear message when an episode begins, then a heartbeat every
+        RATE_LIMIT_HEARTBEAT seconds so a long back-off never looks hung — even
+        under concurrency, where many tasks hit the limit at once. The episode
+        is reset on the next success (see the success path in generate()).
+        """
+        now = time.monotonic()
+        if self._rate_limited_since is None:
+            self._rate_limited_since = now
+            self._rate_limit_last_log = now
+            source = " (server Retry-After)" if from_header else ""
+            logger.warning(
+                "⏳ Rate limited by %s. Waiting %.0fs%s, then continuing — nothing will be dropped.",
+                self.model, wait, source,
+            )
+            return
+        heartbeat = getattr(default_config, 'RATE_LIMIT_HEARTBEAT', 300.0)
+        if now - self._rate_limit_last_log >= heartbeat:
+            self._rate_limit_last_log = now
+            elapsed_min = (now - self._rate_limited_since) / 60.0
+            logger.warning(
+                "⏳ Still rate-limited by %s after %.0fm — still retrying…",
+                self.model, elapsed_min,
+            )
+
+
     # ───────────────────────────────────────────────────────────────
     #  CENTRAL ERROR HANDLER
     #  Order matters! Subclasses MUST be checked before parents.
@@ -213,7 +280,7 @@ class LLMClient:
         if e.__class__.__name__ == 'UnsupportedParamsError':
             if self.base_url == None:
                 logger.warning("⚠️  UNSUPPORTED PARAMS (%s): %s", self.model, str(e)[:300])
-                logger.warning("💡 HINT: If using a new model, litellm may not detect the provider/model combinations thus its capabilites. Update litellm with pip install --upgrade litellm. Or set the --checker/extractor-base-api to a provider that supports the model. Or set drop_params=True in the LLMClient.")
+                logger.warning("💡 HINT: If using a new model behind litellmproxy, litellm may not detect the provider/model combinations thus its capabilites. Update litellm with pip install --upgrade litellm. Or set the --checker/extractor-base-api to a provider that supports the model. Or set drop_params=True in the LLMClient.")
 
             return ErrorAction.SKIP
 
@@ -254,8 +321,13 @@ class LLMClient:
                 
                 return ErrorAction.FATAL
         
-            # Fallback 
-            logger.warning("⚠️ BAD REQUEST (%s): %s", self.model, str(e)[:300])
+            # Fallback. During discovery a BadRequest is an expected capability
+            # probe (the matrix walks past unsupported strategies), so log it
+            # quietly instead of as a scary warning.
+            if self._discovering:
+                logger.info("   ⬇️  Strategy '%s' not supported here — trying next.", self.strategy.name)
+            else:
+                logger.warning("⚠️ BAD REQUEST (%s): %s", self.model, str(e)[:300])
             return ErrorAction.SKIP
 
         # ── RETRY: Transient errors ───────────────────────────────
@@ -263,7 +335,28 @@ class LLMClient:
         retry_label = f"Attempt {attempt + 1}/{max_retries + 1}"
 
         if isinstance(e, RateLimitError):
-            logger.warning("🔄 RATE LIMITED (%s) — %s. Waiting 60s...", self.model, retry_label)
+            retry_after = self._parse_retry_after(e)
+            cap = getattr(default_config, 'RATE_LIMIT_MAX_WAIT', 300.0)
+            if retry_after is not None:
+                wait = retry_after
+                from_header = True
+            else:
+                base = getattr(default_config, 'RATE_LIMIT_WAIT', 60.0)
+                # Jitter the fallback only — it destaggers concurrent tasks so they
+                # don't all wake at once and re-trip the limit. Never jitter a
+                # server-provided Retry-After: it told us exactly when.
+                wait = base * random.uniform(0.9, 1.1)
+                from_header = False
+
+            if wait > cap:
+                logger.error(
+                    "⛔ RATE LIMIT (%s): server asked to wait %.0fs, exceeding cap %.0fs "
+                    "(RATE_LIMIT_MAX_WAIT). Aborting.", self.model, wait, cap,
+                )
+                return ErrorAction.FATAL
+
+            self._rate_limit_wait = wait
+            self._log_rate_limit(wait, from_header)
             return ErrorAction.RATE_LIMIT
 
         if isinstance(e, APITimeoutError):
@@ -359,6 +452,7 @@ class LLMClient:
                 self._discovery_lock.release()
             else:
                 discovering = True
+                self._discovering = True
                 if self.base_url:
                     logger.info("🔬 Discovering best strategy for %s starting with '%s'...", self.model, self.strategy.name)
                 else:
@@ -380,6 +474,7 @@ class LLMClient:
                 server_err_count = 0
 
                 while attempt <= max_retries:
+                    sent_drop_params = False  # did THIS request carry drop_params?
                     try:
                         if self.base_url:
                             # ── OpenAI SDK Path ────────────────────────────
@@ -395,9 +490,14 @@ class LLMClient:
                             # Strategy controls reasoning — always overwrites
                             if strategy.reasoning_effort:
                                 call_kwargs["reasoning_effort"] = strategy.reasoning_effort
-                                existing_extra_body = call_kwargs.get("extra_body", {})
-                                existing_extra_body["drop_params"] = True
-                                call_kwargs["extra_body"] = existing_extra_body
+                                # drop_params is LiteLLM-proxy-only. Send it unless
+                                # we've learned this is a direct endpoint that rejects
+                                # it (learned via the A/B probe in the except handler).
+                                if self._drop_params_supported is not False:
+                                    existing_extra_body = call_kwargs.get("extra_body", {})
+                                    existing_extra_body["drop_params"] = True
+                                    call_kwargs["extra_body"] = existing_extra_body
+                                    sent_drop_params = True
                                 # -----------------------------------------------
                             else:
                                 call_kwargs.pop("reasoning_effort", None)
@@ -458,6 +558,14 @@ class LLMClient:
                             response = await acompletion(**call_kwargs)
 
                         # ── Success ────────────────────────────────────
+                        # A 429 episode (if any) has cleared — reset so a later one
+                        # logs fresh instead of staying silent.
+                        self._rate_limited_since = None
+                        # If we sent drop_params and it worked, this is a LiteLLM
+                        # proxy: keep sending it for all subsequent requests.
+                        if sent_drop_params and self._drop_params_supported is None:
+                            self._drop_params_supported = True
+
                         if hasattr(response, 'usage') and response.usage:
                             GLOBAL_STATS.update(response.usage.model_dump())
 
@@ -506,6 +614,24 @@ class LLMClient:
                         if action == ErrorAction.FATAL:
                             self._save_and_raise(f"FATAL: {type(e).__name__} — {str(e)[:200]}")
 
+                        # A/B probe for the LiteLLM-only `drop_params` field: if a
+                        # request that carried drop_params just failed and we haven't
+                        # learned the endpoint type yet, assume this is a direct
+                        # endpoint that rejects drop_params. Turn it off and retry the
+                        # SAME strategy (keeps reasoning). If it fails again it was a
+                        # real capability gap and we advance the matrix normally.
+                        _is_bad_request = (
+                            isinstance(e, BadRequestError)
+                            or e.__class__.__name__ == 'BadRequestError'
+                        )
+                        if sent_drop_params and self._drop_params_supported is None and _is_bad_request:
+                            self._drop_params_supported = False
+                            logger.info(
+                                "   🔎 Endpoint rejected 'drop_params' — direct endpoint "
+                                "detected, retrying without it (keeping reasoning)."
+                            )
+                            continue  # retry same strategy, drop_params now off
+
                         # During discovery: advance strategy on capability errors
                         # This does NOT count as a retry attempt except if it is a fatal error
                         is_capability_error = (
@@ -542,7 +668,10 @@ class LLMClient:
                                 raise LLMParseError(str(e)) from e
 
                         elif action == ErrorAction.RATE_LIMIT:
-                            await asyncio.sleep(60)
+                            # Infinite retries: a 429 never counts against `attempt`,
+                            # so the item is never dropped. Wait honors Retry-After
+                            # (or the jittered fallback) computed in the handler.
+                            await asyncio.sleep(self._rate_limit_wait)
                             continue
 
                         elif action == ErrorAction.SERVER_ERROR:
@@ -570,6 +699,7 @@ class LLMClient:
                 raise LLMParseError(f"Exhausted {attempt + 1} retries: {str(last_error)[:200]}") from last_error
 
         finally:
+            self._discovering = False
             # Release the discovery lock if we hold it
             if discovering:
                 self._strategy_discovered = True  # lock at current level (already walked past incapable strategies)

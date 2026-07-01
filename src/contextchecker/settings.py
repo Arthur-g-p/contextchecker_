@@ -99,6 +99,22 @@ Only applies in joint mode by default. Single mode has no budget
 unless the user explicitly sets --max-words."""
 
 
+# ── Rate limiting ────────────────────────────────────────────────────────────
+# A 429 never drops an item: the request is retried until it clears. We honor a
+# server-provided Retry-After when present, otherwise back off by a fixed amount.
+
+RATE_LIMIT_WAIT: float = float(os.getenv("RATE_LIMIT_WAIT", "60"))
+"""Fallback backoff (seconds) when a 429 carries no Retry-After header."""
+
+RATE_LIMIT_MAX_WAIT: float = float(os.getenv("RATE_LIMIT_MAX_WAIT", "300"))
+"""Cap on a server-provided Retry-After. If the server asks for longer than
+this, the run aborts rather than stalling indefinitely."""
+
+RATE_LIMIT_HEARTBEAT: float = float(os.getenv("RATE_LIMIT_HEARTBEAT", "30"))
+"""How often (seconds) to emit a 'still rate-limited' heartbeat during a long
+back-off, so the run never looks hung."""
+
+
 # ── Console formatting ───────────────────────────────────────────────────────
 
 SECTION_WIDTH: int = 60
