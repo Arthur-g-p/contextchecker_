@@ -16,7 +16,7 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.services.base import BaseService
 from contextchecker.models import AtomizationPayload
-from contextchecker.utils import canonicalize_triplets, triplet_key
+from contextchecker.utils import canonicalize_triplets, deduplicate_triplets
 from contextchecker.workers.atomizer import Atomizer, AtomicTriplet, AtomizationDecision
 from contextchecker.stats import PhaseStats, log_api_parsing, log_token_stats
 
@@ -43,6 +43,7 @@ class AtomizationService(BaseService):
         concurrency: int = 10,
         max_retries: int | None = None,
         quiet: bool = False,
+        dedup: bool = True,
     ):
         # Fail-fast: validate config before creating any workers.
         api_key = self._require_api_key(
@@ -62,6 +63,7 @@ class AtomizationService(BaseService):
         )
 
         self.quiet = quiet
+        self._dedup = dedup
         self.last_trace: list[dict] = []  # per-item decision trace, built in _serialize
 
     # ── Public API ───────────────────────────────────────────────
@@ -106,8 +108,8 @@ class AtomizationService(BaseService):
         batch_results = await self._atomizer.atomize_batch(payloads)
         phase_stats = self._atomizer.last_stats
 
-        # Serialize results back into dicts
-        self._serialize(pending, payloads, batch_results, phase_stats)
+        # Serialize results back into dicts (dedups output when enabled)
+        atom_stats = self._serialize(pending, payloads, batch_results, phase_stats)
 
         # Log results
         self._log_results(
@@ -116,6 +118,7 @@ class AtomizationService(BaseService):
             total=len(data),
             skipped=skipped,
             phase_stats=phase_stats,
+            stats=atom_stats,
         )
 
         return data
@@ -212,7 +215,7 @@ class AtomizationService(BaseService):
         payloads: list[AtomizationPayload],
         results: list[AtomizationDecision],
         phase_stats: PhaseStats,
-    ) -> None:
+    ) -> dict:
         """Step 5: Write decisions back (overwrite source key) AND build the trace.
 
         Per source triplet, given its AtomizationDecision:
@@ -220,15 +223,15 @@ class AtomizationService(BaseService):
         - is_atomic / no split    → keep ORIGINAL BYTES untouched, flag "atomized": True
                                      (we do NOT trust the LLM's echo on a keep — do-no-harm)
         - genuine split (>=2)     → emit one triplet per child, carrying original metadata
-        If an item had any split → archive originals to {source}_not_atomized.
+        When dedup is enabled, exact (s,p,o) duplicates in an item's output are
+        dropped (loss-free). If an item had any split → archive originals to
+        {source}_not_atomized.
 
-        Also populates self.last_trace — a general output-tracing artifact (one
-        record per item): the full input triplets, every decision + reasoning +
-        children, and the SUPERFICIAL (string-level) collisions in the output.
-        It makes no semantic judgement and gives the source no special treatment;
-        a downstream LLM judge does the semantic work with this + full context.
+        Populates self.last_trace (per item: input triplets + every decision +
+        reasoning + children) and returns aggregate stats for the results log.
         """
         self.last_trace = []
+        stats = {"keep": 0, "split": 0, "failed": 0, "children": 0, "dups": 0, "output": 0}
 
         # Group decisions by item, carrying the flat index for failure lookup.
         per_item: dict[int, list[tuple[int, int, AtomizationDecision]]] = {}
@@ -259,6 +262,7 @@ class AtomizationService(BaseService):
                     merged["atomized"] = "failed"
                     new_triplets.append(merged)
                     label, children = "failed", []
+                    stats["failed"] += 1
                 elif (not decision.is_atomic) and len(decision.split) >= 2:
                     had_split = True
                     label = "split"
@@ -271,12 +275,15 @@ class AtomizationService(BaseService):
                         self._apply_spo(merged, child)
                         merged["atomized"] = True
                         new_triplets.append(merged)
+                    stats["split"] += 1
+                    stats["children"] += len(children)
                 else:
                     # KEEP — original bytes untouched (ignore any LLM echo).
                     merged = dict(original)
                     merged["atomized"] = True
                     new_triplets.append(merged)
                     label, children = "keep", []
+                    stats["keep"] += 1
 
                 decisions_trace.append({
                     "triplet_index": tri_idx,
@@ -286,14 +293,13 @@ class AtomizationService(BaseService):
                     "children": children,
                 })
 
-            # Superficial (string-level) collisions in this item's output.
-            counts: dict[tuple, int] = {}
-            for t in new_triplets:
-                k = triplet_key(t, case_insensitive=True)
-                counts[k] = counts.get(k, 0) + 1
-            collisions = [
-                {"triplet": list(k), "count": n} for k, n in counts.items() if n > 1
-            ]
+            # Exact (s,p,o) duplicates in this item's output — counted always,
+            # removed only when dedup is enabled (loss-free cleanup).
+            deduped = deduplicate_triplets(new_triplets)
+            item_dups = len(new_triplets) - len(deduped)
+            stats["dups"] += item_dups
+            if self._dedup:
+                new_triplets = deduped
 
             self.last_trace.append({
                 "id": item.get("id"),
@@ -301,12 +307,16 @@ class AtomizationService(BaseService):
                 "response": item.get("response", ""),
                 "input_triplets": list(original_triplets),
                 "decisions": decisions_trace,
-                "superficial_collisions": collisions,
+                "duplicates_removed": item_dups,
             })
 
             if had_split:
                 item[self._archive_kg_key] = list(original_triplets)
             item[self._source_kg_key] = new_triplets
+            stats["output"] += len(new_triplets)
+
+        stats["input"] = stats["keep"] + stats["split"] + stats["failed"]
+        return stats
 
     @staticmethod
     def _apply_spo(target: dict, child: AtomicTriplet) -> None:
@@ -362,38 +372,70 @@ class AtomizationService(BaseService):
         total: int,
         skipped: int,
         phase_stats: PhaseStats,
+        stats: dict,
     ) -> None:
         """Print the full results block."""
         logger.info("")
         logger.info("── ATOMIZER RESULTS ─────────────────────────────────────────")
         logger.info("")
         log_api_parsing(total_triplets, phase_stats)
-        self._log_bl_results(total_triplets, phase_stats)
+        self._log_bl_results(stats)
         log_token_stats()
-        self._log_done(total, total_triplets, skipped)
+        self._log_done(total, stats, skipped)
 
-    def _log_bl_results(
-        self, total_triplets: int, phase_stats: PhaseStats,
-    ) -> None:
-        """Print 📝 Atomization summary."""
-        output_count = phase_stats.total_items if phase_stats else 0
+    def _log_bl_results(self, stats: dict) -> None:
+        """Print 📝 Atomization summary — input→output with the keep/split/failed
+        breakdown, the claims splitting added, and any exact duplicates removed
+        (removed when dedup is on, only reported when off). Duplicates get their
+        own top-level line because they can arise from the input OR from a split.
+        """
+        keep, split, failed = stats["keep"], stats["split"], stats["failed"]
+        dups = stats["dups"]
+        gross_new = stats["children"] - split  # claims splitting added (pre-dedup)
+
         logger.info(" 📝 Atomization:")
-        logger.info("    %d input triplets → %d atomic triplets", total_triplets, output_count)
-        if output_count > total_triplets:
-            logger.info("    └─ 🔀 %d compound triplets split", output_count - total_triplets)
-        elif output_count == total_triplets:
-            logger.info("    └─ ✅ all triplets already atomic")
+        logger.info(
+            "    %d input triplets → %d output triplets", stats["input"], stats["output"]
+        )
+
+        # Only present sections show; the last one gets the └─ connector.
+        rows = (
+            (["atomic"] if keep > 0 else [])
+            + (["split"] if split > 0 else [])
+            + (["dups"] if dups > 0 else [])
+            + (["failed"] if failed > 0 else [])
+        )
+        for i, kind in enumerate(rows):
+            last = i == len(rows) - 1
+            conn = "└─" if last else "├─"
+            if kind == "atomic":
+                logger.info("    %s ✅ %d triplets already atomic", conn, keep)
+            elif kind == "split":
+                logger.info("    %s 🔀 %d compound triplets split", conn, split)
+                bar = "    " if last else "│   "
+                word = "claim" if gross_new == 1 else "claims"
+                logger.info("    %s└─ ➕ %d new %s from splitting", bar, gross_new, word)
+            elif kind == "dups":
+                word = "duplicate" if dups == 1 else "duplicates"
+                verb = "removed" if self._dedup else "found — kept (dedup off)"
+                logger.info("    %s 🔁 %d %s %s", conn, dups, word, verb)
+            elif kind == "failed":
+                logger.info("    %s ⚠️  %d failed to check for atomization", conn, failed)
         logger.info("")
 
     def _log_done(
-        self, total: int, triplets: int, skipped: int,
+        self, total: int, stats: dict, skipped: int,
     ) -> None:
-        """Print ✅ Done summary line."""
+        """Print ✅ Done summary line — items processed + what actually happened."""
         if self.quiet:
             return
-        parts = [f"{triplets} triplets atomized"]
+        parts = [f"{stats['input']} → {stats['output']} triplets"]
+        if stats["split"] > 0:
+            parts.append(f"{stats['split']} split")
+        if stats["dups"] > 0:
+            parts.append(f"{stats['dups']} dups {'removed' if self._dedup else 'found'}")
+        if stats["failed"] > 0:
+            parts.append(f"{stats['failed']} failed")
         if skipped > 0:
             parts.append(f"{skipped} skipped")
-        logger.info(
-            " ✅ Done: %d items → %s", total, ", ".join(parts),
-        )
+        logger.info(" ✅ Done: %d items · %s", total, " · ".join(parts))
