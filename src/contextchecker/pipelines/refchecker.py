@@ -1,25 +1,27 @@
 """
-RefChecker - extraction + checking in one run, one output document.
+RefChecker - reference-checking use case: extraction + checking in one run.
 
-Composes ExtractionService then CheckingService over one dataset. Talks to
-services only. Validation drops items lacking 'response' or 'reference' up
-front, so the checker never has to re-drop them. The pipeline owns the
-output artifact: the merged document, saved in the app's JSON format.
+RefChecker is a *pipeline*: a service whose run() composes other services
+(ExtractionService then CheckingService) instead of driving a single worker.
+The caller-facing interface is identical, so it subclasses BaseService - there
+is no separate pipeline base (see the note in services/base.py).
+
+It talks to services only, never a worker. The two services consolidate their
+results into the shared data in place, so this class serializes nothing of its
+own; the controller (cli.py) persists the returned data.
 """
 
-import json
-from pathlib import Path
-
 from contextchecker import settings
-from contextchecker.pipelines.base import BasePipeline
+from contextchecker.exceptions import InvalidInputError
+from contextchecker.services.base import BaseService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
 
 logger = settings.get_logger(__name__)
 
 
-class RefCheckerPipeline(BasePipeline):
-    """Extraction + checking as a single reference-checking run."""
+class RefCheckerPipeline(BaseService):
+    """Extraction + checking composed into a single reference-checking run."""
 
     def __init__(
         self,
@@ -35,17 +37,19 @@ class RefCheckerPipeline(BasePipeline):
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         checker_max_retries: int | None = None,
+        quiet: bool = False,
     ):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
+        self.quiet = quiet
 
-        # Both services fail-fast on their own API key here, before any run.
+        # Compose the two services. Each fail-fasts on its own API key here.
         self._extraction = ExtractionService(
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
             max_retries=extractor_max_retries,
-            quiet=True,
+            quiet=quiet,
             dedup=dedup,
         )
         self._checking = CheckingService(
@@ -57,47 +61,103 @@ class RefCheckerPipeline(BasePipeline):
             joint_num=joint_num,
             max_words=max_words,
             max_retries=checker_max_retries,
-            quiet=True,
+            quiet=quiet,
         )
 
-    def _required_keys(self) -> tuple[str, ...]:
-        # extraction needs 'response'; checking needs 'reference'.
-        return ("response", "reference")
+    # -- Pipeline: the BaseService 7-step run() shape --
 
     async def run(self, data: list[dict]) -> list[dict]:
         """Run extraction then checking over *data*, in place; return data.
 
-        Raises InvalidInputError if no item carries both 'response' and
-        'reference'.
+        1. Validate     - drop items missing 'response' or 'reference'
+        2. Filter       - none (pass); child services filter their own
+        3. Log pre-exec - validation + config
+        4. Execute      - delegate to ExtractionService then CheckingService
+        5. Serialize    - none; the services consolidated into data already
+        6. Log results  - done line
+        7. Return mutated data
+
+        Raises InvalidInputError if no item carries both keys.
         """
-        self._canonicalize_keys(data)      # Step 0: normalize aliases
-        valid = self._validate(data)       # Step 1: drop items missing fields
+        self._canonicalize_keys(data)                 # Step 0: normalize aliases
+        valid = self._validate(data)                  # 1
+        #self._filter(valid)                          # 2 (no-op)
+        self._log_validation(len(data), len(valid))   # 3
+        self._log_config()
 
-        await self._extraction.run(valid)  # writes {extractor_model}_response_kg
-        await self._checking.run(valid)    # writes verdicts onto each triplet
+        await self._extraction.run(valid)             # 4: writes {extractor_model}_response_kg
+        await self._checking.run(valid)               #    writes verdicts onto each triplet
 
-        return data
+        self._serialize()                             # 5 (no-op)
+        self._log_results(len(data), len(valid))      # 6
+        return data                                   # 7
 
-    # -- Output artifact (pipeline owns it) --
+    # -- Validation: drop items dynamically, like every service --
 
-    def process_file(
-        self, input_path: str | Path, output_path: str | Path | None = None
-    ) -> Path:
-        """Load a JSON dataset, run the pipeline, save the merged document.
+    def _validate(self, data: list[dict]) -> list[dict]:
+        """Step 1: Drop items missing 'response' or 'reference'.
 
-        Format and default location mirror the other commands: pretty JSON,
-        UTF-8, written to results/{input_name} next to the input.
+        Both stages' inputs are checked up front - extraction needs
+        'response', checking needs 'reference' - so the checker never has to
+        re-drop. Raises InvalidInputError if nothing is valid.
         """
-        input_path = Path(input_path)
-        data = json.loads(input_path.read_text(encoding="utf-8"))
+        valid = []
+        for i, item in enumerate(data):
+            missing = [k for k in ("response", "reference") if k not in item]
+            if missing:
+                logger.debug("Item %d missing %s - skipping.", i, ", ".join(missing))
+                continue
+            valid.append(item)
 
-        result = self.run_sync(data)
+        if not valid:
+            raise InvalidInputError(
+                "No items contain both 'response' and 'reference'."
+            )
+        return valid
 
-        if output_path is None:
-            output_path = input_path.parent / "results" / input_path.name
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        return output_path
+    def _filter(self, valid):
+        """No pipeline-level filtering: child services filter their own
+        already-processed items."""
+        pass
+
+    # -- Serialization: none; children consolidated into data in place --
+
+    def _serialize(self, *args, **kwargs) -> None:
+        pass
+
+    # -- Logging --
+
+    def _log_validation(self, total: int, valid: int) -> None:
+        if self.quiet:
+            return
+        dropped = total - valid
+        logger.info(" 📂 Validation")
+        logger.info("    Total:       %d items", total)
+        if dropped:
+            logger.info("    ├─ dropped:  %d  (missing response/reference)", dropped)
+        logger.info("    └─ valid:    %d items", valid)
+        logger.info("")
+
+    def _log_skip(self, *args, **kwargs) -> None:
+        pass
+
+    def _log_config(self) -> None:
+        if self.quiet:
+            return
+        logger.info(" ⚙️  Config")
+        logger.info("    Extractor:   %s", self._extractor_model)
+        logger.info("    Checker:     %s", self._checker_model)
+        logger.info("")
+
+    def _log_results(self, total: int, valid: int) -> None:
+        """Step 6: post-execution report. No BL for RefChecker; just the done line."""
+        self._log_bl_results()
+        self._log_done(total, valid)
+
+    def _log_bl_results(self, *args, **kwargs) -> None:
+        pass
+
+    def _log_done(self, total: int, valid: int) -> None:
+        if self.quiet:
+            return
+        logger.info(" ✅ Done: ref-checked %d/%d items", valid, total)

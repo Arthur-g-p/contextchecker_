@@ -24,6 +24,13 @@ class BaseService(ABC):
 
     Subclasses define their own pipeline steps. The base enforces
     that key steps exist and provides universal helpers.
+
+    Pipelines use this base too. A "pipeline" is just a service whose run()
+    composes other services (e.g. extraction then checking) instead of driving
+    a single worker. The caller-facing interface is identical - data in,
+    mutated data out - so no separate base is needed; "pipeline" is only a
+    label for a service that orchestrates services, whatever the best
+    technical term.
     """
 
     # ── Contract (must override — TypeError if you forget) ───────
