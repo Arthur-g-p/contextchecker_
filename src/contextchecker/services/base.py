@@ -34,7 +34,7 @@ class BaseService(ABC):
 
         Every service's run() should follow this shape:
         1. Validate input data
-        2. Filter already-processed items
+        2. Filter already-processed items (optional)
         3. Log pre-execution state (validation, config)
         4. Execute (delegate to worker)
         5. Serialize results back into the dicts
@@ -106,7 +106,7 @@ class BaseService(ABC):
 
     @staticmethod
     def _require_api_key(key: str | None, name: str) -> str:
-        """Fail-fast: raise immediately if a required API key is missing.
+        """Fail-fast: raise immediately if a required API key is missing. Usually called from constructor.
 
         Returns the key if present, so callers can do:
             self.api_key = self._require_api_key(settings.EXTRACTOR_API_KEY, "EXTRACTOR_API_KEY")

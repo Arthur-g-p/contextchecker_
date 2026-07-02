@@ -562,6 +562,7 @@ class LLMClient:
 
                         else:
                             # ── LiteLLM Path (no matrix, passthrough) ─────
+                            # Lazy import because litellm is HUGE and not always needed.
                             import litellm
                             litellm.suppress_debug_info = True
                             from litellm import acompletion
