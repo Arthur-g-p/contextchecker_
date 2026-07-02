@@ -85,9 +85,11 @@ def _make_client(tmp_path, *, discovered: bool) -> LLMClient:
 def _reset_process_state():
     LLMClient._STRATEGY_CACHE.clear()
     LLMClient._VERIFIED_ENDPOINTS.clear()
+    LLMClient._DROP_PARAMS_CACHE.clear()
     yield
     LLMClient._STRATEGY_CACHE.clear()
     LLMClient._VERIFIED_ENDPOINTS.clear()
+    LLMClient._DROP_PARAMS_CACHE.clear()
 
 
 # ── Rate limits ──────────────────────────────────────────────────
@@ -209,6 +211,30 @@ class TestDropParamsProbe:
         assert first.kwargs["extra_body"]["drop_params"] is True
         assert "drop_params" not in second.kwargs.get("extra_body", {})
         assert second.kwargs["reasoning_effort"] == "low"  # reasoning retained
+
+    async def test_learning_is_shared_across_clients(self, tmp_path):
+        """A second client for the same endpoint inherits the learned drop_params
+        state — no per-client re-learn / concurrent stampede on a cache hit."""
+        # Client 1 learns it's a direct endpoint (drop_params rejected).
+        c1 = _make_client(tmp_path, discovered=True)
+        c1.client.chat.completions.parse.side_effect = [
+            _bad_request("Unsupported parameter(s): `drop_params`"),
+            _fake_response(),
+        ]
+        await c1.generate([{"role": "user", "content": "hi"}])
+        assert c1._drop_params_supported is False
+        assert LLMClient._DROP_PARAMS_CACHE[(BASE_URL, MODEL)] is False
+
+        # Client 2 is fresh but seeds from the process cache in __init__ — so it
+        # sends WITHOUT drop_params on the very first request (no rejected wave).
+        c2 = _make_client(tmp_path, discovered=True)
+        assert c2._drop_params_supported is False
+        c2.client.chat.completions.parse.return_value = _fake_response()
+        await c2.generate([{"role": "user", "content": "hi"}])
+
+        assert c2.client.chat.completions.parse.call_count == 1
+        kwargs = c2.client.chat.completions.parse.call_args.kwargs
+        assert "drop_params" not in kwargs.get("extra_body", {})
 
     async def test_fails_at_both_advances_matrix(self, tmp_path):
         """drop_params off AND still 400 → real capability gap → advance the matrix."""

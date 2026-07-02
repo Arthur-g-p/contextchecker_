@@ -47,9 +47,11 @@ def _reset_process_state():
     """Isolate the class-level caches between tests (shared mutable state)."""
     LLMClient._STRATEGY_CACHE.clear()
     LLMClient._VERIFIED_ENDPOINTS.clear()
+    LLMClient._DROP_PARAMS_CACHE.clear()
     yield
     LLMClient._STRATEGY_CACHE.clear()
     LLMClient._VERIFIED_ENDPOINTS.clear()
+    LLMClient._DROP_PARAMS_CACHE.clear()
 
 
 class TestStrategyCacheAdoption:

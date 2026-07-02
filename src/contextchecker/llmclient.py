@@ -73,6 +73,8 @@ class LLMClient:
     # the strategy-discovery round-trips. Workers still own their own client.
     _VERIFIED_ENDPOINTS: set[str] = set()
     _STRATEGY_CACHE: dict[tuple[str | None, str], int] = {}
+    # Whether the endpoint accepts the LiteLLM-only `drop_params` field. 
+    _DROP_PARAMS_CACHE: dict[tuple[str | None, str], bool] = {}
 
     def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10, cache_file: str | None = None):
         self.base_url = base_url
@@ -103,7 +105,10 @@ class LLMClient:
         # drop_params is a LiteLLM-proxy-only field. A direct endpoint rejects it.
         # We learn which we're talking to during discovery (A/B): None = unknown,
         # True = proxy (keep sending it), False = direct endpoint (never send it).
-        self._drop_params_supported: bool | None = None
+        # Seeded from the process-level cache if a sibling client already learned.
+        self._drop_params_supported: bool | None = LLMClient._DROP_PARAMS_CACHE.get(
+            (self.base_url, self.model)
+        )
 
         # Rate-limit backoff state (429 handling). Never drops an item.
         self._rate_limit_wait = 0.0          # seconds to sleep on the pending 429
@@ -164,6 +169,20 @@ class LLMClient:
             self.strategy.name, self.model,
         )
         return True
+
+
+    def _adopt_cached_drop_params(self) -> None:
+        """Seed drop_params support from the process-level cache if still unknown.
+
+        Mirrors _try_adopt_cached_strategy for the eager-construction case: a
+        client built before a sibling learned the endpoint type must pick it up
+        before firing its first (possibly concurrent) wave, or it re-learns it
+        under a stampede.
+        """
+        if self._drop_params_supported is None:
+            cached = LLMClient._DROP_PARAMS_CACHE.get((self.base_url, self.model))
+            if cached is not None:
+                self._drop_params_supported = cached
 
 
     def _next_strategy(self) -> bool:
@@ -445,6 +464,9 @@ class LLMClient:
         if not self._strategy_discovered:
             self._try_adopt_cached_strategy()
 
+        # Same for drop_params support — pick up what a sibling already learned.
+        self._adopt_cached_drop_params()
+
         if not self._strategy_discovered:
             await self._discovery_lock.acquire()
             if self._strategy_discovered:
@@ -565,6 +587,7 @@ class LLMClient:
                         # proxy: keep sending it for all subsequent requests.
                         if sent_drop_params and self._drop_params_supported is None:
                             self._drop_params_supported = True
+                            LLMClient._DROP_PARAMS_CACHE[(self.base_url, self.model)] = True
 
                         if hasattr(response, 'usage') and response.usage:
                             GLOBAL_STATS.update(response.usage.model_dump())
@@ -626,6 +649,7 @@ class LLMClient:
                         )
                         if sent_drop_params and self._drop_params_supported is None and _is_bad_request:
                             self._drop_params_supported = False
+                            LLMClient._DROP_PARAMS_CACHE[(self.base_url, self.model)] = False
                             logger.info(
                                 "   🔎 Endpoint rejected 'drop_params' — direct endpoint "
                                 "detected, retrying without it (keeping reasoning)."
