@@ -65,7 +65,6 @@ class CheckerEvaluator:
         self._service_kg_key = f"{_INTERNAL_EXT_MODEL}_response_kg"
         self._verdict_key = f"{checker_model}_checker_verdict"
         self._explanation_key = f"{checker_model}_checker_explanation"
-        self._verdicts_list_key = f"{checker_model}_checker_verdicts"
 
         # The service owns all checking logic. quiet=True suppresses its
         # pre-execution logging (validation/skip/config) since the
@@ -244,7 +243,6 @@ class CheckerEvaluator:
             for triplet in item[self._service_kg_key]:
                 triplet.pop(self._verdict_key, None)
                 triplet.pop(self._explanation_key, None)
-            item.pop(self._verdicts_list_key, None)
 
     def _compare(
         self,

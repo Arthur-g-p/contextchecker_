@@ -199,7 +199,6 @@ class TestPrepareForService:
         evaluator._service_kg_key = "_gt_eval_response_kg"
         evaluator._verdict_key = "gpt4o_checker_verdict"
         evaluator._explanation_key = "gpt4o_checker_explanation"
-        evaluator._verdicts_list_key = "gpt4o_checker_verdicts"
 
         item = _make_gt_item([("a", "b", "c")], ["Entailment"])
         # All triplets labeled → gt_labels_map has sequential indices
@@ -217,20 +216,17 @@ class TestPrepareForService:
         evaluator._service_kg_key = "_gt_eval_response_kg"
         evaluator._verdict_key = "gpt4o_checker_verdict"
         evaluator._explanation_key = "gpt4o_checker_explanation"
-        evaluator._verdicts_list_key = "gpt4o_checker_verdicts"
 
         item = _make_gt_item([("a", "b", "c")], ["Entailment"])
         # Add pre-existing verdicts
         item["claude2_response_kg"][0]["gpt4o_checker_verdict"] = "Neutral"
         item["claude2_response_kg"][0]["gpt4o_checker_explanation"] = "old"
-        item["gpt4o_checker_verdicts"] = ["Neutral"]
 
         gt_map = {0: {0: "Entailment"}}
         evaluator._prepare_for_service([item], gt_map)
 
         assert "gpt4o_checker_verdict" not in item["_gt_eval_response_kg"][0]
         assert "gpt4o_checker_explanation" not in item["_gt_eval_response_kg"][0]
-        assert "gpt4o_checker_verdicts" not in item
 
     @patch("contextchecker.eval.checkereval.CheckingService")
     def test_filters_unlabeled_and_remaps(self, mock_svc_cls):
@@ -240,7 +236,6 @@ class TestPrepareForService:
         evaluator._service_kg_key = "_gt_eval_response_kg"
         evaluator._verdict_key = "gpt4o_checker_verdict"
         evaluator._explanation_key = "gpt4o_checker_explanation"
-        evaluator._verdicts_list_key = "gpt4o_checker_verdicts"
 
         # 3 triplets, only index 0 and 2 have labels
         item = _make_gt_item(

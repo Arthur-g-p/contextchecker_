@@ -193,7 +193,7 @@ class TestSerialize:
             return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
 
     def test_basic_serialize(self, service):
-        """Verdicts written back as string values."""
+        """Verdicts written onto each triplet as string values."""
         items = [
             {KG_KEY: [
                 {"subject": "A", "predicate": "is", "object": "B"},
@@ -202,10 +202,13 @@ class TestSerialize:
         ]
         verdicts_map = {0: {0: Verdict.ENTAILMENT, 1: Verdict.CONTRADICTION}}
         service._serialize(items, verdicts_map)
-        assert items[0]["checker-model_checker_verdicts"] == ["Entailment", "Contradiction"]
+        assert items[0][KG_KEY][0]["checker-model_checker_verdict"] == "Entailment"
+        assert items[0][KG_KEY][1]["checker-model_checker_verdict"] == "Contradiction"
+        # The legacy root-level parallel list is never written anymore
+        assert "checker-model_checker_verdicts" not in items[0]
 
     def test_serialize_with_none_gaps(self, service):
-        """None verdicts (gaps/failures) preserved as None."""
+        """None verdicts (gaps/failures) written as None on the triplet."""
         items = [
             {KG_KEY: [
                 {"subject": "A", "predicate": "is", "object": "B"},
@@ -214,16 +217,17 @@ class TestSerialize:
         ]
         verdicts_map = {0: {0: Verdict.ENTAILMENT, 1: None}}
         service._serialize(items, verdicts_map)
-        assert items[0]["checker-model_checker_verdicts"] == ["Entailment", None]
+        assert items[0][KG_KEY][0]["checker-model_checker_verdict"] == "Entailment"
+        assert items[0][KG_KEY][1]["checker-model_checker_verdict"] is None
 
     def test_serialize_missing_item_in_map(self, service):
-        """Item missing from verdicts_map → all None."""
+        """Item missing from verdicts_map → triplets left untouched."""
         items = [
             {KG_KEY: [{"subject": "A", "predicate": "is", "object": "B"}]},
         ]
         verdicts_map = {}  # empty
         service._serialize(items, verdicts_map)
-        assert items[0]["checker-model_checker_verdicts"] == [None]
+        assert "checker-model_checker_verdict" not in items[0][KG_KEY][0]
 
 
 # ── _warn_oversized_references tests ─────────────────────────────────────────
@@ -367,12 +371,12 @@ class TestCheckingFilter:
         assert skipped["empty_claims"] == 0
 
     def test_already_checked_skipped(self, service):
-        """Items with existing verdict key are skipped."""
+        """Items whose triplets all carry a verdict are skipped."""
         valid = [
             {
                 "reference": ["r"],
-                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}],
-                "checker-model_checker_verdicts": ["Entailment"],
+                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C",
+                          "checker-model_checker_verdict": "Entailment"}],
             },
             {"reference": ["r"], KG_KEY: [{"subject": "X", "predicate": "Y", "object": "Z"}]},
         ]
@@ -380,6 +384,20 @@ class TestCheckingFilter:
         assert len(pending) == 1
         assert skipped["already_checked"] == 1
         assert skipped["empty_claims"] == 0
+
+    def test_legacy_root_verdicts_list_ignored(self, service):
+        """The retired root-level {model}_checker_verdicts list no longer
+        counts as checked — such items are re-checked."""
+        valid = [
+            {
+                "reference": ["r"],
+                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}],
+                "checker-model_checker_verdicts": ["Entailment"],
+            },
+        ]
+        pending, skipped = service._filter(valid)
+        assert len(pending) == 1
+        assert skipped["already_checked"] == 0
 
     def test_empty_kg_skipped(self, service):
         """Items with empty _response_kg (abstentions) are skipped."""
@@ -397,8 +415,8 @@ class TestCheckingFilter:
         valid = [
             {
                 "reference": ["r"],
-                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}],
-                "checker-model_checker_verdicts": ["Entailment"],
+                KG_KEY: [{"subject": "A", "predicate": "B", "object": "C",
+                          "checker-model_checker_verdict": "Entailment"}],
             },
         ]
         with pytest.raises(FilterError):
@@ -596,5 +614,5 @@ class TestClaimLevelResumption:
         assert items[0][KG_KEY][1]["checker-model_checker_verdict"] == "Contradiction"
         assert items[0][KG_KEY][1]["checker-model_checker_explanation"] == "New explanation"
 
-        # Legacy parallel list at root should contain all verdicts
-        assert items[0]["checker-model_checker_verdicts"] == ["Entailment", "Contradiction"]
+        # The retired root-level parallel list is never written
+        assert "checker-model_checker_verdicts" not in items[0]

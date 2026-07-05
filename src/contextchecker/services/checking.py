@@ -229,22 +229,9 @@ class CheckingService(BaseService):
         return data
 
     def _is_claim_checked(self, item: dict, claim_idx: int) -> bool:
-        """Helper to determine if a specific claim has a valid non-None verdict.
-
-        Checks both the modern triplet-level key and the legacy top-level list.
-        """
-        triplet = item[self._kg_key][claim_idx]
-        if triplet.get(self._verdict_key) is not None:
-            return True
-
-        legacy_checked_key = f"{self.model}_checker_verdicts"
-        if legacy_checked_key in item:
-            legacy_list = item[legacy_checked_key]
-            if isinstance(legacy_list, list) and claim_idx < len(legacy_list):
-                if legacy_list[claim_idx] is not None:
-                    return True
-
-        return False
+        """A claim counts as checked when its triplet carries a non-None
+        verdict for this checker model."""
+        return item[self._kg_key][claim_idx].get(self._verdict_key) is not None
 
     # ── Pipeline steps (private) ─────────────────────────────────
 
@@ -482,39 +469,22 @@ class CheckingService(BaseService):
         - ``{model}_checker_verdict``: "Entailment" | "Contradiction" | "Neutral" | None
         - ``{model}_checker_explanation``: chain-of-thought reasoning | None
 
-        For legacy unit test compatibility, it also writes the parallel
-        list of string verdicts at the root of the item dict:
-        - ``{model}_checker_verdicts``: list[str | None]
+        Triplets absent from verdicts_map (already checked in a prior run)
+        are left untouched.
         """
         for item_idx, item in enumerate(items):
             item_verdicts = verdicts_map.get(item_idx, {})
-            verdicts_list = []
             for claim_idx, triplet in enumerate(item[self._kg_key]):
-                if claim_idx in item_verdicts:
-                    cv = item_verdicts[claim_idx]
-                    # Determine raw verdict and explanation (support both ClaimVerdict and legacy Verdict/None)
-                    if isinstance(cv, ClaimVerdict):
-                        verdict_val = cv.verdict.value if cv.verdict else None
-                        explanation_val = cv.explanation
-                    else:
-                        verdict_val = cv.value if cv else None
-                        explanation_val = None
-
-                    triplet[self._verdict_key] = verdict_val
-                    triplet[self._explanation_key] = explanation_val
+                if claim_idx not in item_verdicts:
+                    continue
+                cv = item_verdicts[claim_idx]
+                # Support both ClaimVerdict and bare Verdict/None values
+                if isinstance(cv, ClaimVerdict):
+                    triplet[self._verdict_key] = cv.verdict.value if cv.verdict else None
+                    triplet[self._explanation_key] = cv.explanation
                 else:
-                    verdict_val = triplet.get(self._verdict_key)
-                    if verdict_val is None:
-                        legacy_checked_key = f"{self.model}_checker_verdicts"
-                        if legacy_checked_key in item:
-                            legacy_list = item[legacy_checked_key]
-                            if isinstance(legacy_list, list) and claim_idx < len(legacy_list):
-                                verdict_val = legacy_list[claim_idx]
-
-                verdicts_list.append(verdict_val)
-
-            # Legacy test compatibility: write the parallel list of verdicts to root
-            item[f"{self.model}_checker_verdicts"] = verdicts_list
+                    triplet[self._verdict_key] = cv.value if cv else None
+                    triplet[self._explanation_key] = None
 
     # ── Logging (service-owned sections) ─────────────────────────
 

@@ -604,7 +604,6 @@ class ExtractorEvaluator:
         service_kg_key = f"{_INTERNAL_EXT_MODEL}_response_kg"
         verdict_key = f"{self._checker_model}_checker_verdict"
         explanation_key = f"{self._checker_model}_checker_explanation"
-        verdicts_list_key = f"{self._checker_model}_checker_verdicts"
 
         pass_items = []
         for item in valid_items:
@@ -638,7 +637,6 @@ class ExtractorEvaluator:
             for triplet in synth[service_kg_key]:
                 triplet.pop(verdict_key, None)
                 triplet.pop(explanation_key, None)
-            synth.pop(verdicts_list_key, None)
 
             pass_items.append(synth)
 
