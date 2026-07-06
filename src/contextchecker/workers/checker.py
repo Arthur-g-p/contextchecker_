@@ -63,9 +63,13 @@ class ClaimVerdict:
     """Result for a single claim — verdict + explanation.
 
     This is the typed contract between the worker and the service.
+    ``error`` carries WHY the verdict is None ("context_too_long" |
+    "content_policy" | "parse_failure") so a null verdict is never
+    left open to interpretation downstream.
     """
     verdict: Verdict | None
     explanation: str | None = None
+    error: str | None = None
 
 
 # ── Retry configuration ─────────────────────────────────────────────────────
@@ -219,9 +223,11 @@ class Checker:
         for i, raw in enumerate(raw_responses):
             if isinstance(raw, ContextTooLongError):
                 stats.context_too_long += 1
+                results[i] = ClaimVerdict(verdict=None, error="context_too_long")
                 continue
             if isinstance(raw, ContentPolicyError):
                 stats.content_policy += 1
+                results[i] = ClaimVerdict(verdict=None, error="content_policy")
                 continue
 
             if isinstance(raw, Exception):
@@ -291,6 +297,10 @@ class Checker:
 
             stats.rounds.append(round_result)
             retry_indices = next_retry_indices
+
+        # Whatever never produced a valid verdict is a permanent parse failure.
+        for i in retry_indices:
+            results[i] = ClaimVerdict(verdict=None, error="parse_failure")
 
         return results
 
@@ -388,12 +398,12 @@ class Checker:
             if isinstance(raw, ContextTooLongError):
                 stats.context_too_long += 1
                 for cid in expected_ids:
-                    results[i][cid] = ClaimVerdict(verdict=None)
+                    results[i][cid] = ClaimVerdict(verdict=None, error="context_too_long")
                 continue
             if isinstance(raw, ContentPolicyError):
                 stats.content_policy += 1
                 for cid in expected_ids:
-                    results[i][cid] = ClaimVerdict(verdict=None)
+                    results[i][cid] = ClaimVerdict(verdict=None, error="content_policy")
                 continue
 
             # Any other error type — retryable failure for the whole chunk
@@ -513,12 +523,15 @@ class Checker:
             stats.rounds.append(round_result)
             retryable_claims = next_retryable
 
-        # Fill any remaining failures/gaps with None verdict so we always return results for every claim
+        # Fill any remaining failures/gaps with None verdict so we always
+        # return results for every claim. CTL/CP chunks were already filled
+        # with their cause above, so everything left here never got a valid
+        # response — a permanent parse failure.
         for idx, (numbered, _) in enumerate(chunks):
             expected_ids = {cid for cid, _ in numbered}
             for cid in expected_ids:
                 if cid not in results[idx]:
-                    results[idx][cid] = ClaimVerdict(verdict=None)
+                    results[idx][cid] = ClaimVerdict(verdict=None, error="parse_failure")
 
         return results
 

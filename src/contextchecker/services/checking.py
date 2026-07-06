@@ -143,8 +143,10 @@ class CheckingService(BaseService):
         )
         self._extractor_model = extractor_model
         self._kg_key = f"{extractor_model}_response_kg"
+        self._extraction_error_key = f"{extractor_model}_extraction_error"
         self._verdict_key = f"{model}_checker_verdict"
         self._explanation_key = f"{model}_checker_explanation"
+        self._checker_error_key = f"{model}_checker_error"
         self._checker = Checker(
             api_key=api_key,
             model=model,
@@ -214,7 +216,11 @@ class CheckingService(BaseService):
                     elif verdict_val == "Neutral":
                         neutral += 1
 
-        skipped = skip_stats["already_checked"] + skip_stats["empty_claims"]
+        skipped = (
+            skip_stats["already_checked"]
+            + skip_stats["abstained"]
+            + skip_stats["extraction_failed"]
+        )
 
         self._log_results(
             items_with_output=items_with_output,
@@ -309,17 +315,24 @@ class CheckingService(BaseService):
 
         Returns (pending, skip_stats) where skip_stats breaks down
         the reasons items were skipped:
-            already_checked: item already has verdict for this checker model
-            empty_claims:    _response_kg is empty (abstention or extraction error)
+            already_checked:   item already has verdict for this checker model
+            abstained:         kg is empty without an extraction error — per
+                               project semantics an abstention (justified or not)
+            extraction_failed: kg is empty because extraction errored
+                               ({extractor}_extraction_error present)
         """
         pending: list[dict] = []
         already_checked = 0
-        empty_claims = 0
+        abstained = 0
+        extraction_failed = 0
 
         for item in valid:
-            # Empty claims (abstention or extraction error) — nothing to check
+            # Empty claims — nothing to check; the marker tells us why
             if not item[self._kg_key]:
-                empty_claims += 1
+                if self._extraction_error_key in item:
+                    extraction_failed += 1
+                else:
+                    abstained += 1
                 continue
 
             # Item is skipped if all of its claims are already checked
@@ -337,7 +350,8 @@ class CheckingService(BaseService):
             )
         return pending, {
             "already_checked": already_checked,
-            "empty_claims": empty_claims,
+            "abstained": abstained,
+            "extraction_failed": extraction_failed,
         }
 
     def _build_payloads(self, pending: list[dict]) -> list[CheckingPayload]:
@@ -478,10 +492,14 @@ class CheckingService(BaseService):
                 if claim_idx not in item_verdicts:
                     continue
                 cv = item_verdicts[claim_idx]
+                triplet.pop(self._checker_error_key, None)
                 # Support both ClaimVerdict and bare Verdict/None values
                 if isinstance(cv, ClaimVerdict):
                     triplet[self._verdict_key] = cv.verdict.value if cv.verdict else None
                     triplet[self._explanation_key] = cv.explanation
+                    # Null verdict is never left uninterpretable: persist WHY
+                    if cv.verdict is None and cv.error:
+                        triplet[self._checker_error_key] = cv.error
                 else:
                     triplet[self._verdict_key] = cv.value if cv else None
                     triplet[self._explanation_key] = None
@@ -505,8 +523,9 @@ class CheckingService(BaseService):
         if self.quiet:
             return
         already = skip_stats["already_checked"]
-        empty = skip_stats["empty_claims"]
-        skipped = already + empty
+        abstained = skip_stats["abstained"]
+        failed = skip_stats["extraction_failed"]
+        skipped = already + abstained + failed
 
         if skipped == 0:
             return
@@ -515,8 +534,10 @@ class CheckingService(BaseService):
         logger.info("    Total:            %d valid items", valid)
         if already > 0:
             logger.info("    ├─ already checked: %d  (verdict exists for this model)", already)
-        if empty > 0:
-            logger.info("    ├─ empty claims:    %d  (abstention or extraction error)", empty)
+        if abstained > 0:
+            logger.info("    ├─ abstained:       %d  (empty claims, no error)", abstained)
+        if failed > 0:
+            logger.info("    ├─ extraction failed: %d  ('%s' present)", failed, self._extraction_error_key)
         logger.info("    └─ pending:        %d items", pending)
         logger.info("")
 

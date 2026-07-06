@@ -344,6 +344,66 @@ class TestBuildResult:
         assert result.f1 == 0.0
 
 
+# ── Test extraction-error handling (tooling failures, never abstentions) ─────
+
+ERROR_KEY = "test-model_extraction_error"
+
+
+class TestExtractionErrors:
+    """[] caused by a tooling failure must be excluded from ALL metrics and
+    reported as an error rate — not scored as (wrongful/correct) abstention."""
+
+    def test_errored_items_get_own_bucket(self):
+        ev = _evaluator()
+        errored = _make_item(gt_triplets=[_make_triplet("a", "b", "c")],
+                             pred_triplets=[])
+        errored[ERROR_KEY] = "parse_failure"
+        normal = _make_item(gt_triplets=[_make_triplet("d", "e", "f")],
+                            pred_triplets=[_make_canonical_triplet("d", "e", "f")])
+
+        buckets = ev._classify([errored, normal])
+        assert buckets.extraction_error == [errored]
+        # Crucially NOT scored as wrongful abstention despite GT + empty pred
+        assert buckets.wrongful_abstention == []
+        assert buckets.to_compare == [normal]
+
+    def test_error_rate_computed_and_no_fn_penalty(self):
+        ev = _evaluator()
+        errored = _make_item(gt_triplets=[_make_triplet("a", "b", "c"),
+                                          _make_triplet("d", "e", "f")],
+                             pred_triplets=[])
+        errored[ERROR_KEY] = "parse_failure"
+        buckets = _ItemBucket(
+            to_compare=[],
+            wrongful_answer=[],
+            wrongful_abstention=[],
+            correct_abstention=[_make_item()],
+            extraction_error=[errored],
+        )
+        result = ev._build_result([], buckets, total_items=2)
+        # The errored item's 2 GT triplets added NO FN penalty
+        assert result.fn == 0
+        assert result.extraction_errors == {
+            "count": 1,
+            "rate": 0.5,
+            "by_cause": {"parse_failure": 1},
+        }
+
+    def test_errored_items_listed_in_disagreements(self):
+        ev = _evaluator()
+        errored = _make_item(item_id="broken-1")
+        errored[ERROR_KEY] = "context_too_long"
+        buckets = _ItemBucket(
+            to_compare=[], wrongful_answer=[], wrongful_abstention=[],
+            correct_abstention=[], extraction_error=[errored],
+        )
+        disagreements = ev._build_disagreements(buckets, [])
+        assert len(disagreements) == 1
+        assert disagreements[0]["error_type"] == "extraction_error"
+        assert disagreements[0]["cause"] == "context_too_long"
+        assert disagreements[0]["id"] == "broken-1"
+
+
 # ── Test _build_disagreements ────────────────────────────────────────────────
 
 class TestBuildDisagreements:

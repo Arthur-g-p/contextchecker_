@@ -480,12 +480,17 @@ def eval_extractor(
         "extractor_model": extractor_model,
         "gt_key": gt_key,
         "pred_key": f"{extractor_model}_response_kg",
-        "method": "llm",
+        "matching": "llm-2-pass",
         "checker_model": checker_model,
         "timestamp": datetime.now().isoformat(),
     }
 
     output = {"_meta": meta, **asdict(result)}
+    # Split details are debug material — route them to the disagreements
+    # file; the summary keeps only the counts.
+    atomicity_splits = None
+    if output.get("atomicity"):
+        atomicity_splits = output["atomicity"].pop("splits", None)
     output_file.write_text(
         json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -496,6 +501,8 @@ def eval_extractor(
         "total_disagreements": len(disagreements),
         "items": disagreements,
     }
+    if atomicity_splits:
+        disagree_output["atomicity_splits"] = atomicity_splits
     disagree_file.write_text(
         json.dumps(disagree_output, indent=2, ensure_ascii=False), encoding="utf-8"
     )

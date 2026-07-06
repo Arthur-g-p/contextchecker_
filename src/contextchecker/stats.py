@@ -43,6 +43,12 @@ class PhaseStats:
     # Which batch indices failed and are retryable (debug aid)
     failed_indices: list[int] = field(default_factory=list)
 
+    # Per-item permanent failure causes: batch index → cause.
+    # Causes: "context_too_long" | "content_policy" | "parse_failure".
+    # Filled by the worker so services can persist WHY an item failed
+    # instead of leaving an uninterpretable empty result.
+    error_causes: dict[int, str] = field(default_factory=dict)
+
     @property
     def permanently_failed(self) -> int:
         """Items that failed ALL retry rounds."""

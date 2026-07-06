@@ -211,6 +211,11 @@ class Extractor:
             )
             stats.rounds.append(round_result)
 
+        # Whatever never produced a valid response — after all retry rounds
+        # (or with retries disabled) — is a permanent parse failure.
+        for i in retry_indices:
+            stats.error_causes[i] = "parse_failure"
+
         return results
 
     # ── Classification (pure logic, unit-testable) ───────────────
@@ -231,9 +236,11 @@ class Extractor:
             # Permanent per-item failures — empty result, no retry
             if isinstance(raw, ContextTooLongError):
                 stats.context_too_long += 1
+                stats.error_causes[i] = "context_too_long"
                 continue
             if isinstance(raw, ContentPolicyError):
                 stats.content_policy += 1
+                stats.error_causes[i] = "content_policy"
                 continue
 
             # Any other error type — retryable

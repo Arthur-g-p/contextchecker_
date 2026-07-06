@@ -233,3 +233,103 @@ class TestSerializeDedup:
         removed = service._serialize(items, results)
         assert removed == 0
         assert len(items[0][KG_KEY]) == 2
+
+
+# ── Outcome-marker tests (error vs abstention disambiguation) ────────────────
+
+ERROR_KEY = f"{MODEL}_extraction_error"
+
+
+class TestOutcomeMarkers:
+    """[] on disk is never ambiguous: errors carry {model}_extraction_error,
+    empty-without-error carries is_abstention."""
+
+    def test_error_cause_marks_item_and_empties_kg(self, service):
+        items = [{}, {}]
+        results = [[_trip("a", "b", "c")], []]
+        service._serialize(items, results, error_causes={1: "parse_failure"})
+        assert items[0][KG_KEY] == [{"subject": "a", "predicate": "b", "object": "c"}]
+        assert ERROR_KEY not in items[0]
+        assert items[1][KG_KEY] == []
+        assert items[1][ERROR_KEY] == "parse_failure"
+        assert "is_abstention" not in items[1]
+
+    def test_empty_without_error_is_llm_abstention(self, service):
+        items = [{}]
+        results = [[]]
+        service._serialize(items, results)
+        assert items[0][KG_KEY] == []
+        assert items[0]["is_abstention"] is True
+        assert items[0]["abstention_source"] == "llm"
+        assert ERROR_KEY not in items[0]
+
+    def test_stale_markers_cleared_on_new_result(self, service):
+        """A re-run that succeeds must drop the previous error/abstention keys."""
+        items = [{
+            ERROR_KEY: "parse_failure",
+            "is_abstention": True,
+            "abstention_source": "llm",
+        }]
+        results = [[_trip("a", "b", "c")]]
+        service._serialize(items, results)
+        assert ERROR_KEY not in items[0]
+        assert "is_abstention" not in items[0]
+        assert "abstention_source" not in items[0]
+        assert len(items[0][KG_KEY]) == 1
+
+    def test_filter_repends_errored_items(self, service):
+        """An error marker is not a result: the item is re-extracted on re-runs."""
+        valid = [
+            {"response": "Paris is in France", KG_KEY: [], ERROR_KEY: "parse_failure"},
+            {"response": "The sky is blue", KG_KEY: [
+                {"subject": "Sky", "predicate": "has color", "object": "blue"}]},
+        ]
+        pending, abstained, skipped = service._filter(valid)
+        assert len(pending) == 1
+        assert pending[0][ERROR_KEY] == "parse_failure"
+        assert skipped == 1
+        assert abstained == []
+
+
+# ── Worker cause-recording tests ─────────────────────────────────────────────
+
+class TestWorkerErrorCauses:
+    """The Extractor worker records WHY each batch index failed on
+    last_stats.error_causes so the service can persist it."""
+
+    def test_classify_records_permanent_causes(self):
+        from contextchecker.workers.extractor import Extractor
+        from contextchecker.exceptions import ContextTooLongError, ContentPolicyError
+        from contextchecker.stats import PhaseStats
+
+        with patch("contextchecker.workers.extractor.LLMClient"):
+            extractor = Extractor(api_key=FAKE_API_KEY, model=MODEL)
+
+        stats = PhaseStats()
+        responses = [
+            ContextTooLongError("too long"),
+            ContentPolicyError("blocked"),
+            '{"triplets": []}',
+        ]
+        results, retry = extractor._classify(responses, stats)
+        assert stats.error_causes == {0: "context_too_long", 1: "content_policy"}
+        assert retry == []
+        assert results[0] == [] and results[1] == []
+
+    def test_exhausted_retries_marked_as_parse_failure(self):
+        import asyncio
+        from contextchecker.workers.extractor import Extractor
+        from contextchecker.models import ExtractionPayload
+
+        with patch("contextchecker.workers.extractor.LLMClient"):
+            extractor = Extractor(api_key=FAKE_API_KEY, model=MODEL, max_retries=1)
+
+        async def always_invalid(tasks, **kwargs):
+            return [ValueError("not json") for _ in tasks]
+
+        extractor.client.generate_batch = always_invalid
+        results = asyncio.run(
+            extractor.extract_batch([ExtractionPayload(text="some text")])
+        )
+        assert results == [[]]
+        assert extractor.last_stats.error_causes == {0: "parse_failure"}

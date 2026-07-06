@@ -15,7 +15,7 @@ Architecture:
 
 import asyncio
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
@@ -39,11 +39,14 @@ _INTERNAL_EXT_MODEL = "_exteval"
 
 @dataclass
 class _ItemBucket:
-    """Post-extraction classification into four buckets."""
+    """Post-extraction classification into five buckets."""
     to_compare: list[dict]          # has GT + has predictions → normal matching
     wrongful_answer: list[dict]     # no GT but model predicted → FP-like
     wrongful_abstention: list[dict] # has GT but no predictions → FN penalty
     correct_abstention: list[dict]  # no GT, no predictions → ignored
+    # extraction failed (tooling) → excluded from ALL metrics, counted in
+    # the error rate
+    extraction_error: list[dict] = field(default_factory=list)
 
 
 # ── Matching result per item ─────────────────────────────────────────────────
@@ -102,7 +105,7 @@ class ExtractorEvaluator:
         # Predictions are always written by ExtractionService(model=extractor_model)
         # under this key — it is derived, never an override.
         self._pred_key = f"{extractor_model}_response_kg"
-        self._method = "llm"
+        self._error_key = f"{extractor_model}_extraction_error"
 
         # Guard: the predicted-triplet key must not collide with the GT key.
         # On collision (e.g. extractor_model="claude2" with the default gt_key)
@@ -262,12 +265,24 @@ class ExtractorEvaluator:
         trace = self._atomization_service.last_trace
 
         keep = split = failed = atomic_units = 0
+        splits: list[dict] = []
         for item in trace:
             for d in item.get("decisions", []):
                 dec = d.get("decision")
                 if dec == "split":
                     split += 1
                     atomic_units += len(d.get("children", []))
+                    # Full split detail — routed to the disagreements file by
+                    # the CLI so the summary JSON stays lean.
+                    orig = d.get("original", {})
+                    splits.append({
+                        "id": item.get("id"),
+                        "original": self._triplet_to_str(orig) if orig else None,
+                        "children": [
+                            self._triplet_to_str(c) for c in d.get("children", [])
+                        ],
+                        "reasoning": d.get("reasoning"),
+                    })
                 elif dec == "failed":
                     failed += 1
                 else:
@@ -282,10 +297,12 @@ class ExtractorEvaluator:
             "extracted_claims": extracted,
             "evaluated_claims": evaluated,
             "atomic_units": atomic_units,
+            "new_claims_from_splits": atomic_units - evaluated,
             "non_atomic": split,
             "failed": failed,
             "atomicity_rate": round(rate, 4),
             "information_density": round(density, 2),
+            "splits": splits,
         }
 
     # ── Duplicate-claims axis (orthogonal, read-only) ────────────
@@ -358,8 +375,15 @@ class ExtractorEvaluator:
         be populated per item depending on extraction results.
         """
         to_compare, wrongful_answer, wrongful_abstention, correct_abstention = [], [], [], []
+        extraction_error = []
 
         for item in data:
+            # Tooling failure — empty predictions here mean NOTHING about the
+            # extractor's abstention behavior. Own bucket, out of all metrics.
+            if self._error_key in item:
+                extraction_error.append(item)
+                continue
+
             has_gt = bool(item.get(self._gt_key))
             has_pred = bool(item.get(self._pred_key))
 
@@ -377,6 +401,7 @@ class ExtractorEvaluator:
             wrongful_answer=wrongful_answer,
             wrongful_abstention=wrongful_abstention,
             correct_abstention=correct_abstention,
+            extraction_error=extraction_error,
         )
 
     # ── Result building (encapsulated) ───────────────────────────
@@ -437,6 +462,25 @@ class ExtractorEvaluator:
         gt_avg = gt_triplets / to_compare_count if to_compare_count > 0 else 0.0
         pred_avg = pred_triplets / to_compare_count if to_compare_count > 0 else 0.0
 
+        # Extraction error rate — tooling reliability, co-equal with P/R/F1
+        # but never mixed into it. Denominator: every item that went through
+        # the extraction step (all five buckets).
+        error_items = buckets.extraction_error
+        attempted = (
+            to_compare_count + len(buckets.wrongful_answer)
+            + len(buckets.wrongful_abstention) + len(buckets.correct_abstention)
+            + len(error_items)
+        )
+        by_cause: dict[str, int] = {}
+        for item in error_items:
+            cause = item.get(self._error_key, "unknown")
+            by_cause[cause] = by_cause.get(cause, 0) + 1
+        extraction_errors = {
+            "count": len(error_items),
+            "rate": round(len(error_items) / attempted, 4) if attempted else 0.0,
+            "by_cause": by_cause,
+        }
+
         return ExtractorEvalResult(
             precision=round(precision, 4),
             recall=round(recall, 4),
@@ -462,9 +506,9 @@ class ExtractorEvaluator:
                 "wrongful_answer_fp_penalty": answer_fp_penalty,
             },
             correct_abstention=len(buckets.correct_abstention),
-            method=self._method,
             atomicity=atomicity,
             duplicates=duplicates,
+            extraction_errors=extraction_errors,
         )
 
     # ── LLM matching (2-pass) ────────────────────────────────────
@@ -656,10 +700,21 @@ class ExtractorEvaluator:
     ) -> list[dict]:
         """Build the per-item disagreement list for error analysis.
 
-        Includes: valid items with FP/FN, wrongful answers, wrongful abstentions.
+        Includes: valid items with FP/FN, wrongful answers, wrongful
+        abstentions, and extraction errors (so failed items are identifiable).
         Skipped items and perfect matches are excluded.
         """
         disagreements = []
+
+        # Extraction errors — tooling failures, listed for identification only
+        for i, item in enumerate(buckets.extraction_error):
+            disagreements.append({
+                "id": item.get("id", f"extraction-error-{i}"),
+                "question": item.get("question", ""),
+                "response": item.get("response", ""),
+                "error_type": "extraction_error",
+                "cause": item.get(self._error_key, "unknown"),
+            })
 
         # to_compare items with disagreements
         for i, (item, ir) in enumerate(zip(buckets.to_compare, item_results)):
@@ -757,9 +812,12 @@ class ExtractorEvaluator:
         wa = len(buckets.wrongful_answer)
         wab = len(buckets.wrongful_abstention)
         ca = len(buckets.correct_abstention)
+        err = len(buckets.extraction_error)
 
         logger.info("")
         logger.info(" 📂 Post-Extraction Classification")
+        if err > 0:
+            logger.info("    ├─ extraction error:    %d items  (tooling failure → excluded from metrics)", err)
         if wa > 0:
             logger.info("    ├─ wrongful answer:     %d items  (predicted but no GT)", wa)
         if wab > 0:
@@ -837,6 +895,21 @@ class ExtractorEvaluator:
         if abs(delta) > 0.05:
             direction = "over-extraction" if delta > 0 else "under-extraction"
             logger.info("    Delta: %+.1f/item  (%s)", delta, direction)
+
+        # ── Extraction errors (only if any) — tooling reliability, co-equal
+        # headline with P/R/F1 but never mixed into it.
+        ee = result.extraction_errors
+        if ee and ee["count"] > 0:
+            logger.info("")
+            logger.info(" 💥 Extraction Errors (excluded from metrics)")
+            logger.info(
+                "    %d items failed  (error rate %.1f%%)",
+                ee["count"], ee["rate"] * 100,
+            )
+            causes = sorted(ee["by_cause"].items(), key=lambda kv: -kv[1])
+            for i, (cause, n) in enumerate(causes):
+                prefix = "└─" if i == len(causes) - 1 else "├─"
+                logger.info("     %s %s: %d", prefix, cause, n)
 
         # ── Abstention errors (only if any)
         wa = result.abstention_errors["wrongful_answer"]

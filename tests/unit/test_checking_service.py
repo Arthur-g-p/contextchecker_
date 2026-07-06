@@ -229,6 +229,26 @@ class TestSerialize:
         service._serialize(items, verdicts_map)
         assert "checker-model_checker_verdict" not in items[0][KG_KEY][0]
 
+    def test_serialize_writes_error_cause_for_null_verdict(self, service):
+        """A None verdict is never uninterpretable: the worker's cause is
+        persisted as {model}_checker_error."""
+        from contextchecker.workers.checker import ClaimVerdict
+        items = [
+            {KG_KEY: [
+                {"subject": "A", "predicate": "is", "object": "B"},
+                {"subject": "C", "predicate": "is", "object": "D"},
+            ]},
+        ]
+        verdicts_map = {0: {
+            0: ClaimVerdict(verdict=None, error="parse_failure"),
+            1: ClaimVerdict(verdict=Verdict.ENTAILMENT, explanation="ok"),
+        }}
+        service._serialize(items, verdicts_map)
+        assert items[0][KG_KEY][0]["checker-model_checker_verdict"] is None
+        assert items[0][KG_KEY][0]["checker-model_checker_error"] == "parse_failure"
+        # Successful triplet carries no error key
+        assert "checker-model_checker_error" not in items[0][KG_KEY][1]
+
 
 # ── _warn_oversized_references tests ─────────────────────────────────────────
 
@@ -368,7 +388,8 @@ class TestCheckingFilter:
         pending, skipped = service._filter(valid)
         assert len(pending) == 1
         assert skipped["already_checked"] == 0
-        assert skipped["empty_claims"] == 0
+        assert skipped["abstained"] == 0
+        assert skipped["extraction_failed"] == 0
 
     def test_already_checked_skipped(self, service):
         """Items whose triplets all carry a verdict are skipped."""
@@ -383,7 +404,8 @@ class TestCheckingFilter:
         pending, skipped = service._filter(valid)
         assert len(pending) == 1
         assert skipped["already_checked"] == 1
-        assert skipped["empty_claims"] == 0
+        assert skipped["abstained"] == 0
+        assert skipped["extraction_failed"] == 0
 
     def test_legacy_root_verdicts_list_ignored(self, service):
         """The retired root-level {model}_checker_verdicts list no longer
@@ -400,7 +422,7 @@ class TestCheckingFilter:
         assert skipped["already_checked"] == 0
 
     def test_empty_kg_skipped(self, service):
-        """Items with empty _response_kg (abstentions) are skipped."""
+        """Empty _response_kg without an error marker counts as abstained."""
         valid = [
             {"reference": ["r"], KG_KEY: []},
             {"reference": ["r"], KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
@@ -408,7 +430,23 @@ class TestCheckingFilter:
         pending, skipped = service._filter(valid)
         assert len(pending) == 1
         assert skipped["already_checked"] == 0
-        assert skipped["empty_claims"] == 1
+        assert skipped["abstained"] == 1
+        assert skipped["extraction_failed"] == 0
+
+    def test_empty_kg_with_error_marker_counts_as_failed(self, service):
+        """Empty _response_kg WITH the extractor's error marker is an
+        extraction failure, never an abstention."""
+        valid = [
+            {
+                "reference": ["r"], KG_KEY: [],
+                f"{EXTRACTOR_MODEL}_extraction_error": "parse_failure",
+            },
+            {"reference": ["r"], KG_KEY: [{"subject": "A", "predicate": "B", "object": "C"}]},
+        ]
+        pending, skipped = service._filter(valid)
+        assert len(pending) == 1
+        assert skipped["abstained"] == 0
+        assert skipped["extraction_failed"] == 1
 
     def test_all_skipped_raises(self, service):
         """All items already checked → FilterError."""
@@ -457,7 +495,8 @@ class TestCheckingFilter:
         pending, skipped = service._filter(valid)
         assert len(pending) == 2
         assert skipped["already_checked"] == 0
-        assert skipped["empty_claims"] == 0
+        assert skipped["abstained"] == 0
+        assert skipped["extraction_failed"] == 0
 
 
 # ── _build_payloads tests ────────────────────────────────────────────────────

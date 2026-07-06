@@ -89,6 +89,9 @@ class ExtractionService(BaseService):
         self.model = model
         self.base_url = base_url
         self._kg_key = f"{model}_response_kg"
+        # Model-prefixed like the kg key: multi-extractor files must not
+        # mix up whose attempt failed.
+        self._error_key = f"{model}_extraction_error"
         self._extractor = Extractor(
             api_key=api_key,
             model=model,
@@ -135,11 +138,14 @@ class ExtractionService(BaseService):
         phase_stats = self._extractor.last_stats
 
         # Serialize results back into dicts (dedups when enabled)
-        dups_removed = self._serialize(pending, batch_results)
+        dups_removed = self._serialize(pending, batch_results, phase_stats.error_causes)
 
-        # Abstained items get empty triplets
+        # Abstained items get empty triplets + the explicit abstention flag
         for item in abstained:
+            self._clear_markers(item)
             item[self._kg_key] = []
+            item["is_abstention"] = True
+            item["abstention_source"] = "heuristic"
 
         # Log results using PhaseStats from the worker
         self._log_results(
@@ -183,7 +189,9 @@ class ExtractionService(BaseService):
         skipped = 0
 
         for item in valid:
-            if self._kg_key in item:
+            # An error marker is not a result: errored items re-enter the
+            # pending pool on re-runs instead of being skipped forever.
+            if self._kg_key in item and self._error_key not in item:
                 skipped += 1
                 continue  # already processed
             if _is_full_abstention(item["response"]):
@@ -193,25 +201,54 @@ class ExtractionService(BaseService):
 
         return pending, abstained, skipped
 
+    def _clear_markers(self, item: dict) -> None:
+        """Drop stale outcome markers before writing a fresh result.
+
+        Matters on re-runs: a previously errored item that now succeeds must
+        not keep its old error/abstention keys."""
+        item.pop(self._error_key, None)
+        item.pop("is_abstention", None)
+        item.pop("abstention_source", None)
+
     def _serialize(
         self,
         items: list[dict],
         results: list[list[Triplet]],
+        error_causes: dict[int, str] | None = None,
     ) -> int:
-        """Step 6: Write triplets back into the source dicts.
+        """Step 6: Write triplets + outcome markers back into the source dicts.
+
+        Every empty result is disambiguated on disk — [] alone is never
+        left open to interpretation:
+        - failed items:  kg=[] plus ``{model}_extraction_error`` (cause)
+        - empty, no error: kg=[] plus ``is_abstention: true`` (the model
+          asserted nothing — per project semantics that IS an abstention,
+          justified or not)
 
         When ``dedup`` is enabled (default), exact (s, p, o) duplicates are
         dropped before writing — a loss-free cleanup of the extractor's output.
         Returns the total number of duplicate triplets removed.
         """
+        error_causes = error_causes or {}
         dups_removed = 0
-        for item, triplets in zip(items, results):
+        for i, (item, triplets) in enumerate(zip(items, results)):
+            self._clear_markers(item)
+
+            if i in error_causes:
+                item[self._kg_key] = []
+                item[self._error_key] = error_causes[i]
+                continue
+
             claims = [t.model_dump() for t in triplets]
             if self._dedup:
                 unique = deduplicate_triplets(claims)
                 dups_removed += len(claims) - len(unique)
                 claims = unique
             item[self._kg_key] = claims
+
+            if not claims:
+                item["is_abstention"] = True
+                item["abstention_source"] = "llm"
         return dups_removed
 
     # ── Logging ─────────────────────────────────────────────────
@@ -226,7 +263,7 @@ class ExtractionService(BaseService):
         if invalid > 0:
             logger.info("    ├─ dropped:  %d  (no 'response' key)", invalid)
         if abstained > 0:
-            logger.info("    ├─ abstain:  %d  (empty response)", abstained)
+            logger.info("    ├─ abstain:  %d  (heuristic: empty/refusal response)", abstained)
         logger.info("    └─ valid:  %d items", valid - abstained)
         logger.info("")
 
@@ -298,7 +335,7 @@ class ExtractionService(BaseService):
         if dups_removed > 0:
             tail.append(("🔁", f"{dups_removed} syntactic duplicates removed"))
         if empty_count > 0:
-            tail.append(("⚪", f"{empty_count} items → 0 claims (empty)"))
+            tail.append(("⚪", f"{empty_count} abstentions → 0 claims"))
         prefix = "├─" if tail else "└─"
         logger.info("     %s 💎 %d items → %d triplets", prefix, with_claims, claims)
         for i, (icon, text) in enumerate(tail):

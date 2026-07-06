@@ -98,11 +98,14 @@ class ExtractorEvalResult:
                                            #  "wrongful_abstention_fn_penalty": N,
                                            #  "wrongful_answer_fp_penalty": N}
     correct_abstention: int                # items with neither GT nor predictions
-    method: str                            # "llm"
     atomicity: dict | None = None          # {"extracted_claims", "atomic_units",
                                            #  "non_atomic", "failed", "atomicity_rate",
                                            #  "information_density"} or None if skipped
     duplicates: dict | None = None         # {"predicted_claims", "unique_claims",
                                            #  "duplicate_claims", "duplicate_rate",
                                            #  "items": [{"id", "duplicates": [str]}]} or None
+    extraction_errors: dict | None = None  # {"count": N, "rate": float,
+                                           #  "by_cause": {"parse_failure": N, ...}}
+                                           # Tooling failures — excluded from ALL
+                                           # metrics above, never abstentions.
 
