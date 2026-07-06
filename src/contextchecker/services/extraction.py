@@ -80,7 +80,19 @@ class ExtractionService(BaseService):
         max_retries: int | None = None,
         quiet: bool = False,
         dedup: bool = True,
+        source_key: str = "response",
+        kg_key: str | None = None,
+        error_key: str | None = None,
+        mark_abstention: bool = True,
     ):
+        """Defaults reproduce classic behavior: extract from 'response' into
+        {model}_response_kg. Pipelines override source_key/kg_key/error_key to
+        run the same service against other fields (e.g. gt_answer).
+
+        mark_abstention: write is_abstention/abstention_source on empty
+        results. Disable when the source is not the response (an empty GT
+        extraction says nothing about response abstention).
+        """
         # Fail-fast: validate config before creating any workers.
         api_key = self._require_api_key(
             settings.EXTRACTOR_API_KEY, "EXTRACTOR_API_KEY"
@@ -88,10 +100,12 @@ class ExtractionService(BaseService):
 
         self.model = model
         self.base_url = base_url
-        self._kg_key = f"{model}_response_kg"
+        self.source_key = source_key
+        self._kg_key = kg_key or f"{model}_response_kg"
         # Model-prefixed like the kg key: multi-extractor files must not
         # mix up whose attempt failed.
-        self._error_key = f"{model}_extraction_error"
+        self._error_key = error_key or f"{model}_extraction_error"
+        self._mark_abstention = mark_abstention
         self._extractor = Extractor(
             api_key=api_key,
             model=model,
@@ -102,6 +116,14 @@ class ExtractionService(BaseService):
 
         self.quiet = quiet
         self._dedup = dedup
+
+    @property
+    def last_stats(self):
+        """Read-only view of the worker's last PhaseStats — lets composing
+        pipelines report per-phase requests/failures without reaching into
+        the worker."""
+        return self._extractor.last_stats
+
     # ── Public API ───────────────────────────────────────────────
 
     async def run(self, data: list[dict]) -> list[dict]:
@@ -130,7 +152,7 @@ class ExtractionService(BaseService):
         self._log_config()
 
         # Build payloads only for pending items
-        payloads = [ExtractionPayload(text=item["response"]) for item in pending]
+        payloads = [ExtractionPayload(text=item[self.source_key]) for item in pending]
 
         # Execute — fatal errors (auth, connection) propagate to CLI
         logger.info(settings.section_rule("Extraction"))
@@ -144,8 +166,9 @@ class ExtractionService(BaseService):
         for item in abstained:
             self._clear_markers(item)
             item[self._kg_key] = []
-            item["is_abstention"] = True
-            item["abstention_source"] = "heuristic"
+            if self._mark_abstention:
+                item["is_abstention"] = True
+                item["abstention_source"] = "heuristic"
 
         # Log results using PhaseStats from the worker
         self._log_results(
@@ -167,16 +190,16 @@ class ExtractionService(BaseService):
     # ── Pipeline steps (private) ─────────────────────────────────
 
     def _validate(self, data: list[dict]) -> list[dict]:
-        """Step 1: Drop items missing 'response' key."""
+        """Step 1: Drop items missing the source key (default 'response')."""
         valid = []
         for i, item in enumerate(data):
-            if "response" not in item:
-                logger.debug("Item %d has no 'response' key — skipping.", i)
+            if self.source_key not in item:
+                logger.debug("Item %d has no '%s' key — skipping.", i, self.source_key)
                 continue
             valid.append(item)
 
         if not valid:
-            raise InvalidInputError("No items contain a 'response' key.")
+            raise InvalidInputError(f"No items contain a '{self.source_key}' key.")
         return valid
 
     def _filter(self, valid: list[dict]) -> tuple[list[dict], list[dict], int]:
@@ -194,7 +217,7 @@ class ExtractionService(BaseService):
             if self._kg_key in item and self._error_key not in item:
                 skipped += 1
                 continue  # already processed
-            if _is_full_abstention(item["response"]):
+            if _is_full_abstention(item[self.source_key]):
                 abstained.append(item)
             else:
                 pending.append(item)
@@ -205,10 +228,14 @@ class ExtractionService(BaseService):
         """Drop stale outcome markers before writing a fresh result.
 
         Matters on re-runs: a previously errored item that now succeeds must
-        not keep its old error/abstention keys."""
+        not keep its old error/abstention keys. A service that is not allowed
+        to WRITE the abstention flags (mark_abstention=False, e.g. gt_answer
+        extraction) must not DELETE them either — they describe the response
+        and belong to the response extraction alone."""
         item.pop(self._error_key, None)
-        item.pop("is_abstention", None)
-        item.pop("abstention_source", None)
+        if self._mark_abstention:
+            item.pop("is_abstention", None)
+            item.pop("abstention_source", None)
 
     def _serialize(
         self,
@@ -246,7 +273,7 @@ class ExtractionService(BaseService):
                 claims = unique
             item[self._kg_key] = claims
 
-            if not claims:
+            if not claims and self._mark_abstention:
                 item["is_abstention"] = True
                 item["abstention_source"] = "llm"
         return dups_removed
@@ -261,7 +288,7 @@ class ExtractionService(BaseService):
         logger.info(" 📂 Validation")
         logger.info("    Total:       %d items", total)
         if invalid > 0:
-            logger.info("    ├─ dropped:  %d  (no 'response' key)", invalid)
+            logger.info("    ├─ dropped:  %d  (no '%s' key)", invalid, self.source_key)
         if abstained > 0:
             logger.info("    ├─ abstain:  %d  (heuristic: empty/refusal response)", abstained)
         logger.info("    └─ valid:  %d items", valid - abstained)
