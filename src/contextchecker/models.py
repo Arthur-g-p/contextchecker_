@@ -34,6 +34,29 @@ class CheckingPayload:
     claim_index: int        # which claim within that item
 
 
+# ── Directions (RAGChecker-style pipelines) ──────────────────────────────────
+
+@dataclass
+class Direction:
+    """Contract: Pipeline → direction runner (pipelines/directions.py).
+
+    One comparison direction: claims from one triplet list checked against
+    one reference source. The calling pipeline constructs a CheckingService
+    with a matching verdict_namespace so directions never collide.
+
+    Flat mode (per_chunk=False): claims vs item[reference_key] → one verdict
+    per claim, written in place on the shared triplet dicts.
+    Matrix mode (per_chunk=True): claims vs each chunk in item[chunks_key]
+    → {doc_id: verdict} dicts folded back onto the original triplets.
+    """
+
+    name: str                             # e.g. "answer2response" — logging/identity
+    kg_key: str                           # triplet list supplying the claims
+    reference_key: str | None = None      # item field checked against (flat mode)
+    per_chunk: bool = False               # matrix mode toggle
+    chunks_key: str = "retrieved_context" # chunk list field (matrix mode)
+
+
 # ── Atomization ──────────────────────────────────────────────────────────────
 
 @dataclass

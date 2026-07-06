@@ -127,7 +127,15 @@ class CheckingService(BaseService):
         max_retries: int | None = None,
         quiet: bool = False,
         joint_prompt_key: str | None = None,
+        kg_key: str | None = None,
+        verdict_namespace: str | None = None,
+        extraction_error_key: str | None = None,
     ):
+        """Defaults reproduce classic behavior: read {extractor_model}_response_kg,
+        write {model}_checker_verdict/_explanation/_error. Pipelines override
+        kg_key + verdict_namespace so multiple checking directions over the
+        same triplets never collide (e.g. namespace "{model}_answer2response").
+        """
         api_key = self._require_api_key(
             settings.CHECKER_API_KEY, "CHECKER_API_KEY"
         )
@@ -142,11 +150,14 @@ class CheckingService(BaseService):
             settings.DEFAULT_MAX_WORDS if joint else None
         )
         self._extractor_model = extractor_model
-        self._kg_key = f"{extractor_model}_response_kg"
-        self._extraction_error_key = f"{extractor_model}_extraction_error"
-        self._verdict_key = f"{model}_checker_verdict"
-        self._explanation_key = f"{model}_checker_explanation"
-        self._checker_error_key = f"{model}_checker_error"
+        self._kg_key = kg_key or f"{extractor_model}_response_kg"
+        self._extraction_error_key = (
+            extraction_error_key or f"{extractor_model}_extraction_error"
+        )
+        namespace = verdict_namespace or f"{model}_checker"
+        self._verdict_key = f"{namespace}_verdict"
+        self._explanation_key = f"{namespace}_explanation"
+        self._checker_error_key = f"{namespace}_error"
         self._checker = Checker(
             api_key=api_key,
             model=model,
@@ -155,6 +166,35 @@ class CheckingService(BaseService):
             max_retries=max_retries,
             joint_prompt_key=joint_prompt_key,
         )
+
+    # ── Output contract (read by pipelines/direction runner) ─────
+
+    @property
+    def kg_key(self) -> str:
+        return self._kg_key
+
+    @property
+    def verdict_key(self) -> str:
+        return self._verdict_key
+
+    @property
+    def explanation_key(self) -> str:
+        return self._explanation_key
+
+    @property
+    def checker_error_key(self) -> str:
+        return self._checker_error_key
+
+    @property
+    def extraction_error_key(self) -> str:
+        return self._extraction_error_key
+
+    @property
+    def last_stats(self):
+        """Read-only view of the worker's last PhaseStats — lets composing
+        pipelines report per-phase requests/failures without reaching into
+        the worker."""
+        return self._checker.last_stats
 
     # ── Public API ───────────────────────────────────────────────
 

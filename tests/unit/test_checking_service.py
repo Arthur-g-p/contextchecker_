@@ -250,6 +250,39 @@ class TestSerialize:
         assert "checker-model_checker_error" not in items[0][KG_KEY][1]
 
 
+# ── Parameterization tests (kg_key / verdict_namespace) ──────────────────────
+
+class TestParameterization:
+
+    @pytest.fixture(autouse=True)
+    def _patch_api_key(self, monkeypatch):
+        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+
+    def test_verdict_namespace_drives_all_output_keys(self):
+        with patch("contextchecker.services.checking.Checker"):
+            service = CheckingService(
+                model="chk",
+                extractor_model="ext",
+                kg_key="ext_gt_answer_kg",
+                verdict_namespace="chk_answer2response",
+                extraction_error_key="ext_gt_extraction_error",
+            )
+        assert service.kg_key == "ext_gt_answer_kg"
+        assert service.verdict_key == "chk_answer2response_verdict"
+        assert service.explanation_key == "chk_answer2response_explanation"
+        assert service.checker_error_key == "chk_answer2response_error"
+        assert service.extraction_error_key == "ext_gt_extraction_error"
+
+    def test_defaults_reproduce_classic_keys(self):
+        with patch("contextchecker.services.checking.Checker"):
+            service = CheckingService(model="chk", extractor_model="ext")
+        assert service.kg_key == "ext_response_kg"
+        assert service.verdict_key == "chk_checker_verdict"
+        assert service.explanation_key == "chk_checker_explanation"
+        assert service.checker_error_key == "chk_checker_error"
+        assert service.extraction_error_key == "ext_extraction_error"
+
+
 # ── _warn_oversized_references tests ─────────────────────────────────────────
 
 class TestWarnOversizedReferences:

@@ -291,6 +291,62 @@ class TestOutcomeMarkers:
         assert abstained == []
 
 
+# ── Parameterization tests (source_key / kg_key / error_key / abstention) ────
+
+class TestParameterization:
+    """Defaults reproduce classic behavior; pipelines override the keys to
+    extract from other fields (e.g. gt_answer)."""
+
+    @pytest.fixture
+    def gt_service(self):
+        with patch("contextchecker.services.extraction.Extractor"):
+            return ExtractionService(
+                model=MODEL,
+                source_key="gt_answer",
+                kg_key=f"{MODEL}_gt_answer_kg",
+                error_key=f"{MODEL}_gt_extraction_error",
+                mark_abstention=False,
+            )
+
+    def test_validate_uses_source_key(self, gt_service):
+        valid = gt_service._validate([
+            {"gt_answer": "The GT text."},
+            {"response": "has response but no gt_answer"},
+        ])
+        assert len(valid) == 1
+
+    def test_serialize_targets_custom_keys(self, gt_service):
+        items = [{}, {}]
+        results = [[_trip("a", "b", "c")], []]
+        gt_service._serialize(items, results, error_causes={1: "parse_failure"})
+        assert items[0][f"{MODEL}_gt_answer_kg"] == [
+            {"subject": "a", "predicate": "b", "object": "c"}]
+        assert items[1][f"{MODEL}_gt_extraction_error"] == "parse_failure"
+        assert KG_KEY not in items[0]
+
+    def test_mark_abstention_false_writes_no_flag(self, gt_service):
+        """Empty GT extraction says nothing about response abstention."""
+        items = [{}]
+        gt_service._serialize(items, [[]])
+        assert items[0][f"{MODEL}_gt_answer_kg"] == []
+        assert "is_abstention" not in items[0]
+        assert "abstention_source" not in items[0]
+
+    def test_mark_abstention_false_preserves_existing_flags(self, gt_service):
+        """Regression: the gt_answer extraction must not ERASE the response
+        abstention flags written by the response extraction before it."""
+        items = [{"is_abstention": True, "abstention_source": "heuristic"}]
+        gt_service._serialize(items, [[_trip("a", "b", "c")]])
+        assert items[0]["is_abstention"] is True
+        assert items[0]["abstention_source"] == "heuristic"
+
+    def test_defaults_unchanged(self, service):
+        assert service.source_key == "response"
+        assert service._kg_key == KG_KEY
+        assert service._error_key == f"{MODEL}_extraction_error"
+        assert service._mark_abstention is True
+
+
 # ── Worker cause-recording tests ─────────────────────────────────────────────
 
 class TestWorkerErrorCauses:

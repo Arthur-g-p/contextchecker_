@@ -274,6 +274,70 @@ def refcheck(
     logger.info("Results written to %s", output_file)
 
 
+@app.command()
+def ragcheck(
+    input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'gt_answer' + 'retrieved_context')."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_ragcheck.json."),
+    extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for both extractions (response + gt_answer)."),
+    checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for all four checking directions."),
+    extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
+    checker_base_api: str = typer.Option(None, "--checker-base-api", help="Optional base URL for the checker LLM API."),
+    dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Remove exact (s,p,o) duplicate triplets. On by default."),
+    joint: bool = typer.Option(True, "--joint/--no-joint", help="Joint checking (multiple claims per call). Default: on."),
+    joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
+    max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
+    extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
+    checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
+):
+    """Run RagChecker: 2 extractions + 4 checking directions, one report file."""
+    from contextchecker.pipelines.ragchecker import RagCheckerPipeline
+
+    settings.enable_logging(debug=debug)
+
+    _print_header("ragcheck")
+
+    # Resolve output path - the report IS the output artifact
+    if output_file is None:
+        output_file = input_file.parent / "results" / f"{input_file.stem}_ragcheck.json"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load input
+    try:
+        data = json.loads(input_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.error("Input file not found: %s", input_file)
+        raise typer.Exit(code=1)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid JSON in %s: %s", input_file, exc)
+        raise typer.Exit(code=1)
+
+    # Call pipeline (CLI owns I/O; pipeline composes the services)
+    try:
+        pipeline = RagCheckerPipeline(
+            extractor_model=extractor_model,
+            checker_model=checker_model,
+            extractor_base_url=extractor_base_api,
+            checker_base_url=checker_base_api,
+            dedup=dedup,
+            joint=joint,
+            joint_num=joint_num,
+            max_words=max_words,
+            extractor_max_retries=extractor_max_retries,
+            checker_max_retries=checker_max_retries,
+        )
+        pipeline.run_sync(data)
+        report = pipeline.last_report
+    except ContextCheckerError as exc:
+        logger.error("")
+        logger.error("❌ %s: %s", type(exc).__name__, exc)
+        raise typer.Exit(code=1)
+
+    # Write the single report artifact
+    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Report written to %s", output_file)
+
+
 # ── Eval subcommand group ────────────────────────────────────────────────────
 
 eval_app = typer.Typer(

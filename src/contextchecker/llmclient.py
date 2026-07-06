@@ -73,8 +73,11 @@ class LLMClient:
     # the strategy-discovery round-trips. Workers still own their own client.
     _VERIFIED_ENDPOINTS: set[str] = set()
     _STRATEGY_CACHE: dict[tuple[str | None, str], int] = {}
-    # Whether the endpoint accepts the LiteLLM-only `drop_params` field. 
+    # Whether the endpoint accepts the LiteLLM-only `drop_params` field.
     _DROP_PARAMS_CACHE: dict[tuple[str | None, str], bool] = {}
+    # Init lines already emitted at info level, so duplicate (model, mode, url)
+    # constructions don't spam startup. Repeats still log at debug.
+    _INIT_LOGGED: set[tuple[str, str, str | None]] = set()
 
     def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10, cache_file: str | None = None):
         self.base_url = base_url
@@ -139,7 +142,13 @@ class LLMClient:
                 self._cache_enabled = False
 
         sdk_mode = "OpenAI SDK" if self.base_url else "LiteLLM"
-        logger.info("   LLMClient initialized: %s via %s%s", self.model, sdk_mode, f" @ {base_url}" if base_url else "")
+        # Collapse duplicate init lines: the first unique (model, mode, url) logs
+        # at info; repeats drop to debug so --debug still shows every construction.
+        init_combo = (self.model, sdk_mode, self.base_url)
+        first_time = init_combo not in LLMClient._INIT_LOGGED
+        LLMClient._INIT_LOGGED.add(init_combo)
+        log = logger.info if first_time else logger.debug
+        log("   LLMClient initialized: %s via %s%s", self.model, sdk_mode, f" @ {base_url}" if base_url else "")
 
 
     @property
@@ -164,7 +173,7 @@ class LLMClient:
         self._strategy_index = cached_idx
         self._strategy_discovered = True
         self._discovery_succeeded = True
-        logger.info(
+        logger.debug(
             "   🔒 Strategy cache hit — reusing '%s' for %s (skipping discovery)",
             self.strategy.name, self.model,
         )
