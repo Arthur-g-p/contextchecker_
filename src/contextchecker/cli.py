@@ -13,8 +13,6 @@ The CLI does NOT format validation/results output — services own that.
 """
 
 import json
-from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -479,25 +477,15 @@ def eval_checker(
             max_words=max_words,
             max_retries=max_retries,
         )
-        result = evaluator.run_sync(data)
+        result_doc = evaluator.run_sync(data)
     except ContextCheckerError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write JSON result
-    output = {
-        "_meta": {
-            "eval_type": "checker",
-            "checker_model": checker_model,
-            "gt_key": gt_key,
-            "joint": joint,
-            "timestamp": datetime.now().isoformat(),
-        },
-        **asdict(result),
-    }
+    # Write the document verbatim — the evaluator assembled it.
     output_file.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(result_doc, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     logger.info("")
     logger.info("Results written to %s", output_file)

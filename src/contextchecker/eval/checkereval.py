@@ -12,6 +12,8 @@ Architecture:
 """
 
 import asyncio
+from dataclasses import asdict
+from datetime import datetime
 
 from contextchecker import settings
 from contextchecker.eval.metrics import (
@@ -83,14 +85,15 @@ class CheckerEvaluator:
 
     # ── Public API ───────────────────────────────────────────────
 
-    async def evaluate(self, data: list[dict]) -> CheckerEvalResult:
+    async def evaluate(self, data: list[dict]) -> dict:
         """Run the full checker evaluation pipeline.
 
         Args:
             data: Pre-loaded list of items (eval dataset with GT triplets).
 
         Returns:
-            CheckerEvalResult with accuracy, per-label report, confusion matrix.
+            Ready-to-write JSON document incl. _meta — accuracy, per-label
+            report, confusion matrix. The CLI only resolves paths and dumps.
         """
         # Step 0: Canonicalize key aliases (context→reference, query→question)
         BaseService._canonicalize_keys(data)
@@ -131,11 +134,26 @@ class CheckerEvaluator:
         self._log_eval_results(result, gt_flat, pred_flat)
         self._log_done(result)
 
-        return result
+        # Step 8: Assemble the ready-to-write document. The CLI only
+        # resolves paths and dumps JSON - it never composes content.
+        return self._assemble_document(result)
 
-    def run_sync(self, data: list[dict]) -> CheckerEvalResult:
+    def run_sync(self, data: list[dict]) -> dict:
         """Sync wrapper — same pattern as BaseService.run_sync."""
         return asyncio.run(self.evaluate(data))
+
+    def _assemble_document(self, result: CheckerEvalResult) -> dict:
+        """Build the output document the CLI writes verbatim."""
+        return {
+            "_meta": {
+                "eval_type": "checker",
+                "checker_model": self._checker_model,
+                "gt_key": self._gt_key,
+                "joint": self._service.joint,
+                "timestamp": datetime.now().isoformat(),
+            },
+            **asdict(result),
+        }
 
     # ── Pipeline steps (private) ─────────────────────────────────
 
