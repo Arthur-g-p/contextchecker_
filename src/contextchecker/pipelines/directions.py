@@ -33,7 +33,55 @@ from contextchecker.services.checking import CheckingService
 logger = settings.get_logger(__name__)
 
 
-# ── Input normalization ──────────────────────────────────────────────────────
+# ── Input normalization (shared by RAGChecker-style pipelines) ───────────────
+
+def unwrap_items(data) -> list[dict]:
+    """Accept the original RAGChecker input envelope {"results": [...]} as
+    well as a bare item list — legacy input accepted, never emitted."""
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return data["results"]
+    if isinstance(data, list):
+        return data
+    raise InvalidInputError(
+        "Input must be a list of items or a {'results': [...]} document, "
+        f"got {type(data).__name__}."
+    )
+
+
+def normalize_chunks(chunks: list) -> list[dict]:
+    """Accept [{'doc_id','text'}] or bare strings; always emit dicts."""
+    normalized = []
+    for i, chunk in enumerate(chunks):
+        if isinstance(chunk, dict):
+            normalized.append({
+                "doc_id": str(chunk.get("doc_id", f"{i:03d}")),
+                "text": str(chunk.get("text", "")),
+            })
+        else:
+            normalized.append({"doc_id": f"{i:03d}", "text": str(chunk)})
+    return normalized
+
+
+def phase_failure_lines(stats) -> list[str]:
+    """Failure sub-lines for one pipeline phase, only when something went
+    wrong. Derived from the worker's PhaseStats."""
+    if stats is None:
+        return []
+    lines = []
+    if stats.parse_error:
+        recovered = sum(r.recovered for r in stats.rounds)
+        lines.append(f"♻️  {stats.parse_error} retryable → {recovered} recovered")
+    permanent = []
+    if stats.context_too_long:
+        permanent.append(f"{stats.context_too_long} context too long")
+    if stats.content_policy:
+        permanent.append(f"{stats.content_policy} content policy")
+    if stats.permanently_failed:
+        permanent.append(f"{stats.permanently_failed} exhausted retries")
+    if permanent:
+        lines.append("💥 " + ", ".join(permanent))
+    return lines
+
 
 def _normalize_reference(value) -> list[str]:
     """The checker contract wants a list of passages; accept bare strings."""

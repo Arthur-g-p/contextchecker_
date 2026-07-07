@@ -15,7 +15,8 @@ Architecture:
 
 import asyncio
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from datetime import datetime
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
@@ -76,7 +77,7 @@ class ExtractorEvaluator:
         - LLM: 2-pass batched checker with semantic equivalence prompt.
           Pass 1: GT→Pred (recall). Pass 2: Pred→GT (precision).
 
-    Returns (ExtractorEvalResult, disagreements) — CLI writes two files.
+    Returns (summary_doc, disagreements_doc) — CLI writes two files verbatim.
     """
 
     def __init__(
@@ -163,14 +164,15 @@ class ExtractorEvaluator:
 
     async def evaluate(
         self, data: list[dict]
-    ) -> tuple[ExtractorEvalResult, list[dict]]:
+    ) -> tuple[dict, dict]:
         """Run the full extractor evaluation pipeline.
 
         Args:
             data: Pre-loaded list of items (GT-annotated dataset with response text).
 
         Returns:
-            (ExtractorEvalResult, disagreements) — result dataclass + per-item details.
+            (summary_doc, disagreements_doc) — two ready-to-write JSON
+            documents incl. _meta. The CLI only resolves paths and dumps.
         """
         # Step 0: Canonicalize key aliases
         BaseService._canonicalize_keys(data)
@@ -231,13 +233,51 @@ class ExtractorEvaluator:
         self._log_eval_results(result)
         self._log_done(result)
 
-        return result, disagreements
+        # Step 9: Assemble the two ready-to-write documents. The CLI only
+        # resolves paths and dumps JSON - it never composes content.
+        return self._assemble_documents(result, disagreements)
 
-    def run_sync(
-        self, data: list[dict]
-    ) -> tuple[ExtractorEvalResult, list[dict]]:
+    def run_sync(self, data: list[dict]) -> tuple[dict, dict]:
         """Sync wrapper — same pattern as BaseService.run_sync."""
         return asyncio.run(self.evaluate(data))
+
+    # ── Output documents (serialization owned by the evaluator) ──
+
+    def _assemble_documents(
+        self,
+        result: ExtractorEvalResult,
+        disagreements: list[dict],
+    ) -> tuple[dict, dict]:
+        """Build the two output documents the CLI writes verbatim.
+
+        Split details are debug material: they move from the summary's
+        atomicity block into the disagreements document.
+        """
+        meta = {
+            "eval_type": "extractor",
+            "extractor_model": self._extractor_model,
+            "gt_key": self._gt_key,
+            "pred_key": self._pred_key,
+            "matching": "llm-2-pass",
+            "checker_model": self._checker_model,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        summary_doc = {"_meta": meta, **asdict(result)}
+        atomicity_splits = None
+        if summary_doc.get("atomicity"):
+            # asdict() deep-copied — the dataclass keeps its splits.
+            atomicity_splits = summary_doc["atomicity"].pop("splits", None)
+
+        disagreements_doc = {
+            "_meta": meta,
+            "total_disagreements": len(disagreements),
+            "items": disagreements,
+        }
+        if atomicity_splits:
+            disagreements_doc["atomicity_splits"] = atomicity_splits
+
+        return summary_doc, disagreements_doc
 
     # ── Atomicity axis (optional, orthogonal to coverage) ────────
 

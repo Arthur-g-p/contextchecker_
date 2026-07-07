@@ -29,7 +29,12 @@ from contextchecker.models import Direction
 from contextchecker.services.base import BaseService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
-from contextchecker.pipelines.directions import run_direction
+from contextchecker.pipelines.directions import (
+    normalize_chunks,
+    phase_failure_lines,
+    run_direction,
+    unwrap_items,
+)
 
 logger = settings.get_logger(__name__)
 
@@ -369,7 +374,7 @@ class RagCheckerPipeline(BaseService):
         6. Log results  - abstention/error counts + done line
         7. Return mutated data
         """
-        data = self._unwrap(data)                     # Step 0: accept the
+        data = unwrap_items(data)                     # Step 0: accept the
         self._canonicalize_keys(data)                 # paper's {"results": [...]}
         valid = self._validate(data)                  # envelope; query→question
 
@@ -392,19 +397,6 @@ class RagCheckerPipeline(BaseService):
         return data
 
     # -- Validation --
-
-    @staticmethod
-    def _unwrap(data) -> list[dict]:
-        """Accept the original RAGChecker input envelope {"results": [...]}
-        as well as a bare item list — legacy input accepted, never emitted."""
-        if isinstance(data, dict) and isinstance(data.get("results"), list):
-            return data["results"]
-        if isinstance(data, list):
-            return data
-        raise InvalidInputError(
-            "Input must be a list of items or a {'results': [...]} document, "
-            f"got {type(data).__name__}."
-        )
 
     def _validate(self, data: list[dict]) -> list[dict]:
         """Step 1: Hard drop - all three required keys must be non-empty.
@@ -434,24 +426,8 @@ class RagCheckerPipeline(BaseService):
             )
 
         for item in valid:
-            item["retrieved_context"] = self._normalize_chunks(
-                item["retrieved_context"]
-            )
+            item["retrieved_context"] = normalize_chunks(item["retrieved_context"])
         return valid
-
-    @staticmethod
-    def _normalize_chunks(chunks: list) -> list[dict]:
-        """Accept [{'doc_id','text'}] or bare strings; always emit dicts."""
-        normalized = []
-        for i, chunk in enumerate(chunks):
-            if isinstance(chunk, dict):
-                normalized.append({
-                    "doc_id": str(chunk.get("doc_id", f"{i:03d}")),
-                    "text": str(chunk.get("text", "")),
-                })
-            else:
-                normalized.append({"doc_id": f"{i:03d}", "text": str(chunk)})
-        return normalized
 
     def _filter(self, valid):
         """No skipping in v1 (2.0 feature); LLM crash cache covers re-runs."""
@@ -623,26 +599,6 @@ class RagCheckerPipeline(BaseService):
                     counts["unknown"] += 1
         return counts
 
-    @staticmethod
-    def _phase_failure_lines(stats) -> list[str]:
-        """Failure sub-lines for one phase, only when something went wrong."""
-        if stats is None:
-            return []
-        lines = []
-        if stats.parse_error:
-            recovered = sum(r.recovered for r in stats.rounds)
-            lines.append(f"♻️  {stats.parse_error} retryable → {recovered} recovered")
-        permanent = []
-        if stats.context_too_long:
-            permanent.append(f"{stats.context_too_long} context too long")
-        if stats.content_policy:
-            permanent.append(f"{stats.content_policy} content policy")
-        if stats.permanently_failed:
-            permanent.append(f"{stats.permanently_failed} exhausted retries")
-        if permanent:
-            lines.append("💥 " + ", ".join(permanent))
-        return lines
-
     def _log_bl_results(self) -> None:
         """Print ── RAGCHECK RESULTS ──: where requests went + the metrics.
 
@@ -687,7 +643,7 @@ class RagCheckerPipeline(BaseService):
             logger.info("    %s %s %-21s %2d reqs → %s",
                         prefix, icon, name + ":", requests, summary)
             continuation = "   " if last else "│ "
-            failure_lines = self._phase_failure_lines(stats)
+            failure_lines = phase_failure_lines(stats)
             for j, sub in enumerate(failure_lines):
                 sub_prefix = "└─" if j == len(failure_lines) - 1 else "├─"
                 logger.info("    %s      %s %s", continuation, sub_prefix, sub)

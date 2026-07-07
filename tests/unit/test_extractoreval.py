@@ -508,12 +508,13 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_data_post"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
-            result, disagreements = ev.run_sync(data)
+            summary_doc, disagreements_doc = ev.run_sync(data)
 
-        assert result.precision == 1.0
-        assert result.recall == 1.0
-        assert result.f1 == 1.0
-        assert len(disagreements) == 0
+        assert summary_doc["precision"] == 1.0
+        assert summary_doc["recall"] == 1.0
+        assert summary_doc["f1"] == 1.0
+        assert summary_doc["_meta"]["eval_type"] == "extractor"
+        assert disagreements_doc["total_disagreements"] == 0
 
     def test_wrongful_abstention_from_extraction(self):
         """Extraction produces empty results → wrongful abstention."""
@@ -538,14 +539,14 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_data_post"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
-            result, disagreements = ev.run_sync(data)
+            summary_doc, disagreements_doc = ev.run_sync(data)
 
-        assert result.tp_recall == 0
-        assert result.fn == 2
-        assert result.abstention_errors["wrongful_abstention"] == 1
-        assert result.abstention_errors["wrongful_abstention_fn_penalty"] == 2
-        assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "wrongful_abstention"
+        assert summary_doc["tp_recall"] == 0
+        assert summary_doc["fn"] == 2
+        assert summary_doc["abstention_errors"]["wrongful_abstention"] == 1
+        assert summary_doc["abstention_errors"]["wrongful_abstention_fn_penalty"] == 2
+        assert disagreements_doc["total_disagreements"] == 1
+        assert disagreements_doc["items"][0]["error_type"] == "wrongful_abstention"
 
     def test_wrongful_answer_from_extraction(self):
         """Item has no GT but extraction produces triplets → wrongful answer."""
@@ -570,11 +571,11 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_data_post"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
-            result, disagreements = ev.run_sync(data)
+            summary_doc, disagreements_doc = ev.run_sync(data)
 
-        assert result.abstention_errors["wrongful_answer"] == 1
-        assert result.abstention_errors["wrongful_answer_fp_penalty"] == 1
-        assert result.fp == 1
-        assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "wrongful_answer"
-        assert disagreements[0]["false_positives"][0]["verdict"] == "no comparison made."
+        assert summary_doc["abstention_errors"]["wrongful_answer"] == 1
+        assert summary_doc["abstention_errors"]["wrongful_answer_fp_penalty"] == 1
+        assert summary_doc["fp"] == 1
+        assert disagreements_doc["total_disagreements"] == 1
+        assert disagreements_doc["items"][0]["error_type"] == "wrongful_answer"
+        assert disagreements_doc["items"][0]["false_positives"][0]["verdict"] == "no comparison made."

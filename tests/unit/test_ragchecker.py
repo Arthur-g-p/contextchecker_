@@ -94,15 +94,17 @@ class TestValidate:
 
     def test_paper_results_envelope_unwrapped(self):
         """The original RAGChecker input format wraps items in {'results': []}."""
+        from contextchecker.pipelines.directions import unwrap_items
         items = [_full_item()]
-        assert RagCheckerPipeline._unwrap({"results": items}) == items
-        assert RagCheckerPipeline._unwrap(items) == items
+        assert unwrap_items({"results": items}) == items
+        assert unwrap_items(items) == items
 
     def test_garbage_input_raises(self):
+        from contextchecker.pipelines.directions import unwrap_items
         with pytest.raises(InvalidInputError):
-            RagCheckerPipeline._unwrap("just a string")
+            unwrap_items("just a string")
         with pytest.raises(InvalidInputError):
-            RagCheckerPipeline._unwrap({"no_results_key": []})
+            unwrap_items({"no_results_key": []})
 
     def test_non_dict_items_dropped(self, pipeline):
         """String items (e.g. from a malformed file) are dropped, not crashed on."""
