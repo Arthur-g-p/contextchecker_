@@ -167,8 +167,8 @@ class TestFacade:
 
         assert entry == fake_report["results"][0]
         cls.assert_called_once()
-        # Facade forces quiet mode — it is a library call, not a CLI run
-        assert cls.call_args.kwargs["quiet"] is True
+        # Facade forces silence — it is a library call, not a CLI run
+        assert cls.call_args.kwargs["verbosity"] == "silent"
         instance.run_sync.assert_called_once_with(
             [{"response": "some response", "retrieved_context": ["chunk"]}]
         )

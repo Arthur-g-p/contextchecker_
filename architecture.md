@@ -38,12 +38,14 @@ CLI (controllers)  →  Pipelines / Services (orchestration)  →  Workers (exec
   eval result dataclasses).
 - `llmclient.py` — shared LLM client (top-level, not in workers/). Owns
   connection preflight, response-format strategy discovery + process-level
-  caching, drop-params handling, and the crash cache: every response is
-  persisted to `.rag_crash_cache.db` (sqlite, in the working directory), so a
-  crashed run replays already-paid calls on re-run. Per-item errors
-  (ContextTooLong, ContentPolicy, parse) are returned as *values* in the batch
-  result list; fatal errors (auth, connection, budget) save the cache and
-  propagate. **[UNVERIFIED: internals beyond this contract]**
+  caching, drop-params handling, and the crash cache: on a FATAL error,
+  in-flight responses are saved to `.rag_crash_cache.db` (sqlite) so the
+  next run resumes without re-paying; on successful completion the client
+  deletes the file. It exists ONLY to rescue crashed runs — it never
+  replays across successful runs. Per-item errors (ContextTooLong,
+  ContentPolicy, parse) are returned as *values* in the batch result list;
+  fatal errors (auth, connection, budget) save the cache and propagate.
+  **[UNVERIFIED: internals beyond this contract]**
 - `stats.py` — `PhaseStats` (per-batch outcomes incl. per-index
   `error_causes`), `RoundResult`, global `TokenStats`, shared log helpers.
 
@@ -175,11 +177,18 @@ a tooling failure; bare `[]` is an abstention (see docs/outcome_markers.md).
   Config / RESULTS), tree structures, section rules
   (`settings.section_rule`). Recognition value across commands is a product
   feature — keep it consistent.
-- Known accepted flaw: `quiet=True` gates only the *pre-execution* sections;
-  service RESULTS blocks and the global token table still print. Pipelines
-  currently hardcode quiet children and add their own consolidated
-  RESULTS block at the end. A full quiet-semantics cleanup is deliberately
-  deferred.
+- **One printing knob, never booleans**: `verbosity: "full" | "compact" |
+  "silent"` (validated in `BaseService._init_verbosity`, levels in
+  `services/base.VERBOSITY_LEVELS`) plus an optional `section_label`.
+  `full` = the classic standalone output (default, byte-identical for all
+  single commands). `compact` = pipeline children: labeled section rule +
+  API/BL results, no pre-exec sections, no per-phase token table, no done
+  line — the composing pipeline owns those and prints the token table once.
+  `silent` = nothing (progress bars are not logging and remain) — repeated
+  runs and library calls. The former `quiet: bool` is gone.
+- Evaluators run their services compact and print the token table once at
+  their own end. (Evaluator-level verbosity is a later cleanup — with
+  `--runs` they currently narrate every run.)
 
 ## Coding rules
 

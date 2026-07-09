@@ -133,6 +133,40 @@ Identity (enforced by a shared denominator and asserted in tests):
 | `extraction_error_rate` (+ per-side counts) | items with tooling failures / evaluated | The report is honest about its own tooling. These items are excluded from every quality metric — our parse failure must never masquerade as the evaluated system's abstention or hallucination. |
 | `judge_failure_rate` | None verdicts / all issued checks | Checker reliability per run: a run with 4% failed judgments deserves less trust than one with 0.1%. Catches loud failures (parse/context); silent judge degradation (all-Entailment bias) is a known open problem — see the drawbacks backlog. |
 
+## Repeated runs: `--runs N` (variance measurement)
+
+Single-run numbers are point samples of a noisy process — a 25% vs 30% F1
+across two runs decides nothing. `--runs N` (also on `faithcheck`,
+`eval extractor`, `eval checker`) repeats the whole experiment N times and
+reports `mean ± std [min, max]` per metric; the [min, max] band shows where
+the results "stuck". N=3 is the floor, N=5 when a decision rides on it, and
+the cost is N x the LLM bill. A `± 0.000` result against a deterministic
+endpoint is a real finding, not a bug.
+
+The feature belongs to the pipeline/evaluator (`runs` constructor
+parameter) — the CLI only passes the number through. Mechanics:
+
+- Every run starts from a pristine deep copy of the input, snapshotted
+  BEFORE run 1 (run 1 mutates in place per the run() contract; a later
+  copy of the mutated data would carry run 1's claims and verdicts, the
+  skip logic would no-op runs 2..N, and the variance would read a fake
+  zero).
+- All N runs print symmetrically: a Run n/N header, progress bars, one
+  summary line with duration. The full phase narrative belongs to
+  `--runs 1` only; validation + config print once (they are run-invariant).
+  One VARIANCE block and one cumulative token table land at the end.
+
+The multi-run file (default `--runs 1` keeps today's document, byte-identical):
+
+- `_meta` gains `runs` and total `duration_seconds`;
+- `overall_metrics` stays **flat and means-valued** — variance-unaware
+  readers parse a multi-run report like a single-run one;
+- `variance` (new sibling): per metric `{std, min, max, values}`;
+- `runs` (new sibling, the content): N complete, byte-normal N=1 reports —
+  "a report is a report is a report", one parser reads everything, per-item
+  run-vs-run comparison is the consumer's business and fully possible.
+  There is no top-level `results` in a multi-run file.
+
 ## Known methodology limitations (documented, not hidden)
 
 Beyond the metric definitions themselves: claim granularity acts as an

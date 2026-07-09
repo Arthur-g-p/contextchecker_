@@ -35,7 +35,7 @@ def _pipeline():
     with patch("contextchecker.pipelines.refchecker.ExtractionService"), \
          patch("contextchecker.pipelines.refchecker.CheckingService"):
         return RefCheckerPipeline(
-            extractor_model=EXTRACTOR, checker_model=CHECKER, quiet=True
+            extractor_model=EXTRACTOR, checker_model=CHECKER, verbosity="silent"
         )
 
 

@@ -14,9 +14,24 @@ Subclasses override with their own parameter/return types.
 """
 
 import asyncio
+import copy
+import time
 from abc import ABC, abstractmethod
 
+from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
+from contextchecker.stats import log_token_stats, log_variance_block
+from contextchecker.utils import build_variance
+
+logger = settings.get_logger(__name__)
+
+# The one printing knob. Booleans multiply, levels scale:
+#   full    — everything, the classic standalone output (default)
+#   compact — section rule (with label) + API/BL results; no pre-exec
+#             sections, no token table, no done line. For pipeline children.
+#   silent  — no log lines at all (progress bars are not logging and remain).
+#             For repeated runs and library calls.
+VERBOSITY_LEVELS = ("full", "compact", "silent")
 
 
 class BaseService(ABC):
@@ -107,9 +122,88 @@ class BaseService(ABC):
 
     # ── Freebies (inherited as-is) ───────────────────────────────
 
+    def _init_verbosity(self, verbosity: str, section_label: str | None = None) -> None:
+        """Validate and store the printing level + optional section label.
+
+        Call from every service/pipeline constructor. Fail-fast on typos —
+        a silent fallback to 'full' would hide the mistake in log spam.
+        """
+        if verbosity not in VERBOSITY_LEVELS:
+            raise InvalidInputError(
+                f"verbosity must be one of {VERBOSITY_LEVELS}, got '{verbosity}'."
+            )
+        self.verbosity = verbosity
+        self.section_label = section_label
+
     def run_sync(self, data: list[dict]) -> list[dict]:
         """Sync wrapper for CLI and facade consumers."""
         return asyncio.run(self.run(data))
+
+    # One-line run summary. Presence-filtered: only keys that exist in a
+    # pipeline's overall_metrics are shown. Override when a subclass's
+    # headline metric is not listed.
+    _RUN_SUMMARY_KEYS = ("precision", "recall", "f1", "faithfulness")
+
+    async def _run_repeated(self, data: list[dict]) -> list[dict]:
+        """Repeat _run_once N times; aggregate the runs into last_report.
+
+        Metric-agnostic: build_variance() discovers whatever numeric keys
+        the pipeline's overall_metrics carries — nothing here names one.
+
+        Subclass contract: async ``_run_once(data, announce, report)``,
+        ``last_report`` shaped {_meta, overall_metrics, results}, and
+        ``self._runs``. Produces {_meta, overall_metrics (means), variance,
+        runs (N complete normal reports)}.
+        """
+        reports: list[dict] = []
+        total_start = time.perf_counter()
+        # Run 1 mutates *data* in place; a copy taken after it would carry
+        # its results and the skip logic would no-op runs 2..N.
+        pristine = copy.deepcopy(data)
+
+        for run in range(1, self._runs + 1):
+            if self.verbosity == "full":
+                logger.info("")
+                logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
+            working = data if run == 1 else copy.deepcopy(pristine)
+            started = time.perf_counter()
+            await self._run_once(working, announce=(run == 1), report=False)
+            self.last_report["_meta"]["run"] = run
+            self.last_report["_meta"]["duration_seconds"] = round(
+                time.perf_counter() - started, 1)
+            reports.append(self.last_report)
+            if self.verbosity == "full":
+                metrics = self.last_report.get("overall_metrics", {})
+                parts = [
+                    f"{key} {metrics[key]:.3f}"
+                    for key in self._RUN_SUMMARY_KEYS
+                    if isinstance(metrics.get(key), (int, float))
+                ]
+                logger.info(" ✅ Run %d/%d done in %.1fs · %s",
+                            run, self._runs,
+                            self.last_report["_meta"]["duration_seconds"],
+                            " · ".join(parts) or "done")
+
+        means, variance = build_variance(
+            [r.get("overall_metrics", {}) for r in reports])
+        durations = [r["_meta"]["duration_seconds"] for r in reports]
+        total_seconds = round(time.perf_counter() - total_start, 1)
+        if self.verbosity == "full":
+            log_variance_block(self._runs, means, variance,
+                               durations, total_seconds)
+            log_token_stats()
+
+        outer_meta = {k: v for k, v in reports[0]["_meta"].items()
+                      if k not in ("run", "duration_seconds")}
+        outer_meta["runs"] = self._runs
+        outer_meta["duration_seconds"] = total_seconds
+        self.last_report = {
+            "_meta": outer_meta,
+            "overall_metrics": means,
+            "variance": variance,
+            "runs": reports,
+        }
+        return data
 
     @staticmethod
     def _require_api_key(key: str | None, name: str) -> str:

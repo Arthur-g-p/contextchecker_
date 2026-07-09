@@ -223,6 +223,37 @@ def log_api_parsing(
     logger.info("")
 
 
+def log_variance_block(
+    runs: int,
+    means: dict,
+    variance: dict,
+    durations: list[float] | None = None,
+    total_seconds: float | None = None,
+) -> None:
+    """Print ── VARIANCE (N runs) ──: mean ± std [min, max] per metric,
+    plus the per-run durations. The math behind means/variance lives in
+    utils.build_variance."""
+    logger.info("")
+    logger.info(settings.section_rule(f"VARIANCE ({runs} runs)"))
+    logger.info("")
+    logger.info(" 📊 Metrics  (mean ± std  [min, max])")
+    keys = list(means.keys())
+    for i, key in enumerate(keys):
+        prefix = "└─" if i == len(keys) - 1 else "├─"
+        v = variance[key]
+        logger.info(
+            "    %s %-24s %.3f ± %.3f   [%.3f, %.3f]",
+            prefix, key + ":", means[key], v["std"], v["min"], v["max"],
+        )
+    if durations:
+        logger.info("")
+        parts = " · ".join(f"{d:.1f}s" for d in durations)
+        if total_seconds is not None:
+            parts += f"   (total {total_seconds:.1f}s)"
+        logger.info(" ⏱️  Runs: %s", parts)
+    logger.info("")
+
+
 def log_token_stats() -> None:
     """Log 📊 Token stats from GLOBAL_STATS. Same format across all services.
 

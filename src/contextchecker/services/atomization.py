@@ -42,7 +42,8 @@ class AtomizationService(BaseService):
         base_url: str | None = None,
         concurrency: int = 10,
         max_retries: int | None = None,
-        quiet: bool = False,
+        verbosity: str = "full",
+        section_label: str | None = None,
         dedup: bool = True,
     ):
         # Fail-fast: validate config before creating any workers.
@@ -62,7 +63,7 @@ class AtomizationService(BaseService):
             max_retries=max_retries,
         )
 
-        self.quiet = quiet
+        self._init_verbosity(verbosity, section_label)
         self._dedup = dedup
         self.last_trace: list[dict] = []  # per-item decision trace, built in _serialize
 
@@ -91,7 +92,7 @@ class AtomizationService(BaseService):
         self._log_skip(len(valid), skipped, len(pending))
 
         if not pending:
-            if not self.quiet:
+            if self.verbosity != "silent":
                 logger.info(" ✨ All items already atomized. Nothing to do.")
             return data
 
@@ -106,8 +107,8 @@ class AtomizationService(BaseService):
         payloads = self._build_payloads(pending)
 
         # Step 4: Execute — delegate to the Atomizer worker (fatal errors propagate to CLI)
-        if not self.quiet:
-            logger.info("── Atomization ───────────────────────────────────────")
+        if self.verbosity != "silent":
+            logger.info(settings.section_rule(self.section_label or "Atomization"))
         batch_results = await self._atomizer.atomize_batch(payloads)
         phase_stats = self._atomizer.last_stats
 
@@ -331,8 +332,8 @@ class AtomizationService(BaseService):
     # ── Logging ─────────────────────────────────────────────────
 
     def _log_validation(self, total: int, valid: int) -> None:
-        """Print 📂 Validation section."""
-        if self.quiet:
+        """Print 📂 Validation section (full only)."""
+        if self.verbosity != "full":
             return
         invalid = total - valid
         logger.info(" 📂 Validation")
@@ -344,7 +345,7 @@ class AtomizationService(BaseService):
 
     def _log_skip(self, valid: int, skipped: int, pending: int) -> None:
         """Print 🔄 Skip section. Hidden entirely when nothing was skipped."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         if skipped == 0:
             return
@@ -356,7 +357,7 @@ class AtomizationService(BaseService):
 
     def _log_config(self) -> None:
         """Print ⚙️  Config section."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         location = f"{self.model}"
         if self.base_url:
@@ -377,13 +378,20 @@ class AtomizationService(BaseService):
         phase_stats: PhaseStats,
         stats: dict,
     ) -> None:
-        """Print the full results block."""
+        """Print the full results block.
+
+        compact: API + BL only (composite owns tokens + done);
+        silent: nothing."""
+        if self.verbosity == "silent":
+            return
         logger.info("")
-        logger.info("── ATOMIZER RESULTS ─────────────────────────────────────────")
-        logger.info("")
+        if self.verbosity == "full":
+            logger.info(settings.section_rule("ATOMIZER RESULTS"))
+            logger.info("")
         log_api_parsing(total_triplets, phase_stats)
         self._log_bl_results(stats)
-        log_token_stats()
+        if self.verbosity == "full":
+            log_token_stats()
         self._log_done(total, stats, skipped)
 
     def _log_bl_results(self, stats: dict) -> None:
@@ -429,8 +437,8 @@ class AtomizationService(BaseService):
     def _log_done(
         self, total: int, stats: dict, skipped: int,
     ) -> None:
-        """Print ✅ Done summary line — items processed + what actually happened."""
-        if self.quiet:
+        """Print ✅ Done summary line (full only)."""
+        if self.verbosity != "full":
             return
         parts = [f"{stats['input']} → {stats['output']} triplets"]
         if stats["split"] > 0:

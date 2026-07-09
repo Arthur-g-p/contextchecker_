@@ -4,6 +4,51 @@ Shared utility functions — pure helpers with no side effects.
 This file is a leaf dependency — it imports nothing from contextchecker.
 """
 import json
+import statistics
+
+
+# ── Repeated-run aggregation (pure math; printing lives in stats.py) ─────────
+
+def aggregate_values(values: list) -> dict | None:
+    """std/min/max/values over the numeric entries; None if nothing numeric.
+
+    Sample standard deviation (n-1); a single value gets std 0.0 so the
+    field shape stays constant. Nulls are skipped, never zeroed.
+    """
+    known = [v for v in values
+             if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if not known:
+        return None
+    return {
+        "std": round(statistics.stdev(known), 4) if len(known) > 1 else 0.0,
+        "min": round(min(known), 4),
+        "max": round(max(known), 4),
+        "values": [round(v, 4) for v in known],
+    }
+
+
+def build_variance(metric_dicts: list[dict]) -> tuple[dict, dict]:
+    """(means, variance) over the top-level numeric keys of per-run dicts.
+
+    Non-numeric keys (support, extraction_errors, nested reports) are
+    skipped — they live untouched inside each run's own document.
+    """
+    keys: list[str] = []
+    for d in metric_dicts:
+        for key, value in d.items():
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and key not in keys):
+                keys.append(key)
+
+    means: dict = {}
+    variance: dict = {}
+    for key in keys:
+        agg = aggregate_values([d.get(key) for d in metric_dicts])
+        if agg is None:
+            continue
+        means[key] = round(sum(agg["values"]) / len(agg["values"]), 4)
+        variance[key] = agg
+    return means, variance
 
 def build_compact_schema_example(schema) -> str:
     """Build a compact JSON example from a Pydantic model for vanilla LLM prompts.

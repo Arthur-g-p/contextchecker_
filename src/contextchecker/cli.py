@@ -286,6 +286,7 @@ def ragcheck(
     max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
     extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
     checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
+    runs: int = typer.Option(1, "--runs", help="Repeat the whole run N times and report variance (N x LLM cost)."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run RagChecker: 2 extractions + 4 checking directions, one report file."""
@@ -310,7 +311,7 @@ def ragcheck(
         logger.error("Invalid JSON in %s: %s", input_file, exc)
         raise typer.Exit(code=1)
 
-    # Call pipeline (CLI owns I/O; pipeline composes the services)
+    # Call pipeline
     try:
         pipeline = RagCheckerPipeline(
             extractor_model=extractor_model,
@@ -323,6 +324,7 @@ def ragcheck(
             max_words=max_words,
             extractor_max_retries=extractor_max_retries,
             checker_max_retries=checker_max_retries,
+            runs=runs,
         )
         pipeline.run_sync(data)
         report = pipeline.last_report
@@ -350,6 +352,7 @@ def faithcheck(
     max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
     extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
     checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
+    runs: int = typer.Option(1, "--runs", help="Repeat the whole run N times and report variance (N x LLM cost)."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run faithfulness checking without ground truth: response claims vs retrieved context."""
@@ -374,7 +377,7 @@ def faithcheck(
         logger.error("Invalid JSON in %s: %s", input_file, exc)
         raise typer.Exit(code=1)
 
-    # Call pipeline (CLI owns I/O; pipeline composes the services)
+    # Call pipeline
     try:
         pipeline = FaithfulnessPipeline(
             extractor_model=extractor_model,
@@ -387,6 +390,7 @@ def faithcheck(
             max_words=max_words,
             extractor_max_retries=extractor_max_retries,
             checker_max_retries=checker_max_retries,
+            runs=runs,
         )
         pipeline.run_sync(data)
         report = pipeline.last_report
@@ -439,6 +443,9 @@ def eval_checker(
     max_retries: int = typer.Option(
         None, "--max-retries", help="Max retry rounds for API/parsing failures."
     ),
+    runs: int = typer.Option(
+        1, "--runs", help="Repeat the whole eval N times and report variance (N x LLM cost)."
+    ),
     debug: bool = typer.Option(
         False, "--debug", help="Enable debug output."
     ),
@@ -476,6 +483,7 @@ def eval_checker(
             joint_num=joint_num,
             max_words=max_words,
             max_retries=max_retries,
+            runs=runs,
         )
         result_doc = evaluator.run_sync(data)
     except ContextCheckerError as exc:
@@ -540,6 +548,9 @@ def eval_extractor(
         None, "--atomizer-base-api",
         help="Optional base URL for the atomizer LLM API.",
     ),
+    runs: int = typer.Option(
+        1, "--runs", help="Repeat the whole eval N times and report variance (N x LLM cost)."
+    ),
     debug: bool = typer.Option(
         False, "--debug", help="Enable debug output.",
     ),
@@ -583,6 +594,7 @@ def eval_extractor(
             max_retries=max_retries,
             atomizer_model=atomizer_model,
             atomizer_base_url=atomizer_base_api,
+            runs=runs,
         )
         summary_doc, disagreements_doc = evaluator.run_sync(data)
     except ContextCheckerError as exc:

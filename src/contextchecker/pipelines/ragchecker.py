@@ -35,6 +35,7 @@ from contextchecker.pipelines.directions import (
     run_direction,
     unwrap_items,
 )
+from contextchecker.stats import log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -286,11 +287,21 @@ class RagCheckerPipeline(BaseService):
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         checker_max_retries: int | None = None,
-        quiet: bool = False,
+        verbosity: str = "full",
+        runs: int = 1,
     ):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
-        self.quiet = quiet
+        self._init_verbosity(verbosity)
+        # runs > 1 = variance mode: the pipeline repeats the whole experiment
+        # itself (the controller only passes the number through).
+        self._runs = max(1, runs)
+        # Children narrate compactly under the pipeline's labels; silent when
+        # the pipeline is silent (library use) OR in variance mode, where all
+        # runs print symmetrically as one summary line each.
+        child_verbosity = (
+            "silent" if (verbosity == "silent" or self._runs > 1) else "compact"
+        )
         # The single output artifact, populated by run() — the CLI reads this
         # instead of calling the pipeline a second time (atomizer precedent).
         self.last_report: dict | None = None
@@ -308,14 +319,17 @@ class RagCheckerPipeline(BaseService):
             base_url=extractor_base_url,
             concurrency=concurrency,
             max_retries=extractor_max_retries,
-            quiet=True,
+            verbosity=child_verbosity,
             dedup=dedup,
         )
-        self._extract_response = ExtractionService(**extractor_config)
+        self._extract_response = ExtractionService(
+            **extractor_config, section_label="Extraction: response",
+        )
         # mark_abstention=False: an empty GT extraction is a data-quality
         # signal, not a response abstention.
         self._extract_gt = ExtractionService(
             **extractor_config,
+            section_label="Extraction: gt_answer",
             source_key="gt_answer",
             kg_key=self._gt_kg,
             error_key=self._gt_err,
@@ -338,7 +352,8 @@ class RagCheckerPipeline(BaseService):
                 joint_num=joint_num,
                 max_words=max_words,
                 max_retries=checker_max_retries,
-                quiet=True,
+                verbosity=child_verbosity,
+                section_label=f"Direction: {name}",
                 kg_key=kg_key,
                 verdict_namespace=f"{checker_model}_{name}",
                 extraction_error_key=error_key,
@@ -361,17 +376,27 @@ class RagCheckerPipeline(BaseService):
     # -- Pipeline: the BaseService 7-step run() shape --
 
     async def run(self, data: list[dict]) -> list[dict]:
-        """Run both extractions and all four directions over *data*, in place.
+        """Run the pipeline; with runs > 1, repeat it and report variance."""
+        if self._runs <= 1:
+            return await self._run_once(data)
+        return await self._run_repeated(data)
+
+    async def _run_once(
+        self, data: list[dict], announce: bool = True, report: bool = True,
+    ) -> list[dict]:
+        """One full pass over *data*, in place.
 
         1. Validate     - hard drop: response, gt_answer, retrieved_context
                           all required non-empty; chunks normalized to
                           {doc_id, text} dicts
         2. Filter       - none (v1: no skipping; crash cache covers re-runs)
-        3. Log pre-exec - validation + config
+        3. Log pre-exec - validation + config (announce=False in variance
+                          mode after run 1 - they are run-invariant)
         4. Execute      - 2 extractions, then the 4 directions
         5. Serialize    - none in-place (services + runner already did);
-                          the report is built separately via build_report()
-        6. Log results  - abstention/error counts + done line
+                          the report lands on last_report
+        6. Log results  - consolidated results (report=False in variance
+                          mode - the VARIANCE block reports instead)
         7. Return mutated data
         """
         data = unwrap_items(data)                     # Step 0: accept the
@@ -379,22 +404,24 @@ class RagCheckerPipeline(BaseService):
         valid = self._validate(data)                  # envelope; query→question
 
         self._filter(valid)                           # 2 (no-op)
-        self._log_validation(len(data), len(valid))   # 3
-        self._log_config()
+        if announce:                                  # 3
+            self._log_validation(len(data), len(valid))
+            self._log_config()
 
-        logger.info(settings.section_rule("Extraction: response"))
+        # Children print their own labeled section rules (compact mode).
         await self._extract_response.run(valid)       # 4
-        logger.info(settings.section_rule("Extraction: gt_answer"))
         await self._extract_gt.run(valid)
 
         for direction, service in self._directions:
-            logger.info(settings.section_rule(f"Direction: {direction.name}"))
             await run_direction(service, valid, direction)
 
         self._serialize()                             # 5 (no-op)
         self.last_report = self.build_report(data)    # 6: the single artifact
-        self._log_results()                           # 7: consolidated results
+        if report:
+            self._log_results()                       # 7: consolidated results
         return data
+
+    # _run_repeated inherited from BaseService (variance mode)
 
     # -- Validation --
 
@@ -529,20 +556,34 @@ class RagCheckerPipeline(BaseService):
 
     @staticmethod
     def _flat_cell(triplet: dict, namespace: str) -> dict:
-        return {
+        """A null verdict is never opaque in the report: the check-failure
+        cause rides along, sparsely."""
+        cell = {
             "verdict": triplet.get(f"{namespace}_verdict"),
             "explanation": triplet.get(f"{namespace}_explanation"),
         }
+        error = triplet.get(f"{namespace}_error")
+        if error:
+            cell["error"] = error
+        return cell
 
     @staticmethod
     def _matrix_row(triplet: dict, namespace: str, doc_ids: list[str]) -> list[dict]:
         """One row per claim, one cell per chunk, in retrieved_context order.
 
-        Matrix cells carry no explanations (pending formulas-round decision:
-        claims x chunks explanations are pure output-token cost).
+        Matrix cells carry no explanations (claims x chunks explanations are
+        pure output-token cost) but DO carry the failure cause when a check
+        errored — sparse "error" key, same rule as the flat cells.
         """
         verdicts = triplet.get(f"{namespace}_verdicts") or {}
-        return [{"verdict": verdicts.get(doc_id)} for doc_id in doc_ids]
+        errors = triplet.get(f"{namespace}_errors") or {}
+        row = []
+        for doc_id in doc_ids:
+            cell = {"verdict": verdicts.get(doc_id)}
+            if errors.get(doc_id):
+                cell["error"] = errors[doc_id]
+            row.append(cell)
+        return row
 
     # -- Serialization: none in place; build_report() is the artifact --
 
@@ -552,7 +593,7 @@ class RagCheckerPipeline(BaseService):
     # -- Logging --
 
     def _log_validation(self, total: int, valid: int) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         dropped = total - valid
         logger.info(" 📂 Validation")
@@ -567,7 +608,7 @@ class RagCheckerPipeline(BaseService):
         pass
 
     def _log_config(self) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         logger.info(" ⚙️  Config")
         logger.info("    Extractor:   %s", self._extractor_model)
@@ -577,8 +618,10 @@ class RagCheckerPipeline(BaseService):
         logger.info("")
 
     def _log_results(self) -> None:
-        """Step 7: consolidated results — pipeline tree + metrics overview."""
+        """Step 7: consolidated results — pipeline tree + metrics + tokens once."""
         self._log_bl_results()
+        if self.verbosity == "full":
+            log_token_stats()
         self._log_done()
 
     @staticmethod
@@ -604,7 +647,7 @@ class RagCheckerPipeline(BaseService):
 
         This block is the user's first impression of the whole system —
         general, not per item."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         report = self.last_report
         results = report["results"]
@@ -692,7 +735,7 @@ class RagCheckerPipeline(BaseService):
         logger.info("")
 
     def _log_done(self) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         report = self.last_report
         logger.info(" ✅ Done: ragchecked %d/%d items → report with %d metrics",

@@ -222,6 +222,28 @@ class TestBuildReport:
         # gt claim's retrieved2answer: {"000": "Neutral", "001": "Entailment"}
         assert entry["relevant_chunks"] == ["001"]
 
+    def test_flat_cell_carries_error_cause(self, pipeline):
+        """A null verdict in the report explains itself — sparse 'error' key."""
+        item = _checked_item()
+        triplet = item[RESPONSE_KG][0]
+        triplet[f"{CHK}_answer2response_verdict"] = None
+        triplet[f"{CHK}_answer2response_error"] = "parse_failure"
+        entry = pipeline.build_report([item])["results"][0]
+        assert entry["answer2response"][0]["verdict"] is None
+        assert entry["answer2response"][0]["error"] == "parse_failure"
+        # Healthy cells carry no error key
+        assert "error" not in entry["response2answer"][0]
+
+    def test_matrix_cell_carries_error_cause(self, pipeline):
+        item = _checked_item()
+        triplet = item[RESPONSE_KG][0]
+        triplet[f"{CHK}_retrieved2response_verdicts"] = {"000": "Entailment", "001": None}
+        triplet[f"{CHK}_retrieved2response_errors"] = {"001": "context_too_long"}
+        entry = pipeline.build_report([item])["results"][0]
+        row = entry["retrieved2response"][0]
+        assert row[0] == {"verdict": "Entailment"}
+        assert row[1] == {"verdict": None, "error": "context_too_long"}
+
 
 # ── Metrics ──────────────────────────────────────────────────────────────────
 

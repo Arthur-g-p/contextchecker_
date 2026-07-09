@@ -125,7 +125,8 @@ class CheckingService(BaseService):
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         max_retries: int | None = None,
-        quiet: bool = False,
+        verbosity: str = "full",
+        section_label: str | None = None,
         joint_prompt_key: str | None = None,
         kg_key: str | None = None,
         verdict_namespace: str | None = None,
@@ -144,7 +145,7 @@ class CheckingService(BaseService):
         self.base_url = base_url
         self.joint = joint
         self.joint_num = joint_num
-        self.quiet = quiet
+        self._init_verbosity(verbosity, section_label)
         # max_words: default only applies in joint mode
         self.max_words = max_words if max_words is not None else (
             settings.DEFAULT_MAX_WORDS if joint else None
@@ -214,14 +215,16 @@ class CheckingService(BaseService):
         valid = self._validate(data)
         pending, skip_stats = self._filter(valid)
 
-        if not self.quiet:
+        if self.verbosity == "full":
             self._log_validation(len(data), len(valid), abstained=0)
             self._log_skip(len(valid), skip_stats, len(pending))
             self._log_config()
 
         # Execute
         mode = "joint" if self.joint else "single"
-        logger.info(settings.section_rule(f"Checking ({mode})"))
+        if self.verbosity != "silent":
+            logger.info(settings.section_rule(
+                self.section_label or f"Checking ({mode})"))
 
         if self.joint:
             verdicts_map = await self._execute_joint(pending)
@@ -547,8 +550,8 @@ class CheckingService(BaseService):
     # ── Logging (service-owned sections) ─────────────────────────
 
     def _log_validation(self, total: int, valid: int, abstained: int) -> None:
-        """Print 📂 Validation section."""
-        if self.quiet:
+        """Print 📂 Validation section (full only)."""
+        if self.verbosity != "full":
             return
         invalid = total - valid
         logger.info(" 📂 Validation")
@@ -560,7 +563,7 @@ class CheckingService(BaseService):
 
     def _log_skip(self, valid: int, skip_stats: dict, pending: int) -> None:
         """Print 🔄 Skip section with breakdown. Hidden when nothing was skipped."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         already = skip_stats["already_checked"]
         abstained = skip_stats["abstained"]
@@ -583,7 +586,7 @@ class CheckingService(BaseService):
 
     def _log_config(self) -> None:
         """Print ⚙️  Config section."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         location = f"{self.model}"
         if self.base_url:
@@ -611,17 +614,24 @@ class CheckingService(BaseService):
         neutral: int,
         skipped: int,
     ) -> None:
-        """Print the full results block: API summary, BL results, tokens, done line."""
+        """Print the full results block: API summary, BL results, tokens, done line.
+
+        compact: API + BL only (pipeline owns tokens + done);
+        silent: nothing."""
+        if self.verbosity == "silent":
+            return
         phase_stats = self._checker.last_stats
 
         logger.info("")
-        logger.info(settings.section_rule("CHECKER RESULTS"))
-        logger.info("")
+        if self.verbosity == "full":
+            logger.info(settings.section_rule("CHECKER RESULTS"))
+            logger.info("")
         if phase_stats:
             log_api_parsing(phase_stats.first_pass_count, phase_stats)
-        
+
         self._log_bl_results(items_with_output, total_triplets, entailment, contradiction, neutral)
-        log_token_stats()
+        if self.verbosity == "full":
+            log_token_stats()
         self._log_done(total, total_triplets, skipped)
 
     def _log_bl_results(
@@ -641,8 +651,8 @@ class CheckingService(BaseService):
     def _log_done(
         self, total: int, total_triplets: int, skipped: int
     ) -> None:
-        """Print ✅ Done summary line."""
-        if self.quiet:
+        """Print ✅ Done summary line (full only)."""
+        if self.verbosity != "full":
             return
         parts = [f"{total_triplets} triplets checked"]
         if skipped > 0:

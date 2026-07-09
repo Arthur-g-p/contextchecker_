@@ -12,6 +12,8 @@ Architecture:
 """
 
 import asyncio
+import copy
+import time
 from dataclasses import asdict
 from datetime import datetime
 
@@ -22,7 +24,8 @@ from contextchecker.eval.metrics import (
     confusion_matrix,
 )
 from contextchecker.models import CheckerEvalResult
-from contextchecker.utils import canonicalize_triplets
+from contextchecker.stats import log_token_stats, log_variance_block
+from contextchecker.utils import build_variance, canonicalize_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 
@@ -61,16 +64,20 @@ class CheckerEvaluator:
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         max_retries: int | None = None,
+        runs: int = 1,
     ):
         self._checker_model = checker_model
+        # runs > 1 = variance mode: the evaluator repeats itself; the
+        # controller only passes the number through.
+        self._runs = max(1, runs)
         self._gt_key = gt_key
         self._service_kg_key = f"{_INTERNAL_EXT_MODEL}_response_kg"
         self._verdict_key = f"{checker_model}_checker_verdict"
         self._explanation_key = f"{checker_model}_checker_explanation"
 
-        # The service owns all checking logic. quiet=True suppresses its
-        # pre-execution logging (validation/skip/config) since the
-        # evaluator logs its own 📂 Data and ⚙️ Config sections.
+        # The service owns all checking logic. compact verbosity keeps its
+        # per-phase API/BL blocks but leaves the pre-exec sections and the
+        # token table to the evaluator (printed once at the end).
         self._service = CheckingService(
             model=checker_model,
             extractor_model=_INTERNAL_EXT_MODEL,
@@ -80,13 +87,50 @@ class CheckerEvaluator:
             joint_num=joint_num,
             max_words=max_words,
             max_retries=max_retries,
-            quiet=True,
+            verbosity="compact",
         )
 
     # ── Public API ───────────────────────────────────────────────
 
     async def evaluate(self, data: list[dict]) -> dict:
-        """Run the full checker evaluation pipeline.
+        """Run the eval; with runs > 1, repeat it and report variance.
+
+        Returns:
+            Ready-to-write JSON document incl. _meta. Multi-run: flat means
+            + variance sibling + runs = N complete normal documents.
+        """
+        if self._runs <= 1:
+            return await self._evaluate_once(data)
+
+        # Variance mode. Evaluators narrate their full sections every run
+        # (evaluator verbosity levels are a later cleanup); the VARIANCE
+        # block still lands once at the end.
+        docs: list[dict] = []
+        total_start = time.perf_counter()
+        for run in range(1, self._runs + 1):
+            logger.info("")
+            logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
+            started = time.perf_counter()
+            doc = await self._evaluate_once(copy.deepcopy(data))
+            doc["_meta"]["run"] = run
+            doc["_meta"]["duration_seconds"] = round(
+                time.perf_counter() - started, 1)
+            docs.append(doc)
+
+        means, variance = build_variance(
+            [{k: v for k, v in d.items() if k != "_meta"} for d in docs])
+        durations = [d["_meta"]["duration_seconds"] for d in docs]
+        total_seconds = round(time.perf_counter() - total_start, 1)
+        log_variance_block(self._runs, means, variance, durations, total_seconds)
+
+        outer_meta = {k: v for k, v in docs[0]["_meta"].items()
+                      if k not in ("run", "duration_seconds")}
+        outer_meta["runs"] = self._runs
+        outer_meta["duration_seconds"] = total_seconds
+        return {"_meta": outer_meta, **means, "variance": variance, "runs": docs}
+
+    async def _evaluate_once(self, data: list[dict]) -> dict:
+        """Run the full checker evaluation pipeline once.
 
         Args:
             data: Pre-loaded list of items (eval dataset with GT triplets).
@@ -130,8 +174,9 @@ class CheckerEvaluator:
             gt_flat, pred_flat, parse_errors, len(evaluable), skip_info
         )
 
-        # Step 7: Log eval-specific results
+        # Step 7: Log eval-specific results; the evaluator owns the token table
         self._log_eval_results(result, gt_flat, pred_flat)
+        log_token_stats()
         self._log_done(result)
 
         # Step 8: Assemble the ready-to-write document. The CLI only

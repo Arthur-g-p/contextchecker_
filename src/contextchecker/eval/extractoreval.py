@@ -15,13 +15,19 @@ Architecture:
 
 import asyncio
 import copy
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
-from contextchecker.utils import canonicalize_triplets, find_duplicate_triplets
+from contextchecker.stats import log_token_stats, log_variance_block
+from contextchecker.utils import (
+    build_variance,
+    canonicalize_triplets,
+    find_duplicate_triplets,
+)
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
@@ -97,12 +103,16 @@ class ExtractorEvaluator:
         # Atomicity axis (optional, orthogonal to coverage)
         atomizer_model: str | None = None,
         atomizer_base_url: str | None = None,
+        runs: int = 1,
     ):
         if not checker_model:
             raise ValueError("checker_model is required for evaluation matching.")
 
         self._extractor_model = extractor_model
         self._gt_key = gt_key
+        # runs > 1 = variance mode: the evaluator repeats itself; the
+        # controller only passes the number through.
+        self._runs = max(1, runs)
         # Predictions are always written by ExtractionService(model=extractor_model)
         # under this key — it is derived, never an override.
         self._pred_key = f"{extractor_model}_response_kg"
@@ -128,7 +138,7 @@ class ExtractorEvaluator:
             base_url=extractor_base_url,
             concurrency=concurrency,
             max_retries=extractor_max_retries,
-            quiet=True,
+            verbosity="compact",
             dedup=False,
         )
 
@@ -157,15 +167,61 @@ class ExtractorEvaluator:
                 source_kg_key=self._pred_key,
                 base_url=atomizer_base_url,
                 concurrency=concurrency,
-                quiet=True,
+                verbosity="compact",
             )
 
     # ── Public API ───────────────────────────────────────────────
 
-    async def evaluate(
-        self, data: list[dict]
-    ) -> tuple[dict, dict]:
-        """Run the full extractor evaluation pipeline.
+    async def evaluate(self, data: list[dict]) -> tuple[dict, dict]:
+        """Run the eval; with runs > 1, repeat it and report variance.
+
+        Returns:
+            (summary_doc, disagreements_doc). Multi-run: the summary carries
+            flat means + variance sibling + runs = N complete normal
+            documents; the disagreements document mirrors with a runs array.
+        """
+        if self._runs <= 1:
+            return await self._evaluate_once(data)
+
+        # Variance mode. Evaluators narrate their full sections every run
+        # (evaluator verbosity levels are a later cleanup); the VARIANCE
+        # block still lands once at the end.
+        summaries: list[dict] = []
+        disagreements: list[dict] = []
+        total_start = time.perf_counter()
+        for run in range(1, self._runs + 1):
+            logger.info("")
+            logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
+            started = time.perf_counter()
+            summary, disagreement = await self._evaluate_once(copy.deepcopy(data))
+            duration = round(time.perf_counter() - started, 1)
+            for doc in (summary, disagreement):
+                doc["_meta"]["run"] = run
+                doc["_meta"]["duration_seconds"] = duration
+            summaries.append(summary)
+            disagreements.append(disagreement)
+
+        means, variance = build_variance(
+            [{k: v for k, v in d.items() if k != "_meta"} for d in summaries])
+        durations = [d["_meta"]["duration_seconds"] for d in summaries]
+        total = round(time.perf_counter() - total_start, 1)
+        log_variance_block(self._runs, means, variance, durations, total)
+
+        def _outer_meta(doc: dict) -> dict:
+            meta = {k: v for k, v in doc["_meta"].items()
+                    if k not in ("run", "duration_seconds")}
+            meta["runs"] = self._runs
+            meta["duration_seconds"] = total
+            return meta
+
+        summary_doc = {"_meta": _outer_meta(summaries[0]),
+                       **means, "variance": variance, "runs": summaries}
+        disagreements_doc = {"_meta": _outer_meta(disagreements[0]),
+                             "runs": disagreements}
+        return summary_doc, disagreements_doc
+
+    async def _evaluate_once(self, data: list[dict]) -> tuple[dict, dict]:
+        """Run the full extractor evaluation pipeline once.
 
         Args:
             data: Pre-loaded list of items (GT-annotated dataset with response text).
@@ -229,8 +285,9 @@ class ExtractorEvaluator:
         # Step 7: Build disagreement list
         disagreements = self._build_disagreements(buckets, item_results)
 
-        # Step 8: Log eval results
+        # Step 8: Log eval results; the evaluator owns the token table
         self._log_eval_results(result)
+        log_token_stats()
         self._log_done(result)
 
         # Step 9: Assemble the two ready-to-write documents. The CLI only
@@ -577,7 +634,7 @@ class ExtractorEvaluator:
             joint_num=self._joint_num,
             max_words=self._max_words,
             max_retries=self._max_retries,
-            quiet=True,
+            verbosity="compact",
             joint_prompt_key="checker_prompt_EVAL_JOINT",
         )
 
@@ -607,7 +664,7 @@ class ExtractorEvaluator:
             joint_num=self._joint_num,
             max_words=self._max_words,
             max_retries=self._max_retries,
-            quiet=True,
+            verbosity="compact",
             joint_prompt_key="checker_prompt_EVAL_JOINT",
         )
 

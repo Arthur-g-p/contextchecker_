@@ -78,7 +78,8 @@ class ExtractionService(BaseService):
         base_url: str | None = None,
         concurrency: int = 10,
         max_retries: int | None = None,
-        quiet: bool = False,
+        verbosity: str = "full",
+        section_label: str | None = None,
         dedup: bool = True,
         source_key: str = "response",
         kg_key: str | None = None,
@@ -114,7 +115,7 @@ class ExtractionService(BaseService):
             max_retries=max_retries,
         )
 
-        self.quiet = quiet
+        self._init_verbosity(verbosity, section_label)
         self._dedup = dedup
 
     @property
@@ -146,7 +147,8 @@ class ExtractionService(BaseService):
         self._log_skip(len(valid), skipped, len(pending))
 
         if not pending and not abstained:
-            logger.info(" ✨ All items already processed. Nothing to extract.")
+            if self.verbosity != "silent":
+                logger.info(" ✨ All items already processed. Nothing to extract.")
             return data
 
         self._log_config()
@@ -155,7 +157,8 @@ class ExtractionService(BaseService):
         payloads = [ExtractionPayload(text=item[self.source_key]) for item in pending]
 
         # Execute — fatal errors (auth, connection) propagate to CLI
-        logger.info(settings.section_rule("Extraction"))
+        if self.verbosity != "silent":
+            logger.info(settings.section_rule(self.section_label or "Extraction"))
         batch_results = await self._extractor.extract_batch(payloads)
         phase_stats = self._extractor.last_stats
 
@@ -281,8 +284,8 @@ class ExtractionService(BaseService):
     # ── Logging ─────────────────────────────────────────────────
 
     def _log_validation(self, total: int, valid: int, abstained: int) -> None:
-        """Print 📂 Validation section."""
-        if self.quiet:
+        """Print 📂 Validation section (full only — pipelines own the preamble)."""
+        if self.verbosity != "full":
             return
         invalid = total - valid
         logger.info(" 📂 Validation")
@@ -296,7 +299,7 @@ class ExtractionService(BaseService):
 
     def _log_skip(self, valid: int, skipped: int, pending: int) -> None:
         """Print 🔄 Skip section. Hidden entirely when nothing was skipped."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         if skipped == 0:
             return
@@ -308,7 +311,7 @@ class ExtractionService(BaseService):
 
     def _log_config(self) -> None:
         """Print ⚙️  Config section."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         location = f"{self.model}"
         if self.base_url:
@@ -330,10 +333,16 @@ class ExtractionService(BaseService):
         phase_stats: PhaseStats,
         dups_removed: int = 0,
     ) -> None:
-        """Print the full results block: API summary, BL results, tokens, done line."""
+        """Print the full results block: API summary, BL results, tokens, done line.
+
+        compact: API + BL only (pipeline owns tokens + done);
+        silent: nothing."""
+        if self.verbosity == "silent":
+            return
         logger.info("")
-        logger.info(settings.section_rule("EXTRACTOR RESULTS"))
-        logger.info("")
+        if self.verbosity == "full":
+            logger.info(settings.section_rule("EXTRACTOR RESULTS"))
+            logger.info("")
         log_api_parsing(pending_count, phase_stats)
         worker_empty = phase_stats.empty if phase_stats else 0
         total_output = successful + worker_empty + abstained_count
@@ -343,7 +352,8 @@ class ExtractionService(BaseService):
             total_output, unique_claims, successful,
             worker_empty + abstained_count, dups_removed,
         )
-        log_token_stats()
+        if self.verbosity == "full":
+            log_token_stats()
         self._log_done(total, unique_claims, abstained_count, skipped, dups_removed)
 
     def _log_bl_results(
@@ -374,8 +384,8 @@ class ExtractionService(BaseService):
         self, total: int, claims: int, abstentions: int, skipped: int,
         dups_removed: int = 0,
     ) -> None:
-        """Print ✅ Done summary line."""
-        if self.quiet:
+        """Print ✅ Done summary line (full only — pipelines own the done line)."""
+        if self.verbosity != "full":
             return
         parts = [f"{claims} claims"]
         if dups_removed > 0:

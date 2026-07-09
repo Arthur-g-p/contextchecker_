@@ -37,11 +37,11 @@ class RefCheckerPipeline(BaseService):
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         checker_max_retries: int | None = None,
-        quiet: bool = False,
+        verbosity: str = "full",
     ):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
-        self.quiet = quiet
+        self._init_verbosity(verbosity)
 
         # Compose the two services. Each fail-fasts on its own API key here.
         self._extraction = ExtractionService(
@@ -49,7 +49,7 @@ class RefCheckerPipeline(BaseService):
             base_url=extractor_base_url,
             concurrency=concurrency,
             max_retries=extractor_max_retries,
-            quiet=quiet,
+            verbosity=verbosity,
             dedup=dedup,
         )
         self._checking = CheckingService(
@@ -61,7 +61,7 @@ class RefCheckerPipeline(BaseService):
             joint_num=joint_num,
             max_words=max_words,
             max_retries=checker_max_retries,
-            quiet=quiet,
+            verbosity=verbosity,
         )
 
     # -- Pipeline: the BaseService 7-step run() shape --
@@ -128,7 +128,7 @@ class RefCheckerPipeline(BaseService):
     # -- Logging --
 
     def _log_validation(self, total: int, valid: int) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         dropped = total - valid
         logger.info(" 📂 Validation")
@@ -142,7 +142,7 @@ class RefCheckerPipeline(BaseService):
         pass
 
     def _log_config(self) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         logger.info(" ⚙️  Config")
         logger.info("    Extractor:   %s", self._extractor_model)
@@ -158,6 +158,6 @@ class RefCheckerPipeline(BaseService):
         pass
 
     def _log_done(self, total: int, valid: int) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         logger.info(" ✅ Done: ref-checked %d/%d items", valid, total)

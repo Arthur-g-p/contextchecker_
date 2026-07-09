@@ -34,6 +34,7 @@ from contextchecker.pipelines.directions import (
     unwrap_items,
 )
 from contextchecker.pipelines.ragchecker import _ENTAILMENT, _ratio, _row_entailed
+from contextchecker.stats import log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -57,11 +58,16 @@ class FaithfulnessPipeline(BaseService):
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
         checker_max_retries: int | None = None,
-        quiet: bool = False,
+        verbosity: str = "full",
+        runs: int = 1,
     ):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
-        self.quiet = quiet
+        self._init_verbosity(verbosity)
+        self._runs = max(1, runs)
+        child_verbosity = (
+            "silent" if (verbosity == "silent" or self._runs > 1) else "compact"
+        )
         self.last_report: dict | None = None
 
         self._response_kg = f"{extractor_model}_response_kg"
@@ -74,7 +80,8 @@ class FaithfulnessPipeline(BaseService):
             base_url=extractor_base_url,
             concurrency=concurrency,
             max_retries=extractor_max_retries,
-            quiet=True,
+            verbosity=child_verbosity,
+            section_label="Extraction: response",
             dedup=dedup,
         )
         self._check = CheckingService(
@@ -86,7 +93,8 @@ class FaithfulnessPipeline(BaseService):
             joint_num=joint_num,
             max_words=max_words,
             max_retries=checker_max_retries,
-            quiet=True,
+            verbosity=child_verbosity,
+            section_label="Direction: retrieved2response",
             kg_key=self._response_kg,
             verdict_namespace=self._namespace,
             extraction_error_key=self._response_err,
@@ -100,7 +108,15 @@ class FaithfulnessPipeline(BaseService):
     # -- Pipeline: the BaseService 7-step run() shape --
 
     async def run(self, data: list[dict]) -> list[dict]:
-        """Run extraction + retrieved2response over *data*, in place.
+        """Run the pipeline; with runs > 1, repeat it and report variance."""
+        if self._runs <= 1:
+            return await self._run_once(data)
+        return await self._run_repeated(data)
+
+    async def _run_once(
+        self, data: list[dict], announce: bool = True, report: bool = True,
+    ) -> list[dict]:
+        """One full pass over *data*, in place.
 
         1. Validate     - hard drop: response + retrieved_context required
                           non-empty; chunks normalized to {doc_id, text}
@@ -115,18 +131,21 @@ class FaithfulnessPipeline(BaseService):
         self._canonicalize_keys(data)
         valid = self._validate(data)
         self._filter(valid)
-        self._log_validation(len(data), len(valid))
-        self._log_config()
+        if announce:
+            self._log_validation(len(data), len(valid))
+            self._log_config()
 
-        logger.info(settings.section_rule("Extraction: response"))
+        # Children print their own labeled section rules (compact mode).
         await self._extract.run(valid)
-        logger.info(settings.section_rule("Direction: retrieved2response"))
         await run_direction(self._check, valid, self._direction)
 
         self._serialize()
         self.last_report = self.build_report(data)
-        self._log_results()
+        if report:
+            self._log_results()
         return data
+
+    # _run_repeated inherited from BaseService (variance mode)
 
     # -- Validation --
 
@@ -196,7 +215,14 @@ class FaithfulnessPipeline(BaseService):
         claim_support = []
         for triplet in claims:
             verdicts = triplet.get(f"{self._namespace}_verdicts") or {}
-            matrix.append([{"verdict": verdicts.get(d)} for d in doc_ids])
+            errors = triplet.get(f"{self._namespace}_errors") or {}
+            row = []
+            for d in doc_ids:
+                cell = {"verdict": verdicts.get(d)}
+                if errors.get(d):
+                    cell["error"] = errors[d]
+                row.append(cell)
+            matrix.append(row)
             claim_support.append(
                 [d for d in doc_ids if verdicts.get(d) == _ENTAILMENT]
             )
@@ -273,7 +299,7 @@ class FaithfulnessPipeline(BaseService):
     # -- Logging --
 
     def _log_validation(self, total: int, valid: int) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         dropped = total - valid
         logger.info(" 📂 Validation")
@@ -288,7 +314,7 @@ class FaithfulnessPipeline(BaseService):
         pass
 
     def _log_config(self) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         logger.info(" ⚙️  Config")
         logger.info("    Extractor:   %s", self._extractor_model)
@@ -298,11 +324,13 @@ class FaithfulnessPipeline(BaseService):
 
     def _log_results(self) -> None:
         self._log_bl_results()
+        if self.verbosity == "full":
+            log_token_stats()
         self._log_done()
 
     def _log_bl_results(self) -> None:
         """Print ── FAITHFULNESS RESULTS ──: pipeline tree + the score."""
-        if self.quiet:
+        if self.verbosity != "full":
             return
         report = self.last_report
         results = report["results"]
@@ -374,7 +402,7 @@ class FaithfulnessPipeline(BaseService):
         logger.info("")
 
     def _log_done(self) -> None:
-        if self.quiet:
+        if self.verbosity != "full":
             return
         report = self.last_report
         logger.info(" ✅ Done: faithfulness-checked %d/%d items",
@@ -404,7 +432,7 @@ def check_faithfulness(
     pipeline = FaithfulnessPipeline(
         extractor_model=extractor_model,
         checker_model=checker_model,
-        quiet=True,
+        verbosity="silent",
         **pipeline_kwargs,
     )
     pipeline.run_sync([{"response": response, "retrieved_context": retrieved_context}])
