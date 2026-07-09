@@ -1,0 +1,8 @@
+# Normalize line endings: source stays LF in the repo AND in the working
+# tree, so Windows editors stop flip-flopping and git stops warning
+# "LF will be replaced by CRLF" on every command.
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
