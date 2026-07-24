@@ -139,9 +139,12 @@ class Atomizer:
     # ── Batch atomization with retry ─────────────────────────────
 
     async def atomize_batch(
-        self, payloads: list[AtomizationPayload],
+        self, payloads: list[AtomizationPayload], description: str | None = None,
     ) -> list[AtomizationDecision]:
         """Atomize multiple triplets concurrently.
+
+        *description* labels the progress bar (pipelines pass their
+        section label).
 
         Returns one AtomizationDecision per payload (reasoning + is_atomic +
         split). Failed items get a keep-original fallback decision — the
@@ -160,7 +163,7 @@ class Atomizer:
         tasks = [self._build_task(p) for p in payloads]
 
         raw_responses = await self.client.generate_batch(
-            tasks, description="Atomizing", task="atomize",
+            tasks, description=description or "Atomizing", task="atomize",
         )
         stats.http_requests += len(tasks)
         stats.first_pass_count = len(tasks)

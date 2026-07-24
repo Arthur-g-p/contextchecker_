@@ -22,7 +22,11 @@ from datetime import datetime
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
-from contextchecker.stats import log_token_stats, log_variance_block
+from contextchecker.stats import (
+    log_multi_run_hint,
+    log_token_stats,
+    log_variance_block,
+)
 from contextchecker.utils import (
     build_variance,
     canonicalize_triplets,
@@ -186,6 +190,7 @@ class ExtractorEvaluator:
         # Variance mode. Evaluators narrate their full sections every run
         # (evaluator verbosity levels are a later cleanup); the VARIANCE
         # block still lands once at the end.
+        log_multi_run_hint(self._runs)
         summaries: list[dict] = []
         disagreements: list[dict] = []
         total_start = time.perf_counter()

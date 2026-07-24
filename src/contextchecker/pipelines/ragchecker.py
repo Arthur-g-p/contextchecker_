@@ -571,15 +571,18 @@ class RagCheckerPipeline(BaseService):
     def _matrix_row(triplet: dict, namespace: str, doc_ids: list[str]) -> list[dict]:
         """One row per claim, one cell per chunk, in retrieved_context order.
 
-        Matrix cells carry no explanations (claims x chunks explanations are
-        pure output-token cost) but DO carry the failure cause when a check
-        errored — sparse "error" key, same rule as the flat cells.
+        Matrix cells match the flat-cell shape: verdict + explanation, plus
+        the failure cause when a check errored — sparse "error" key.
         """
         verdicts = triplet.get(f"{namespace}_verdicts") or {}
+        explanations = triplet.get(f"{namespace}_explanations") or {}
         errors = triplet.get(f"{namespace}_errors") or {}
         row = []
         for doc_id in doc_ids:
-            cell = {"verdict": verdicts.get(doc_id)}
+            cell = {
+                "verdict": verdicts.get(doc_id),
+                "explanation": explanations.get(doc_id),
+            }
             if errors.get(doc_id):
                 cell["error"] = errors[doc_id]
             row.append(cell)
@@ -654,7 +657,7 @@ class RagCheckerPipeline(BaseService):
         om = report["overall_metrics"]
 
         logger.info("")
-        logger.info(settings.section_rule("RAGCHECK RESULTS"))
+        logger.info(settings.section_rule("RAGCHECK RESULTS", char="═"))
         logger.info("")
 
         # ── 🔀 Pipeline: where the requests went

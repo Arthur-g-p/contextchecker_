@@ -230,7 +230,9 @@ class CheckingService(BaseService):
             verdicts_map = await self._execute_joint(pending)
         else:
             payloads = self._build_payloads(pending)
-            flat_verdicts = await self._checker.check_batch(payloads)
+            flat_verdicts = await self._checker.check_batch(
+                payloads, description=self.section_label,
+            )
             verdicts_map = self._flat_to_map(payloads, flat_verdicts)
 
         # Serialize verdicts + explanations into each triplet dict
@@ -477,7 +479,10 @@ class CheckingService(BaseService):
         ]
         extra_vars_list = [c.extra_vars for c in chunks]
         batch_results = await self._checker.check_joint_batch(
-            batch_input, extra_vars_list=extra_vars_list
+            batch_input, extra_vars_list=extra_vars_list,
+            description=(
+                f"{self.section_label} (joint)" if self.section_label else None
+            ),
         )
 
         # Map results back: {item_index: {claim_index: ClaimVerdict}}
@@ -624,7 +629,7 @@ class CheckingService(BaseService):
 
         logger.info("")
         if self.verbosity == "full":
-            logger.info(settings.section_rule("CHECKER RESULTS"))
+            logger.info(settings.section_rule("CHECKER RESULTS", char="═"))
             logger.info("")
         if phase_stats:
             log_api_parsing(phase_stats.first_pass_count, phase_stats)

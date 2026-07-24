@@ -121,16 +121,17 @@ SECTION_WIDTH: int = 60
 """Column width for console section banners (── LABEL ───…)."""
 
 
-def section_rule(label: str, width: int = SECTION_WIDTH) -> str:
+def section_rule(label: str, width: int = SECTION_WIDTH, char: str = "─") -> str:
     """Render a fixed-width section banner: ``── LABEL ───…`` padded to `width`.
 
     Centralizes the divider so every phase/result banner lines up regardless of
-    label length.
+    label length. Pass ``char="═"`` for the final results banner of a command —
+    the double line marks the payoff block after the phase narration.
     """
-    prefix = f"── {label} "
+    prefix = f"{char}{char} {label} "
     if len(prefix) >= width:
         return prefix
-    return prefix + "─" * (width - len(prefix))
+    return prefix + char * (width - len(prefix))
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────

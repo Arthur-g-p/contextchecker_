@@ -190,12 +190,13 @@ class Checker:
         return ClaimVerdict(verdict=parsed.verdict, explanation=parsed.explanation)
 
     async def check_batch(
-        self, payloads: list[CheckingPayload]
+        self, payloads: list[CheckingPayload], description: str | None = None,
     ) -> list[ClaimVerdict]:
         """Check multiple claims concurrently (single mode — 1 call per claim).
 
         Returns one ClaimVerdict per payload. Failed items get None verdict
-        so the caller always gets len(payloads) results.
+        so the caller always gets len(payloads) results. *description*
+        labels the progress bar (pipelines pass their section label).
         """
         stats = PhaseStats()
         self.last_stats = stats
@@ -214,7 +215,7 @@ class Checker:
             })
 
         raw_responses = await self.client.generate_batch(
-            tasks, description="Checking", task="check",
+            tasks, description=description or "Checking", task="check",
         )
         stats.http_requests += len(tasks)
         stats.first_pass_count = len(tasks)
@@ -346,6 +347,7 @@ class Checker:
         self,
         chunks: list[tuple[list[tuple[int, str]], list[str]]],
         extra_vars_list: list[dict] | None = None,
+        description: str | None = None,
     ) -> list[dict[int, ClaimVerdict]]:
         """Check multiple joint chunks concurrently via generate_batch.
 
@@ -359,6 +361,8 @@ class Checker:
                     reference: list of reference passages.
             extra_vars_list: optional per-chunk extra template variables.
                     Must be same length as chunks if provided.
+            description: progress-bar label (pipelines pass their
+                    section label).
 
         Returns:
             List of dicts, one per chunk. Each dict maps
@@ -384,7 +388,7 @@ class Checker:
             })
 
         raw_responses = await self.client.generate_batch(
-            tasks, description="Checking (joint)", task="check",
+            tasks, description=description or "Checking (joint)", task="check",
         )
         stats.http_requests += len(tasks)
         stats.first_pass_count = len(tasks)

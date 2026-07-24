@@ -20,7 +20,11 @@ from abc import ABC, abstractmethod
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
-from contextchecker.stats import log_token_stats, log_variance_block
+from contextchecker.stats import (
+    log_multi_run_hint,
+    log_token_stats,
+    log_variance_block,
+)
 from contextchecker.utils import build_variance
 
 logger = settings.get_logger(__name__)
@@ -155,6 +159,8 @@ class BaseService(ABC):
         ``self._runs``. Produces {_meta, overall_metrics (means), variance,
         runs (N complete normal reports)}.
         """
+        if self.verbosity == "full":
+            log_multi_run_hint(self._runs)
         reports: list[dict] = []
         total_start = time.perf_counter()
         # Run 1 mutates *data* in place; a copy taken after it would carry

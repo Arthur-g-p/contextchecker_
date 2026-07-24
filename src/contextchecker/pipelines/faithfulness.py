@@ -215,10 +215,14 @@ class FaithfulnessPipeline(BaseService):
         claim_support = []
         for triplet in claims:
             verdicts = triplet.get(f"{self._namespace}_verdicts") or {}
+            explanations = triplet.get(f"{self._namespace}_explanations") or {}
             errors = triplet.get(f"{self._namespace}_errors") or {}
             row = []
             for d in doc_ids:
-                cell = {"verdict": verdicts.get(d)}
+                cell = {
+                    "verdict": verdicts.get(d),
+                    "explanation": explanations.get(d),
+                }
                 if errors.get(d):
                     cell["error"] = errors[d]
                 row.append(cell)
@@ -337,7 +341,7 @@ class FaithfulnessPipeline(BaseService):
         om = report["overall_metrics"]
 
         logger.info("")
-        logger.info(settings.section_rule("FAITHFULNESS RESULTS"))
+        logger.info(settings.section_rule("FAITHFULNESS RESULTS", char="═"))
         logger.info("")
 
         # ── 🔀 Pipeline

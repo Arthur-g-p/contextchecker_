@@ -109,7 +109,9 @@ class AtomizationService(BaseService):
         # Step 4: Execute — delegate to the Atomizer worker (fatal errors propagate to CLI)
         if self.verbosity != "silent":
             logger.info(settings.section_rule(self.section_label or "Atomization"))
-        batch_results = await self._atomizer.atomize_batch(payloads)
+        batch_results = await self._atomizer.atomize_batch(
+            payloads, description=self.section_label,
+        )
         phase_stats = self._atomizer.last_stats
 
         # Step 5: Serialize results back into dicts (dedups output when enabled)
@@ -386,7 +388,7 @@ class AtomizationService(BaseService):
             return
         logger.info("")
         if self.verbosity == "full":
-            logger.info(settings.section_rule("ATOMIZER RESULTS"))
+            logger.info(settings.section_rule("ATOMIZER RESULTS", char="═"))
             logger.info("")
         log_api_parsing(total_triplets, phase_stats)
         self._log_bl_results(stats)

@@ -19,8 +19,9 @@ How verdicts land on the source items:
 - Matrix mode (per_chunk): one shadow item per (item, chunk) over DEEP
   COPIES of the triplets — the same verdict key would collide across chunks
   otherwise. Afterwards the per-doc results are folded back onto the
-  original triplets as {doc_id: verdict} dicts under "{namespace}_verdicts"
-  (and "{namespace}_errors" for null-verdict causes).
+  original triplets as {doc_id: ...} dicts under "{namespace}_verdicts"
+  and "{namespace}_explanations" (plus "{namespace}_errors" for
+  null-verdict causes).
 """
 
 import copy
@@ -177,14 +178,19 @@ async def _run_matrix(
     if not await _run_service(checking, shadow, direction):
         return
 
-    # Fold: per-doc verdicts from the copies → matrix dicts on the originals.
+    # Fold: per-doc verdicts + explanations from the copies → matrix dicts
+    # on the originals.
     matrix_verdict_key = checking.verdict_key + "s"
+    matrix_explanation_key = checking.explanation_key + "s"
     matrix_error_key = checking.checker_error_key + "s"
     for item, doc_id, copies in bookkeeping:
         originals = item.get(direction.kg_key) or []
         for original, copied in zip(originals, copies):
             original.setdefault(matrix_verdict_key, {})[doc_id] = copied.get(
                 checking.verdict_key
+            )
+            original.setdefault(matrix_explanation_key, {})[doc_id] = copied.get(
+                checking.explanation_key
             )
             error = copied.get(checking.checker_error_key)
             if error:

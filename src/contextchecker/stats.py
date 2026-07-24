@@ -223,6 +223,15 @@ def log_api_parsing(
     logger.info("")
 
 
+def log_multi_run_hint(runs: int) -> None:
+    """Print the pre-flight hint for variance mode, once, before run 1.
+
+    Cached responses make all runs identical and the variance meaningless —
+    warn before the tokens are spent, not after."""
+    logger.info(" 💡 %d runs requested — make sure your backend/proxy does not"
+                " cache responses, or every run will be identical.", runs)
+
+
 def log_variance_block(
     runs: int,
     means: dict,
@@ -230,11 +239,12 @@ def log_variance_block(
     durations: list[float] | None = None,
     total_seconds: float | None = None,
 ) -> None:
-    """Print ── VARIANCE (N runs) ──: mean ± std [min, max] per metric,
-    plus the per-run durations. The math behind means/variance lives in
+    """Print ══ VARIANCE (N runs) ══: mean ± std [min, max] per metric,
+    a time tree (per run + total), and a caching warning when every metric
+    has zero spread. The math behind means/variance lives in
     utils.build_variance."""
     logger.info("")
-    logger.info(settings.section_rule(f"VARIANCE ({runs} runs)"))
+    logger.info(settings.section_rule(f"VARIANCE ({runs} runs)", char="═"))
     logger.info("")
     logger.info(" 📊 Metrics  (mean ± std  [min, max])")
     keys = list(means.keys())
@@ -247,10 +257,16 @@ def log_variance_block(
         )
     if durations:
         logger.info("")
-        parts = " · ".join(f"{d:.1f}s" for d in durations)
-        if total_seconds is not None:
-            parts += f"   (total {total_seconds:.1f}s)"
-        logger.info(" ⏱️  Runs: %s", parts)
+        total = total_seconds if total_seconds is not None else sum(durations)
+        logger.info(" ⏱️  %-10s %6.1fs", "Total:", total)
+        for i, d in enumerate(durations, 1):
+            prefix = "└─" if i == len(durations) else "├─"
+            logger.info("    %s %-10s %6.1fs", prefix, f"run {i}:", d)
+    if variance and all(v["std"] == 0 for v in variance.values()):
+        logger.info("")
+        logger.info(" ⚠️  Zero variance on every metric — all %d runs returned"
+                    " identical results. A caching backend/proxy is the usual"
+                    " cause.", runs)
     logger.info("")
 
 

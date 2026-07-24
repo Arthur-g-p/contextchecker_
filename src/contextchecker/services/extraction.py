@@ -159,7 +159,9 @@ class ExtractionService(BaseService):
         # Execute — fatal errors (auth, connection) propagate to CLI
         if self.verbosity != "silent":
             logger.info(settings.section_rule(self.section_label or "Extraction"))
-        batch_results = await self._extractor.extract_batch(payloads)
+        batch_results = await self._extractor.extract_batch(
+            payloads, description=self.section_label,
+        )
         phase_stats = self._extractor.last_stats
 
         # Serialize results back into dicts (dedups when enabled)
@@ -341,7 +343,7 @@ class ExtractionService(BaseService):
             return
         logger.info("")
         if self.verbosity == "full":
-            logger.info(settings.section_rule("EXTRACTOR RESULTS"))
+            logger.info(settings.section_rule("EXTRACTOR RESULTS", char="═"))
             logger.info("")
         log_api_parsing(pending_count, phase_stats)
         worker_empty = phase_stats.empty if phase_stats else 0
