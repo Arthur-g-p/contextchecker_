@@ -101,8 +101,10 @@ class TestBuildReport:
             {"subject": "Nile", "predicate": "has", "object": "5M inhabitants"},
         ]
         assert entry["retrieved2response"] == [
-            [{"verdict": "Entailment"}, {"verdict": "Neutral"}],
-            [{"verdict": "Neutral"}, {"verdict": "Neutral"}],
+            [{"verdict": "Entailment", "explanation": None},
+             {"verdict": "Neutral", "explanation": None}],
+            [{"verdict": "Neutral", "explanation": None},
+             {"verdict": "Neutral", "explanation": None}],
         ]
         # 1 of 2 claims grounded
         assert entry["metrics"]["faithfulness"] == 0.5

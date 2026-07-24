@@ -162,13 +162,15 @@ class Extractor:
     # ── Batch extraction with retry ──────────────────────────────
 
     async def extract_batch(
-        self, payloads: list[ExtractionPayload]
+        self, payloads: list[ExtractionPayload], description: str | None = None,
     ) -> list[list[Triplet]]:
         """Extract triplets from multiple texts concurrently.
 
         Returns one list of triplets per payload. Failed items get an
         empty list — the caller always gets len(payloads) results.
         Stats are stored on self.last_stats after completion.
+        *description* labels the progress bar (pipelines pass their
+        section label); retry rounds keep their own labels.
 
         Fatal errors (auth, connection) propagate — not caught here.
         """
@@ -179,7 +181,7 @@ class Extractor:
         tasks = [self._build_task(p) for p in payloads]
 
         raw_responses = await self.client.generate_batch(
-            tasks, description="Extracting", task="extract",
+            tasks, description=description or "Extracting", task="extract",
         )
         stats.http_requests += len(tasks)
         stats.first_pass_count = len(tasks)

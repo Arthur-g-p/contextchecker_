@@ -162,10 +162,12 @@ class TestBuildReport:
     def test_matrix_rows_in_chunk_order(self, pipeline):
         entry = pipeline.build_report([_checked_item()])["results"][0]
         assert entry["retrieved2response"] == [
-            [{"verdict": "Entailment"}, {"verdict": "Neutral"}]
+            [{"verdict": "Entailment", "explanation": None},
+             {"verdict": "Neutral", "explanation": None}]
         ]
         assert entry["retrieved2answer"] == [
-            [{"verdict": "Neutral"}, {"verdict": "Entailment"}]
+            [{"verdict": "Neutral", "explanation": None},
+             {"verdict": "Entailment", "explanation": None}]
         ]
 
     def test_is_abstention_explicit_false(self, pipeline):
@@ -213,7 +215,8 @@ class TestBuildReport:
         del item[RESPONSE_KG][0][f"{CHK}_retrieved2response_verdicts"]
         entry = pipeline.build_report([item])["results"][0]
         assert entry["retrieved2response"] == [
-            [{"verdict": None}, {"verdict": None}]
+            [{"verdict": None, "explanation": None},
+             {"verdict": None, "explanation": None}]
         ]
 
     def test_relevant_chunks_exposed(self, pipeline):
@@ -241,8 +244,9 @@ class TestBuildReport:
         triplet[f"{CHK}_retrieved2response_errors"] = {"001": "context_too_long"}
         entry = pipeline.build_report([item])["results"][0]
         row = entry["retrieved2response"][0]
-        assert row[0] == {"verdict": "Entailment"}
-        assert row[1] == {"verdict": None, "error": "context_too_long"}
+        assert row[0] == {"verdict": "Entailment", "explanation": None}
+        assert row[1] == {"verdict": None, "explanation": None,
+                          "error": "context_too_long"}
 
 
 # ── Metrics ──────────────────────────────────────────────────────────────────
