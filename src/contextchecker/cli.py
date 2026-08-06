@@ -38,11 +38,38 @@ def _print_header(command: str) -> None:
     logger.info("╰" + "─" * width + "╯")
     logger.info("")
 
+
+def _resolve_output(
+    input_file: Path,
+    operation: str,
+    explicit: Path | None = None,
+    runs: int = 1,
+) -> Path:
+    """Resolve the output path: results/{stem}_{operation}[_{runs}].json.
+
+    The runs suffix only appears for --runs > 1, and only the four commands
+    that accept the flag ever pass it. An explicit -o path skips the naming
+    but still gets its parent created and its clobber warned about.
+    """
+    if explicit is not None:
+        path = explicit
+    else:
+        suffix = f"_{runs}" if runs > 1 else ""
+        path = (
+            input_file.parent / "results" / f"{input_file.stem}_{operation}{suffix}.json"
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        logger.warning(" ⚠️  %s exists — it will be overwritten", path)
+
+    return path
+
 # Todo: add concurrency to extractor and checker
 @app.command()
 def extract(
     input_file: Path = typer.Argument(..., help="Path to JSON input file."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_extract.json."),
     model: str = typer.Option(None, "--model", "-m", help="Model name used as key prefix."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2. Max: Amount of retry stategies defined."),
@@ -57,10 +84,7 @@ def extract(
 
     _print_header("extract")
 
-    # Resolve output path — default: results/{filename} next to input
-    if output_file is None:
-        output_file = input_file.parent / "results" / input_file.name
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "extract", output_file)
 
     # Load input
     try:
@@ -89,7 +113,7 @@ def extract(
 @app.command()
 def check(
     input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_check.json."),
     model: str = typer.Option(None, "--model", "-m", help="Model name for the checker LLM."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model name that was used for extraction (to find the kg_key)."),
     checker_base_api: str = typer.Option(None, "--checker-base-api", help="Optional base URL for the checker LLM API."),
@@ -107,10 +131,7 @@ def check(
 
     _print_header("check")
 
-    # Resolve output path — default: results/{filename} next to input
-    if output_file is None:
-        output_file = input_file.parent / "results" / input_file.name
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "check", output_file)
 
     # Load input
     try:
@@ -147,7 +168,7 @@ def check(
 @app.command()
 def atomize(
     input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_atomize.json."),
     model: str = typer.Option(None, "--model", "-m", help="Model name for the atomizer LLM."),
     source_kg_key: str = typer.Option(..., "--source-kg-key", "-s", help="Key containing triplets to atomize (e.g. 'gemini-3.1_response_kg')."),
     atomizer_base_api: str = typer.Option(None, "--atomizer-base-api", help="Optional base URL for the atomizer LLM API."),
@@ -164,10 +185,7 @@ def atomize(
 
     _print_header("atomize")
 
-    # Resolve output path — default: results/{filename} next to input
-    if output_file is None:
-        output_file = input_file.parent / "results" / input_file.name
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "atomize", output_file)
 
     # Load input
     try:
@@ -211,7 +229,7 @@ def atomize(
 @app.command()
 def refcheck(
     input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'reference')."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_filename}."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_refcheck.json."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for extraction; also the {model}_response_kg key prefix."),
     checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for checking."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
@@ -232,10 +250,7 @@ def refcheck(
 
     _print_header("refcheck")
 
-    # Resolve output path - default: results/{filename} next to input
-    if output_file is None:
-        output_file = input_file.parent / "results" / input_file.name
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "refcheck", output_file)
 
     # Load input
     try:
@@ -275,7 +290,7 @@ def refcheck(
 @app.command()
 def ragcheck(
     input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'gt_answer' + 'retrieved_context')."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_ragcheck.json."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_ragcheck[_{runs}].json."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for both extractions (response + gt_answer)."),
     checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for all four checking directions."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
@@ -296,10 +311,7 @@ def ragcheck(
 
     _print_header("ragcheck")
 
-    # Resolve output path - the report IS the output artifact
-    if output_file is None:
-        output_file = input_file.parent / "results" / f"{input_file.stem}_ragcheck.json"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "ragcheck", output_file, runs=runs)
 
     # Load input
     try:
@@ -341,7 +353,7 @@ def ragcheck(
 @app.command()
 def faithcheck(
     input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'retrieved_context'; no ground truth)."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_faithcheck.json."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_faithcheck[_{runs}].json."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for response claim extraction."),
     checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for the retrieved2response checks."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
@@ -362,10 +374,7 @@ def faithcheck(
 
     _print_header("faithcheck")
 
-    # Resolve output path - the report IS the output artifact
-    if output_file is None:
-        output_file = input_file.parent / "results" / f"{input_file.stem}_faithcheck.json"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "faithcheck", output_file, runs=runs)
 
     # Load input
     try:
@@ -420,7 +429,7 @@ def eval_checker(
         ..., help="Path to eval JSON with GT triplets + human_label."
     ),
     output_file: Path = typer.Option(
-        None, "--output", "-o", help="Output JSON path for eval results."
+        None, "--output", "-o", help="Output path. Defaults to results/{input_stem}_checker_eval[_{runs}].json."
     ),
     checker_model: str = typer.Option(
         ..., "--checker-model", "-m", help="Model name for the checker LLM."
@@ -456,12 +465,7 @@ def eval_checker(
     settings.enable_logging(debug=debug)
     _print_header("eval checker")
 
-    # Resolve output path
-    if output_file is None:
-        output_file = (
-            input_file.parent / "results" / f"checker_eval_{input_file.stem}.json"
-        )
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "checker_eval", output_file, runs=runs)
 
     # Load input
     try:
@@ -506,7 +510,7 @@ def eval_extractor(
         ..., help="Path to eval JSON with GT triplets + response text."
     ),
     output_file: Path = typer.Option(
-        None, "--output", "-o", help="Output JSON path for eval results."
+        None, "--output", "-o", help="Output path. Defaults to results/{input_stem}_extractor_eval[_{runs}].json."
     ),
     extractor_model: str = typer.Option(
         ..., "--extractor-model", "-e",
@@ -561,12 +565,7 @@ def eval_extractor(
     settings.enable_logging(debug=debug)
     _print_header("eval extractor")
 
-    # Resolve output paths
-    if output_file is None:
-        output_file = (
-            input_file.parent / "results" / f"extractor_eval_{input_file.stem}.json"
-        )
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = _resolve_output(input_file, "extractor_eval", output_file, runs=runs)
     disagree_file = output_file.with_name(
         output_file.stem + "_disagreements.json"
     )

@@ -79,7 +79,7 @@ contextchecker eval extractor <input_file> [options]
 | **Extractor API Base** | `--extractor-base-api` | `None` | Base URL for the extractor LLM (OpenAI-SDK route). If unset, LiteLLM provider routing is used. |
 | **Checker API Base** | `--checker-base-api` | `None` | Base URL for the checker/matching LLM. |
 | **GT Key** | `--gt-key` | `claude2_response_kg` | Item key holding the ground-truth triplets. |
-| **Output File** | `--output`, `-o` | `results/extractor_eval_{input_stem}.json` | Summary metrics JSON. A `*_disagreements.json` is written alongside. |
+| **Output File** | `--output`, `-o` | `results/{input_stem}_extractor_eval[_{runs}].json` | Summary metrics JSON, written next to the input. The `_{runs}` suffix appears only for `--runs > 1`. A `*_disagreements.json` is written alongside. |
 | **Joint Bundle Size** | `--joint-num` | `10` | Max claims bundled per joint matching call. |
 | **Word Budget** | `--max-words` | `None` | Word budget per matching call. |
 | **Max Retries** | `--max-retries` | `None` | Retry rounds for API/parse failures. |
@@ -102,14 +102,14 @@ Settings reads these eagerly at import; the service validates the relevant key b
 Against a local LiteLLM proxy, using one model for both roles:
 
 ```bash
-contextchecker eval extractor results/smaller_msmarco_gpt4_answers_corrected.json \
+contextchecker eval extractor eval_data/msmarco/msmarco_5.json \
   --extractor-model gemini-3.1 \
   --checker-model gemini-3.1 \
   --extractor-base-api http://localhost:4000/v1 \
   --checker-base-api http://localhost:4000/v1
 ```
 
-This reads GT from `claude2_response_kg`, extracts live into `gemini-3.1_response_kg`, runs the 2-pass match, then writes metrics + disagreements. (Because the input lives under `results/`, the default output lands under `results/results/` — pass `-o` to control this.)
+This reads GT from `claude2_response_kg`, extracts live into `gemini-3.1_response_kg`, runs the 2-pass match, then writes `eval_data/msmarco/results/msmarco_5_extractor_eval.json` plus its `_disagreements.json` sibling. Output always lands in a `results/` directory beside the input, so an input already inside `results/` nests one level deeper — pass `-o` to control this.
 
 ## Output Format
 

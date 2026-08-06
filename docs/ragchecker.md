@@ -54,7 +54,8 @@ with report re-ingestion for manually corrected ground truth).
 ## Output: the report (single artifact)
 
 The CLI writes exactly one file (default
-`results/{input_stem}_ragcheck.json`) from `pipeline.last_report`. The
+`results/{input_stem}_ragcheck[_{runs}].json`, the suffix only for
+`--runs > 1`) from `pipeline.last_report`. The
 report preserves the original RAGChecker *structure* (results list, four
 directional arrays parallel to the claims) with modernized leaves:
 

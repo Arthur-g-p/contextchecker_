@@ -30,7 +30,8 @@ htmlcov/
 Thumbs.db
 
 # ── Results (local runs) ────────────────────────────────────────────────────
-results/*
+# Outputs land next to their input, so examples/ and eval_data/ grow their own.
+**/results/
 
 ignore-found-bugs.md
 

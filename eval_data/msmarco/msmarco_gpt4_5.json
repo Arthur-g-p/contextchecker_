@@ -1,0 +1,320 @@
+[
+  {
+    "id": "20924",
+    "response": "Yes, Apollo and Phaedra are still married.",
+    "claude2_response_kg": [
+      {
+        "triplet": [
+          "Apollo and Phaedra",
+          "marital status",
+          "still married"
+        ],
+        "human_label": "Entailment"
+      }
+    ],
+    "question": "are apollo and phaedra still married",
+    "context": [
+      "'Till death do them part! In recent weeks, rumors have swirled that Phaedra Parks and her husband Apollo Nida are headed for divorce. Apollo has been weathering legal issues and the pair have battled over his supposed flirtations with Atlanta Housewife Kenya Moore.Till death do them part! In recent weeks, rumors have swirled that Phaedra Parks and her husband Apollo Nida are headed for divorce. Apollo has been weathering legal issues and the pair have battled over his supposed flirtations with Atlanta Housewife Kenya Moore.",
+      "Phaedra Parks and Apollo Nida ’s relationship had clearly reached its breaking point on a recent episode of Real Housewives of Atlanta, shortly after which Apollo turned himself in for his eight-year prison sentence, but fans are curious to know if the couple has made their split legal yet.hile both Phaedra and Apollo consulted divorce attorneys and made their intentions to end things known on Housewives, Phaedra says that she hasn’t actually filed for divorce just yet. This is a life-changing decision and I'm just making sure my children are OK first, Phaedra explained.",
+      "Real Housewives of Atlanta star Phaedra Parks is giving us an update on her martial status in a new interview with Bravo this week. After part one of the reunion aired, Parks revealed she was still married to Apollo Nida and had not filed for divorce like she announced intended to.She also dishes on how her small children are doing while their father is away.fter part one of the reunion aired, Parks revealed she was still married to Apollo Nida and had not filed for divorce like she announced intended to. She also dishes on how her small children are doing while their father is away.",
+      "The answer is no, Phaedra and Apollo are just going through the ups and downs of marriage. They are still married, and all is well. If you watch the clip below, you will see that the conversation was fueled by alcohol and raw emotions.Apollo was just expressing his feelings which are completely normal, in my opinion.eter joked to Cynthia that Phaedra and Apollo were getting divorced, because a blog reported it, it’s obviously not true. Watch below, and see what you think, you might be shocked where the conversation takes place, LOL! Apollo telling Peter that he’s dealing with a beast:",
+      "Phaedra should know. She’s been leaning on her faith as she deals with husband Apollo Nida completing his eight-year prison sentence — and her new life as a single mother to two young boys. She tells Andy that she still hasn’t taken the boys to visit their father in jail.And despite the headlines and gossip amongst the Housewives, Phaedra reveals that she’s still married and has not filed for divorce from Apollo…for the sake of the children. “I make plenty of money,” Phaedra says, fighting through tears.he tells Andy that she still hasn’t taken the boys to visit their father in jail. And despite the headlines and gossip amongst the Housewives, Phaedra reveals that she’s still married and has not filed for divorce from Apollo…for the sake of the children.",
+      "Phaedra Parks and husband Apollo Nida in happier times. Parks believed what her husband of five years told her and she immediately sought the best legal representation for him that she could find to keep him from going to prison.Obviously it did not turn out like that, she said.he Real Housewives of Atlanta star spoke out for the first time about her husband Apollo Nida's prison sentence and their divorce on . The Ellen DeGeneres Show  Wednesday.",
+      "While both Phaedra and Apollo consulted divorce attorneys and made their intentions to end things known on Housewives, Phaedra says that she hasn’t actually filed for divorce just yet. This is a life-changing decision and I'm just making sure my children are OK first, Phaedra explained.hile both Phaedra and Apollo consulted divorce attorneys and made their intentions to end things known on Housewives, Phaedra says that she hasn’t actually filed for divorce just yet. This is a life-changing decision and I'm just making sure my children are OK first, Phaedra explained.",
+      "Phaedra’s rep has confirmed the divorce is still in process even though Apollo is hopeful Phaedra will change her mind. A source told us Phaedra is furious and very hurt by Apollo’s actions, but is considering allowing Ayden to visit his father soon.haedra’s rep has confirmed the divorce is still in process even though Apollo is hopeful Phaedra will change her mind. A source told us Phaedra is furious and very hurt by Apollo’s actions, but is considering allowing Ayden to visit his father soon.",
+      "Apollo Nida and Phaedra Parks may have more legal drama to contend with in the coming weeks. The Real Housewives of Atlanta couple are headed for divorce, according to RumorFix.com.pollo Nida and Phaedra Parks may have more legal drama to contend with in the coming weeks. The Real Housewives of Atlanta couple are headed for divorce, according to RumorFix.com.",
+      "Phaedra Parks is keeping it real. The Real Housewives of Atlanta star spoke out for the first time about her husband Apollo Nida's prison sentence and their divorce on . The Ellen DeGeneres Show  Wednesday.he Real Housewives of Atlanta star spoke out for the first time about her husband Apollo Nida's prison sentence and their divorce on . The Ellen DeGeneres Show  Wednesday."
+    ]
+  },
+  {
+    "id": "810239",
+    "response": "The cause of dogs urinating all the time can be due to several medical problems such as diabetes, kidney problems, liver disease, and Cushings Disease. Other causes can include urinary tract infections, bladder problems such as UTI or cystitis, interstitial cystitis, bladder dysfunction, and damage to nerves that supply the bladder. Behavioral causes can also lead to frequent urination, such as changes in the environment, stress, and anxiety.",
+    "claude2_response_kg": [
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "diabetes"
+        ],
+        "human_label": "Neutral"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "kidney problems"
+        ],
+        "human_label": "Neutral"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "liver disease"
+        ],
+        "human_label": "Neutral"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "Cushings Disease"
+        ],
+        "human_label": "Neutral"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "urinary tract infections"
+        ],
+        "human_label": "Neutral"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "bladder problems"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bladder problems",
+          "examples",
+          "UTI"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bladder problems",
+          "examples",
+          "cystitis"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "interstitial cystitis"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "bladder dysfunction"
+        ],
+        "human_label": "Neutral"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "damage to nerves that supply the bladder"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "changes in the environment"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "stress"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "dogs urinating all the time",
+          "caused by",
+          "anxiety"
+        ],
+        "human_label": "Entailment"
+      }
+    ],
+    "question": "what is the cause of dogs urinating all the time",
+    "context": [
+      "Excessive thirst and frequent urination are signs of four serious canine medical problems: diabetes, kidney problems, liver disease and Cushings Disease. After running basic tests, your veterinarian has eliminated the first three, leaving Cushings Disease as the diagnosis.",
+      "Some owners are under the misconception that the dog is peeing in the house to punish the owner. Dogs do not retaliate or do things out of spite. Read through the possible causes below and you may be able to gain some insight into your dog's problem.",
+      "Causes of Urination Problems in Dogs. ... ... Many factors can cause or exacerbate urination problems in dogs. Canine bladder problems can be a direct result of a physical issue such as a UTI or cystitis or can be behaviorally oriented as in the case of submissive urination. Knowing the cause of a dog's urination problems can help lead to the most effective solution in each specific case.",
+      "This causes the bladder wall to become irritable. The bladder begins to contract even when it contains small amounts of urine, causing more frequent urination. Interstitial cystitis . This condition of unknown cause is characterized by pain in the bladder and pelvic region.",
+      "Damage to nerves that supply the bladder can lead to problems with bladder function, including frequent and sudden urges to urinate. Less common causes include bladder cancer, bladder dysfunction, and radiation therapy. Often, frequent urination is not a symptom of a problem, but is the problem.",
+      "Causes of Frequent Urination. Frequent urination can be a symptom of many different problems. When frequent urination is accompanied by fever, an urgent need to urinate, and pain or discomfort in the abdomen, you may have a urinary tract infection. Other possible causes of frequent urination include: Diabetes .",
+      "Common Medical Causes Sudden Onset of Peeing in the House: Common Behavioral Causes of Sudden Onset of Peeing in the House: Changes to the environment are also a common behavioral cause for a dog to suddenly begin urinating in the home. * Adding a new pet to the household. * Change in the owners household routines. * Changes in the neighborhood like a new dog moving in. Stress and anxiety can lead to inappropriate urination.",
+      "Excessive thirst and frequent urination are signs of four serious dog health problems: diabetes, kidney problems, liver disease and Cushings Disease. Regrettably, not treating Cushings Disease could precipitate the others.",
+      "Signs of Canine Bladder Problems. There are a few common behaviors that indicate a probable canine bladder problem. If your dog is normally house trained and then begins urinating in the house or other forbidden areas, he's telling you that he's having a problem with his urination.",
+      "The majority of time, the source of the disease is a hyperactive pituitary gland, which is found at the base of the brain. Approximately 85% of Cushings in dogs is from a minute benign tumor on the pituitary gland. In the other 15% of cases, it may be caused by a tumor on one or both of the adrenal glands, which are located in front of the kidneys. Approximately 50% of these tumors are benign."
+    ]
+  },
+  {
+    "id": "57346",
+    "response": "A bus port, in the context of these passages, refers to a USB (Universal Serial Bus) port. It is an external bus standard that supports data transfer rates and can connect to multiple peripheral devices. It is used for connection, communication, and power supply between computers and electronic devices. USB ports are backward compatible and can support devices and cables of previous versions. They are also used to implement connections to storage devices using a set of standards.",
+    "claude2_response_kg": [
+      {
+        "triplet": [
+          "bus port",
+          "refers to",
+          "USB (Universal Serial Bus) port"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bus port",
+          "is",
+          "external bus standard"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bus port",
+          "supports",
+          "data transfer rates"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bus port",
+          "connects to",
+          "multiple peripheral devices"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bus port",
+          "used for",
+          "connection between computers and electronic devices"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bus port",
+          "used for",
+          "communication between computers and electronic devices"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "bus port",
+          "used for",
+          "power supply between computers and electronic devices"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "USB ports",
+          "are",
+          "backward compatible"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "USB ports",
+          "can support",
+          "devices of previous versions"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "USB ports",
+          "can support",
+          "cables of previous versions"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "USB ports",
+          "used to implement",
+          "connections to storage devices"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "USB ports",
+          "use",
+          "a set of standards to implement connections to storage devices"
+        ],
+        "human_label": "Entailment"
+      }
+    ],
+    "question": "bus ports definition",
+    "context": [
+      "A USB 3.0 port, usually colored blue, is backward compatible with USB 2.0 devices and cables. The USB 3.0 Promoter Group announced on 17 November 2008 that the specification of version 3.0 had been completed and had made the transition to the USB Implementers Forum (USB-IF), the managing body of USB specifications.",
+      "USB cables are available in multiple lengths, from around 3 feet to just over 16 feet in length. The maximum length of a USB cable is 16 feet 5 inches (5 meters) for high speed devices and 9 feet 10 inches (3 meters) for low speed devices.",
+      "USB 1.x is an external bus standard that supports data transfer rates of 12 Mbps and is capable of supporting up to 127 peripheral devices.",
+      "Short for Universal Serial Bus, an external bus standard that supports data transfer rates of 12 Mbps. A single USB port can be used to connect up to 127 peripheral devices, such as mice, modems, and keyboards. USB also supports Plug-and-Play installation and hot plugging. Starting in 1996, a few computer manufacturers started including USB support in their new machines. It wasn't until the release of the best-selling iMac in 1998 that USB became widespread. It is expected to completely replace serial and parallel ports. Also see USB 2.0.",
+      "USB, short for Universal Serial Bus, is an industry standard developed in the mid-1990s that defines the cables, connectors and communications protocols used in a bus for connection, communication, and power supply between computers and electronic devices.",
+      "USB implements connections to storage devices using a set of standards called the USB mass storage device class (MSC or UMS). This was at first intended for traditional magnetic and optical drives and has been extended to support flash drives.",
+      "USB devices. Today, there are millions of different USB devices that can be connected to your computer. Below are just a few of the most common USB devices you'll likely find and use. 1  Camera. 2  External drive. 3  iPod or other MP3 player.",
+      "Short for Universal Serial Bus, USB (pronounced yoo-es-bee) is a standard that was introduced in 1995 by Intel, Compaq, Microsoft and other computer companies.",
+      "Type-A plugs and receptacles from both USB 3.0 and USB 2.0 are designed to interoperate. Type-B plugs and receptacles in USB 3.0 are somewhat larger than those in USB 2.0; thus, USB 2.0 Type-B plugs can fit into USB 3.0 Type-B receptacles, while the opposite is not possible.",
+      "1 USB runs with a 5 V power line, while FireWire in current implementations supplies 12 V and theoretically can supply up to 30 V. 2  Standard USB hub ports can provide from the typical 500 mA/2.5 W of current, only 100 mA from non-hub ports."
+    ]
+  },
+  {
+    "id": "1088355",
+    "response": "The passages do not provide current weather information for Nelson, New Zealand.",
+    "claude2_response_kg": [],
+    "question": "weather in nelson new",
+    "context": [
+      "Time/General Weather Time Zone DST Changes Sun & Moon Weather Today/Tomorrow Hour-by-Hour Forecast 14 Day Forecast Yesterday/Past Weather Climate (Averages) Nelson Extended Forecast with high and low temperatures °f",
+      "Learn how to add your own weather station to Your Weather. In partnership with MetService has collaborated with the UK Met Office to enable New Zealanders to share their weather observations via the 'Weather Observations Website' (WOW) System. Any observations provided to the WOW System may also appear on Your Weather and are not calibrated to World Meteorological Organization standards, so are provided for interest only and should not be relied on.",
+      "CLIMATE: AVERAGE MONTHLY WEATHER IN Nelson, New Zealand. 1  Average minimum and maximum temperature over the year. 2  Average monthly hours of sunshine over the year. 3  Average water temperature over the year. 4  Average monthly precipitation over the year (rainfall, snow) 5  Average monthly rainy days over the year. 6  Average humidity over the year.",
+      "Key weather averages for Nelson in January. 1  22. 22°C max day temperature. 2  8. 8 hours of sunshine per day. 3  9. 9 days with some rainfall. 4  12. 12°C min night temperature. 5  15. 15 hours of daylight per day. 6  0. No heat & humidity. 7  97. 97 mm of monthly rainfall. 8  11. 11 (Extreme) UV index. 9  18. 18°C sea temperature.",
+      "Nelson 10 Day Forecast and detailed 3 day weather forecast. Visit MetService.com for up to date weather information in your region.",
+      "Severe Weather. Severe Weather; U.S. Severe Weather Map; Europe Severe Weather Map; Hurricane & Tropical Cyclones; Convective Outlook; Preparedness; Email Alerts; News & Blogs. News & Blogs; Category 6; Blog Archive; Recent News Stories; Weather Infographics; Weather Posters; Photos & Video. Photos & Video; WunderPhotos; Webcams; Videos; WUTV; Historical Weather; Activities. Activities",
+      "Weather in Nelson in January 2018. Expect 22°C daytime maximum temperatures in the shade with on average 8 hours of sunshine per day in Nelson in January. Check more long-term weather averages for Nelson in January before you book your next holiday to New Zealand in 2018.",
+      "Annual Weather Averages in Nelson. Based on weather reports collected during 2005–2015.",
+      "Weather. Today's Forecast; Hourly Forecast; 10 Day Forecast; Monthly Forecast; National Forecast; Get Notifications; Maps. Weather in Motion® Radar Maps; Classic Weather Maps; Regional Satellite; Driving Difficulty Map; Traffic and Radar NEW! Severe. Severe Alerts; Hurricane Central; Tornado Central; Local Severe Storm Risk; Winter Storm Central; Safety and Preparedness",
+      "Find the most current and reliable 7 day weather forecasts, storm alerts, reports and information for Nelson, NZ with The Weather Network."
+    ]
+  },
+  {
+    "id": "857956",
+    "response": "The passages suggest that Donald Trump may be hiding information in his tax returns.",
+    "claude2_response_kg": [
+      {
+        "triplet": [
+          "Donald Trump",
+          "may be hiding",
+          "information in his tax returns"
+        ],
+        "human_label": "Entailment"
+      }
+    ],
+    "question": "what is trump truly hiding",
+    "context": [
+      "Thirty years ago, in the now defunct Spy magazine, Graydon Carter referred to the perpetually sundowning Donald Trump as a “short-fingered vulgarian.” Trump did not like this. As Carter wrote in Vanity Fair this past November, “To this day, I receive the occasional envelope from Trump.",
+      "Donald Trump speaks during his first press conference since winning the election in the Trump Tower in New York, on January 11. His body language demonstrates the power of nonverbal forms of communication. Shannon Stapleton/Reuters.",
+      "Trump, she says, is a great study of how a person’s gesturing, posture and facial expressions can be both confusing and persuasive. “He is the perfect person to say the nonverbal has the power,” she says of Trump. “People don’t hear the words, they don’t really pay attention to the verbal message.",
+      "Donald Trump speaks during his first press conference since winning the election in the Trump Tower in New York, on January 11. His body language demonstrates the power of nonverbal forms of communication. Experts have long known that humans communicate with much more than just words.",
+      "As Steven Taylor noted yesterday afternoon, Donald Trump released what he purported to be his birth certificate, his latest publicity stunt in the bizarre circus he’s been engaged in lately. There’s just one problem. The document Trump released isn’t an official birth certificate:",
+      "Just what is Donald Trump hiding in his tax returns? Trump blustered on Tuesday that he essentially would not reveal his tax returns to the public until after the November election, or until the IRS audit is completed, (meaning after the election), making him the first candidate since 1976 to refuse to reveal his tax returns. Gerald Ford released a tax summary that year, but not his full records.",
+      "Donald Trump’s Tax Returns May Be Hiding This Bombshell from the 1990s. It's plausible to believe that, deep inside Donald Trump's many years of tax returns, which he has declined to make public, a surprise lurks. Heck, we already know him to be a serial exaggerator, at minimum, a person who has testified that his feelings influence his calculation of his net worth.",
+      "What Is Wikipedia Hiding About Donald Trump's Tiny Shrimp Fingers? When the faceless editors of Wikipedia decide an article is not fit for public consumption, it’s gone, only accessible to the site’s top editors—at least, it was. But now we’re keeping track of all the articles Wikipedia doesn’t see fit to print, to present you with very best of the site’s weirdest and worst.",
+      "But the question is one of the most intriguing in the saga of Trump's revival. (The following analysis does not imply that Trump did anything unethical. Employing the insolvency exclusion, if indeed he used it, is a legitimate way to lower liability. It's a strategy that responsible tax advisers recommend all the time.",
+      "When pressed, Trump adds that no one but a few media losers are interested in his taxes. More recently, though, Donald Trump Jr. has said the real reason is simpler: not only are people interested in Trump's taxes, but they're too interested. Releasing his tax returns would detract from his father's message. Whatevs."
+    ]
+  }
+]

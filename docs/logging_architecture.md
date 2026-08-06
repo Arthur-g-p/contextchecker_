@@ -67,7 +67,7 @@ Never call `print()`. Never create your own handlers.
 
 | Layer | What it logs | Example |
 |-------|-------------|---------|
-| **CLI** | Box header, output file path | `📁 results/output.json` |
+| **CLI** | Box header, output file path | `📁 results/{stem}_{operation}.json` |
 | **Service** | Validation, filtering, config, results summary, done line | `📂 Validation`, `✅ Done: 10 items → 34 claims` |
 | **Worker** | Execution progress, retries | `Extracting: 100%`, `♻️ Retry: 3 failed items` |
 
