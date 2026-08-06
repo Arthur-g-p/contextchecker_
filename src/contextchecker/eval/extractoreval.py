@@ -450,6 +450,10 @@ class ExtractorEvaluator:
         Items missing 'response' are dropped — we can't extract without text.
         Missing GT is NOT an error — it's the trap for wrongful_answer detection.
         If zero survive → InvalidInputError.
+
+        GT presence is judged on the KEY, not its contents: an empty list is a
+        deliberate abstention trap. No item carrying the key at all means wrong
+        file or wrong --gt-key — fatal, and caught before any LLM call.
         """
         valid = []
         dropped = 0
@@ -465,6 +469,18 @@ class ExtractorEvaluator:
                 f"No evaluable items. All {len(data)} items dropped "
                 f"(missing_response={dropped})."
             )
+
+        missing_key = sum(1 for item in valid if self._gt_key not in item)
+
+        if missing_key == len(valid):
+            raise InvalidInputError(
+                f"No ground truth found: none of the {len(valid)} evaluable "
+                f"items contain the key '{self._gt_key}'. `eval extractor` "
+                f"measures the extractor against labeled GT — check the input "
+                f"file, or point --gt-key at the right key."
+            )
+
+        self._missing_gt_count = missing_key
 
         return valid
 
@@ -905,7 +921,12 @@ class ExtractorEvaluator:
         logger.info("    Total:       %d items", total)
         if dropped > 0:
             logger.info("    ├─ dropped:  %d  (missing response)", dropped)
-        logger.info("    └─ to_extract: %d items", valid)
+        missing_gt = getattr(self, "_missing_gt_count", 0)
+        logger.info("    └─ to extract: %d items", valid)
+        if missing_gt:
+            logger.info("       ├─ with GT key: %d", valid - missing_gt)
+            logger.info("       └─ no GT key:   %d  (⚠️ wrongful-answer traps)",
+                        missing_gt)
         logger.info("")
 
     def _log_data_post(self, buckets: _ItemBucket) -> None:

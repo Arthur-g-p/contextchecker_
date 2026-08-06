@@ -18,6 +18,7 @@ from dataclasses import asdict
 from datetime import datetime
 
 from contextchecker import settings
+from contextchecker.exceptions import InvalidInputError
 from contextchecker.eval.metrics import (
     accuracy_score,
     classification_report,
@@ -207,22 +208,15 @@ class CheckerEvaluator:
 
     # ── Pipeline steps (private) ─────────────────────────────────
 
-    def _prepare_gt(
-        self, data: list[dict]
-    ) -> tuple[list[dict], dict[int, dict[int, str]], dict]:
-        """Classify items and extract human labels.
+    def _validate(self, data: list[dict]) -> list[dict]:
+        """Step 1 — fail-fast gate: which items can be evaluated at all.
 
-        Items need: gt_key present + reference present + at least one
-        triplet with both a valid triplet array AND a human_label.
-
-        Returns:
-            evaluable:     Items that pass all checks.
-            gt_labels_map: {evaluable_index: {claim_index: human_label}}.
-                           Only triplets WITH human_label are included.
-            skip_info:     Counts by skip reason (item-level + claim-level).
+        An item survives only with all three: gt_key present and non-empty,
+        a reference to check against, and at least one triplet carrying a
+        human_label. Skip reasons are counted onto self._skip_counts for the
+        report; zero survivors is fatal.
         """
         evaluable: list[dict] = []
-        gt_labels_map: dict[int, dict[int, str]] = {}
 
         missing_gt = 0
         missing_context = 0
@@ -243,38 +237,60 @@ class CheckerEvaluator:
 
             total_triplets += len(item[self._gt_key])
 
-            # 3. Extract triplets with human_label — track by index
-            labels: dict[int, str] = {}
-            for j, t in enumerate(item[self._gt_key]):
-                label = t.get("human_label")
-                if label:
-                    labels[j] = label
-
-            if not labels:
+            # 3. Need at least one human_label to compare against
+            if not any(t.get("human_label") for t in item[self._gt_key]):
                 empty_gt += 1
                 continue
 
-            idx = len(evaluable)
-            gt_labels_map[idx] = labels
             evaluable.append(item)
 
-        total_labeled = sum(len(l) for l in gt_labels_map.values())
-
-        skip_info = {
+        self._skip_counts = {
             "missing_gt": missing_gt,
             "missing_context": missing_context,
             "empty_gt": empty_gt,
-            "unlabeled_claims": total_triplets - total_labeled,
+            "total_triplets": total_triplets,
         }
 
         if not evaluable:
-            from contextchecker.exceptions import InvalidInputError
             total_dropped = missing_gt + missing_context + empty_gt
             raise InvalidInputError(
                 f"No evaluable items found. All {total_dropped} items were "
                 f"dropped (missing_gt={missing_gt}, missing_context="
                 f"{missing_context}, empty_gt={empty_gt})."
             )
+
+        return evaluable
+
+    def _prepare_gt(
+        self, data: list[dict]
+    ) -> tuple[list[dict], dict[int, dict[int, str]], dict]:
+        """Step 2 — extract human labels from the validated items.
+
+        Returns:
+            evaluable:     Items that passed _validate.
+            gt_labels_map: {evaluable_index: {claim_index: human_label}}.
+                           Only triplets WITH human_label are included.
+            skip_info:     Counts by skip reason (item-level + claim-level).
+        """
+        evaluable = self._validate(data)
+        gt_labels_map: dict[int, dict[int, str]] = {}
+
+        for idx, item in enumerate(evaluable):
+            labels: dict[int, str] = {}
+            for j, t in enumerate(item[self._gt_key]):
+                label = t.get("human_label")
+                if label:
+                    labels[j] = label
+            gt_labels_map[idx] = labels
+
+        total_labeled = sum(len(l) for l in gt_labels_map.values())
+
+        skip_info = {
+            "missing_gt": self._skip_counts["missing_gt"],
+            "missing_context": self._skip_counts["missing_context"],
+            "empty_gt": self._skip_counts["empty_gt"],
+            "unlabeled_claims": self._skip_counts["total_triplets"] - total_labeled,
+        }
 
         return evaluable, gt_labels_map, skip_info
 

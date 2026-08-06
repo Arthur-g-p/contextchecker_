@@ -106,6 +106,72 @@ class TestValidate:
             ev._validate(data)
 
 
+class TestCorpusGtGuard:
+    """No item carrying the GT key at all = wrong file or wrong --gt-key.
+
+    Presence of the KEY is what counts. An empty list is a deliberate
+    abstention trap and must never trip the guard or the warning.
+    """
+
+    def test_no_item_has_gt_key_raises(self):
+        ev = _evaluator()
+        data = [_make_item(gt_triplets=None), _make_item(gt_triplets=None)]
+        with pytest.raises(InvalidInputError, match="No ground truth found"):
+            ev._validate(data)
+
+    def test_wrong_gt_key_raises(self):
+        """GT present under another key — the real-world --gt-key mistake."""
+        ev = _evaluator(gt_key="some_other_key")
+        data = [_make_item(gt_triplets=[_make_triplet("a", "b", "c")])]
+        with pytest.raises(InvalidInputError, match="some_other_key"):
+            ev._validate(data)
+
+    def test_all_empty_gt_lists_do_NOT_raise(self):
+        """An all-abstention corpus is a legitimate eval, not a broken input."""
+        ev = _evaluator()
+        data = [_make_item(gt_triplets=[]), _make_item(gt_triplets=[])]
+        valid = ev._validate(data)
+        assert len(valid) == 2
+
+    def test_empty_gt_not_counted_as_missing(self):
+        """Abstentions have the key, so they never reach the trap branch."""
+        ev = _evaluator()
+        data = [_make_item(gt_triplets=[]), _make_item(gt_triplets=[])]
+        ev._validate(data)
+        assert ev._missing_gt_count == 0
+
+    def test_partial_missing_key_passes_and_counts(self):
+        ev = _evaluator()
+        data = [
+            _make_item(gt_triplets=None),
+            _make_item(gt_triplets=[_make_triplet("a", "b", "c")]),
+        ]
+        valid = ev._validate(data)
+        assert len(valid) == 2
+        assert ev._missing_gt_count == 1
+
+
+class TestDataTreeRendering:
+    """_log_data_pre branches 'to extract' only when the split is real."""
+
+    def test_branches_when_items_lack_gt_key(self):
+        ev = _evaluator()
+        ev._missing_gt_count = 1
+        with patch("contextchecker.eval.extractoreval.logger") as mock_log:
+            ev._log_data_pre(6, 1, 5)
+        lines = [str(c) for c in mock_log.info.call_args_list]
+        assert any("with GT key" in l and "4" in l for l in lines)
+        assert any("no GT key" in l and "wrongful-answer traps" in l for l in lines)
+
+    def test_no_branch_when_every_item_has_gt_key(self):
+        ev = _evaluator()
+        ev._missing_gt_count = 0
+        with patch("contextchecker.eval.extractoreval.logger") as mock_log:
+            ev._log_data_pre(5, 0, 5)
+        lines = [str(c) for c in mock_log.info.call_args_list]
+        assert not any("GT key" in l for l in lines)
+
+
 # ── Test pred_key / gt_key collision guard ───────────────────────────────────
 
 class TestPredKeyCollisionGuard:
@@ -557,12 +623,19 @@ class TestEvaluateIntegration:
                 gt_triplets=None,
                 item_id="1",
             ),
+            # Present-but-empty key satisfies the corpus GT guard; no
+            # predictions, so the counts below are unchanged.
+            _make_item(
+                gt_triplets=[],
+                item_id="2",
+            ),
         ]
 
-        # Mock extraction: service.run() produces triplets on a no-GT item
+        # Mock extraction: service.run() produces triplets on the no-GT item
         async def mock_run(items):
             for item in items:
-                item[PRED_KEY] = [_make_canonical_triplet("x", "y", "z")]
+                if item["id"] == "1":
+                    item[PRED_KEY] = [_make_canonical_triplet("x", "y", "z")]
 
         ev._extraction_service.run = AsyncMock(side_effect=mock_run)
 
