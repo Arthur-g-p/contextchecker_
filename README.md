@@ -44,17 +44,68 @@ disagree with.
 
 ## Installation
 
-Requires Python 3.12+.
+Requires Python 3.12+. The project uses [uv](https://docs.astral.sh/uv/) for
+dependency management — install it first if you don't have it:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+```bash
+# macOS (Homebrew alternative)
+brew install uv
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then clone and install into a virtual environment:
 
 ```bash
 git clone https://github.com/Arthur-g-p/contextchecker_.git
 cd contextchecker_
+uv venv
+uv pip install -e .
+```
+
+`uv venv` reads `.python-version` and downloads CPython 3.12 if it isn't
+already present. It does not touch your system Python.
+
+Activate the environment before using the `contextchecker` command:
+
+```bash
+source .venv/bin/activate     # macOS / Linux
+```
+
+```powershell
+.venv\Scripts\activate        # Windows
+```
+
+Activation is per-shell — you need it again in every new terminal. To skip it,
+prefix commands with `uv run` instead (`uv run contextchecker --help`).
+
+To also install the test dependencies (pytest, pytest-asyncio, coverage):
+
+```bash
 uv pip install -e ".[test]"
+```
+
+Verify the install:
+
+```bash
+contextchecker --help
 ```
 
 ## Quick start
 
-Set the API keys (see `.env-example`):
+Copy the environment template and fill in your API keys:
+
+```bash
+cp .env-example .env
+```
 
 ```
 EXTRACTOR_API_KEY=...
@@ -75,7 +126,17 @@ Input is a JSON list of items. For `ragcheck`, each item needs `response`,
 ]
 ```
 
-Run it:
+The input file is a **positional** argument on every command — pass the path
+bare, with no flag in front of it.
+
+To try the toolkit right away without preparing data, the repo ships a small
+example file you can run against directly:
+
+```bash
+contextchecker extract tests/fixtures/example.json -m gpt-4o-mini
+```
+
+Run the full RAG pipeline on your own `data.json`:
 
 ```bash
 contextchecker ragcheck data.json -e gpt-4o-mini -c gpt-4o-mini
@@ -96,6 +157,36 @@ contextchecker faithcheck data.json -e gpt-4o-mini -c gpt-4o-mini
 Every command writes a single self-contained JSON report including a
 `_meta` block (models, config, timings), overall metrics, and per-claim
 verdicts. `contextchecker --help` lists all commands and flags.
+
+## Using other providers and local models
+
+The extractor and checker are configured independently, and there are two ways
+to reach a non-OpenAI endpoint.
+
+**Direct endpoint** — pass a base URL with `--extractor-base-api` (or
+`--checker-base-api`). The request goes straight out over the OpenAI SDK, and
+the model name must **not** carry a provider prefix:
+
+```bash
+contextchecker extract tests/fixtures/example.json \
+  --extractor-base-api https://openrouter.ai/api/v1 \
+  -m openai/gpt-5.6-luna
+```
+
+The same flag points at any OpenAI-compatible server, including a local one
+(`--extractor-base-api http://localhost:11434/v1`).
+
+**LiteLLM routing** — omit the base URL and prefix the model with its provider
+instead. LiteLLM resolves the endpoint:
+
+```bash
+contextchecker extract tests/fixtures/example.json -m openrouter/openai/gpt-5.6-luna
+```
+
+Prefer the direct endpoint for very new models: LiteLLM routing depends on the
+installed LiteLLM release knowing the model, while a base URL bypasses that
+lookup entirely. Either way the key comes from `EXTRACTOR_API_KEY` /
+`CHECKER_API_KEY`.
 
 ## Documentation
 

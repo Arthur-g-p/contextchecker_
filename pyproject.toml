@@ -36,7 +36,6 @@ packages = ["src/contextchecker"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "e2e: End-to-end tests against CLI entrypoints",
     "integration: Integration tests for service layer",
     "unit: Unit tests for pure helper functions",
 ]

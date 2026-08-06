@@ -611,7 +611,7 @@ class TestClaimLevelResumption:
         assert payloads[1].claim == "E near F"
         assert payloads[1].claim_index == 2
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_joint_mode_packages_only_unchecked(self, service):
         """_execute_joint packages and checks only the unchecked claims."""
         pending = [

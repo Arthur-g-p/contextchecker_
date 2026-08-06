@@ -24,7 +24,7 @@ logger = settings.get_logger(__name__)
 
 app = typer.Typer(
     name="contextchecker",
-    help="Evaluate LLM-generated knowledge graphs against ground truth.",
+    help="Claim-level evaluation for LLM outputs: extract atomic claims, then verify each against a reference.",
     no_args_is_help=True,
 )
 
