@@ -517,10 +517,10 @@ class RagCheckerPipeline(BaseService):
             "answer2response": [self._flat_cell(t, a2r) for t in response_claims],
             "response2answer": [self._flat_cell(t, r2a) for t in gt_claims],
             "retrieved2response": [
-                self._matrix_row(t, ret2r, doc_ids) for t in response_claims
+                self._matrix_row(t, ret2r, len(chunks)) for t in response_claims
             ],
             "retrieved2answer": [
-                self._matrix_row(t, ret2a, doc_ids) for t in gt_claims
+                self._matrix_row(t, ret2a, len(chunks)) for t in gt_claims
             ],
         }
 
@@ -568,7 +568,7 @@ class RagCheckerPipeline(BaseService):
         return cell
 
     @staticmethod
-    def _matrix_row(triplet: dict, namespace: str, doc_ids: list[str]) -> list[dict]:
+    def _matrix_row(triplet: dict, namespace: str, n_chunks: int) -> list[dict]:
         """One row per claim, one cell per chunk, in retrieved_context order.
 
         Matrix cells match the flat-cell shape: verdict + explanation, plus
@@ -578,13 +578,13 @@ class RagCheckerPipeline(BaseService):
         explanations = triplet.get(f"{namespace}_explanations") or {}
         errors = triplet.get(f"{namespace}_errors") or {}
         row = []
-        for doc_id in doc_ids:
+        for idx in range(n_chunks):
             cell = {
-                "verdict": verdicts.get(doc_id),
-                "explanation": explanations.get(doc_id),
+                "verdict": verdicts.get(idx),
+                "explanation": explanations.get(idx),
             }
-            if errors.get(doc_id):
-                cell["error"] = errors[doc_id]
+            if errors.get(idx):
+                cell["error"] = errors[idx]
             row.append(cell)
         return row
 

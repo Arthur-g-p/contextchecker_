@@ -13,7 +13,10 @@ __pycache__/
 venv/
 
 # ── IDE ──────────────────────────────────────────────────────────────────────
-.vscode/
+# launch.json is shared: it documents the standard workflows. Everything else
+# under .vscode/ is personal.
+.vscode/*
+!.vscode/launch.json
 .idea/
 
 # ── Test / Coverage ─────────────────────────────────────────────────────────

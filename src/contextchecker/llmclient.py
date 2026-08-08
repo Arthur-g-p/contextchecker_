@@ -419,7 +419,17 @@ class LLMClient:
                 logger.error("    Error: %s", e)
                 return ErrorAction.FATAL
 
-            # 2. Generic APIError fallback — treat as retryable (e.g. 500, 502)
+            # 2. 405 — the endpoint refuses the method outright.
+            if status_code == 405:
+                logger.error("⛔ ENDPOINT ERROR (405): %s does not accept this request.",
+                             self.base_url or "the endpoint")
+                logger.error("   Reachable, but not serving an OpenAI-compatible API here.")
+                if self.base_url:
+                    logger.error("   Check the base URL (a wrong host or a missing /v1 suffix does this).")
+                logger.error("   Error: %s", e)
+                return ErrorAction.FATAL
+
+            # 3. Generic APIError fallback — treat as retryable (e.g. 500, 502)
             # gotta work this out better! litellm should crash most likely crash. openaisdk NOT
             logger.warning("🔄 API ERROR (%s) — %s: %s", self.model, retry_label, str(e)[:300])
             return ErrorAction.SERVER_ERROR
@@ -894,7 +904,8 @@ class LLMClient:
 
         except NotFoundError as e:
             # /v1/models may not exist on all custom endpoints
-            logger.info("   ⚡ /models endpoint not available — skipping pre-flight check.")
+            logger.info("   ⚡ /models endpoint not available (HTTP %s) — skipping pre-flight check.",
+                        getattr(e, "status_code", "?"))
             self._connection_verified = True
             LLMClient._VERIFIED_ENDPOINTS.add(self.base_url)
 
@@ -909,7 +920,7 @@ class LLMClient:
             logger.error("❌ FATAL: Cannot connect to API endpoint.")
             logger.error("   URL: %s", self.base_url)
             logger.error("   Error: %s", e)
-            logger.error("   Check: Is the URL correct? Is the server running? Firewall/proxy issues?")
+            logger.error("   Check: Is the URL correct? Is the server running? Firewall/proxy issues? Are you online?")
             # TODO: Add CLI flag to skip pre-flight model check
             raise LLMClientError(f"Cannot connect to {self.base_url}") from e
 

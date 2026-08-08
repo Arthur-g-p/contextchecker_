@@ -109,7 +109,7 @@ class TestFlatMode:
 
 class TestMatrixMode:
 
-    def test_verdicts_folded_as_doc_id_dicts(self):
+    def test_verdicts_folded_as_chunk_index_dicts(self):
         fake = FakeCheckingService()
         items = [_item(
             [_trip()],
@@ -123,18 +123,18 @@ class TestMatrixMode:
         asyncio.run(run_direction(fake, items, direction))
         triplet = items[0][KG_KEY][0]
         assert triplet[f"{NAMESPACE}_verdicts"] == {
-            "000": "Entailment", "001": "Entailment",
+            0: "Entailment", 1: "Entailment",
         }
         # Matrix mode must NOT leave a flat verdict on the originals
         assert f"{NAMESPACE}_verdict" not in triplet
 
-    def test_bare_string_chunks_get_synthesized_ids(self):
+    def test_bare_string_chunks_folded_by_index(self):
         fake = FakeCheckingService()
         items = [_item([_trip()], retrieved_context=["chunk A", "chunk B"])]
         direction = Direction(name="retrieved2response", kg_key=KG_KEY,
                               per_chunk=True)
         asyncio.run(run_direction(fake, items, direction))
-        assert set(items[0][KG_KEY][0][f"{NAMESPACE}_verdicts"]) == {"000", "001"}
+        assert set(items[0][KG_KEY][0][f"{NAMESPACE}_verdicts"]) == {0, 1}
 
     def test_one_shadow_item_per_item_chunk_pair(self):
         fake = FakeCheckingService()
@@ -164,8 +164,8 @@ class TestMatrixMode:
                               per_chunk=True)
         asyncio.run(run_direction(fake, items, direction))
         triplet = items[0][KG_KEY][0]
-        assert triplet[f"{NAMESPACE}_verdicts"] == {"000": None}
-        assert triplet[f"{NAMESPACE}_errors"] == {"000": "parse_failure"}
+        assert triplet[f"{NAMESPACE}_verdicts"] == {0: None}
+        assert triplet[f"{NAMESPACE}_errors"] == {0: "parse_failure"}
 
     def test_items_without_chunks_are_skipped(self):
         fake = FakeCheckingService()
@@ -175,3 +175,70 @@ class TestMatrixMode:
         asyncio.run(run_direction(fake, items, direction))
         assert fake.seen_items == []
         assert f"{NAMESPACE}_verdicts" not in items[0][KG_KEY][0]
+
+
+# ── Duplicate doc_ids (regression: chunk-keyed fold) ─────────────────────────
+
+class PerChunkFakeCheckingService(FakeCheckingService):
+    """Verdict varies with the chunk text, so a collapsed cell is detectable."""
+
+    async def run(self, data):
+        self.seen_items = data
+        for item in data:
+            text = item["reference"][0]
+            for triplet in item.get(self.kg_key, []):
+                triplet[self.verdict_key] = (
+                    "Entailment" if "supports" in text else "Neutral"
+                )
+                triplet[self.explanation_key] = f"judged against: {text}"
+        return data
+
+
+class TestDuplicateDocIds:
+    """A RAG corpus chunked from one document gives every chunk the same
+    doc_id. Each chunk is still checked separately, so each must keep its own
+    verdict."""
+
+    def _run(self, doc_ids):
+        fake = PerChunkFakeCheckingService()
+        items = [_item(
+            [_trip()],
+            retrieved_context=[
+                {"doc_id": doc_ids[0], "text": "this chunk supports the claim"},
+                {"doc_id": doc_ids[1], "text": "this chunk is unrelated"},
+            ],
+        )]
+        direction = Direction(name="retrieved2response", kg_key=KG_KEY,
+                              per_chunk=True)
+        asyncio.run(run_direction(fake, items, direction))
+        return items[0][KG_KEY][0]
+
+    def test_both_chunks_are_checked(self):
+        fake = PerChunkFakeCheckingService()
+        items = [_item(
+            [_trip()],
+            retrieved_context=[
+                {"doc_id": "same", "text": "this chunk supports the claim"},
+                {"doc_id": "same", "text": "this chunk is unrelated"},
+            ],
+        )]
+        direction = Direction(name="retrieved2response", kg_key=KG_KEY,
+                              per_chunk=True)
+        asyncio.run(run_direction(fake, items, direction))
+        assert len(fake.seen_items) == 2
+
+    def test_duplicate_doc_ids_keep_one_cell_per_chunk(self):
+        triplet = self._run(["same", "same"])
+        assert len(triplet[f"{NAMESPACE}_verdicts"]) == 2
+
+    def test_duplicate_doc_ids_keep_distinct_verdicts(self):
+        triplet = self._run(["same", "same"])
+        assert sorted(triplet[f"{NAMESPACE}_verdicts"].values()) == [
+            "Entailment", "Neutral",
+        ]
+
+    def test_unique_doc_ids_unaffected(self):
+        triplet = self._run(["a", "b"])
+        assert sorted(triplet[f"{NAMESPACE}_verdicts"].values()) == [
+            "Entailment", "Neutral",
+        ]

@@ -18,10 +18,12 @@ How verdicts land on the source items:
   in place. No fold-back needed.
 - Matrix mode (per_chunk): one shadow item per (item, chunk) over DEEP
   COPIES of the triplets — the same verdict key would collide across chunks
-  otherwise. Afterwards the per-doc results are folded back onto the
-  original triplets as {doc_id: ...} dicts under "{namespace}_verdicts"
+  otherwise. Afterwards the per-chunk results are folded back onto the
+  original triplets as {chunk_index: ...} dicts under "{namespace}_verdicts"
   and "{namespace}_explanations" (plus "{namespace}_errors" for
-  null-verdict causes).
+  null-verdict causes). Keyed by position, not doc_id: a corpus chunked from
+  one document repeats the same doc_id across its chunks, which would collapse
+  every cell in the row onto the last one checked.
 """
 
 import copy
@@ -157,13 +159,13 @@ async def _run_matrix(
     """Claims vs each chunk: deep-copied triplets per (item, chunk), folded
     back as {doc_id: verdict} dicts on the original triplets."""
     shadow: list[dict] = []
-    bookkeeping: list[tuple[dict, str, list[dict]]] = []  # (item, doc_id, copies)
+    bookkeeping: list[tuple[dict, int, list[dict]]] = []  # (item, chunk_idx, copies)
 
     for item in items:
         chunks = item.get(direction.chunks_key) or []
         triplets = item.get(direction.kg_key) or []
         for idx, chunk in enumerate(chunks):
-            doc_id, text = _chunk_id_and_text(chunk, idx)
+            _, text = _chunk_id_and_text(chunk, idx)
             copies = copy.deepcopy(triplets)
             shadow_item = {
                 "reference": [text],
@@ -173,7 +175,7 @@ async def _run_matrix(
             if checking.extraction_error_key in item:
                 shadow_item[checking.extraction_error_key] = item[checking.extraction_error_key]
             shadow.append(shadow_item)
-            bookkeeping.append((item, doc_id, copies))
+            bookkeeping.append((item, idx, copies))
 
     if not await _run_service(checking, shadow, direction):
         return
@@ -183,18 +185,18 @@ async def _run_matrix(
     matrix_verdict_key = checking.verdict_key + "s"
     matrix_explanation_key = checking.explanation_key + "s"
     matrix_error_key = checking.checker_error_key + "s"
-    for item, doc_id, copies in bookkeeping:
+    for item, chunk_idx, copies in bookkeeping:
         originals = item.get(direction.kg_key) or []
         for original, copied in zip(originals, copies):
-            original.setdefault(matrix_verdict_key, {})[doc_id] = copied.get(
+            original.setdefault(matrix_verdict_key, {})[chunk_idx] = copied.get(
                 checking.verdict_key
             )
-            original.setdefault(matrix_explanation_key, {})[doc_id] = copied.get(
+            original.setdefault(matrix_explanation_key, {})[chunk_idx] = copied.get(
                 checking.explanation_key
             )
             error = copied.get(checking.checker_error_key)
             if error:
-                original.setdefault(matrix_error_key, {})[doc_id] = error
+                original.setdefault(matrix_error_key, {})[chunk_idx] = error
 
 
 async def _run_service(

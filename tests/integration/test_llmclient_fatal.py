@@ -10,6 +10,7 @@ Run with:
     pytest tests/integration/test_llmclient_fatal.py -v
 """
 
+import httpx
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -18,6 +19,7 @@ from openai import (
     PermissionDeniedError,
     NotFoundError,
     APIConnectionError,
+    APIError,
     APITimeoutError,
     InternalServerError,
     BadRequestError,
@@ -184,6 +186,67 @@ class TestFatalErrorsStopBatch:
 
         with pytest.raises(LLMClientError, match="FATAL"):
             await client.generate_batch(_make_tasks(3))
+
+    async def test_405_is_fatal_not_retried(self, client_and_mock):
+        """405 → immediate LLMClientError, no server-error backoff.
+
+        The endpoint refuses the method outright, so retrying can never succeed.
+        Guards against it falling back into the retryable APIError branch.
+        """
+        client, mock_call = client_and_mock
+        err = APIError(
+            message="Method Not Allowed",
+            request=httpx.Request("POST", "http://fake/v1/chat/completions"),
+            body=None,
+        )
+        err.status_code = 405
+        mock_call.side_effect = err
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(LLMClientError, match="FATAL"):
+                await client.generate_batch(_make_tasks(1))
+
+        # No 5s/10s/15s server-error backoff — it must fail on the first error.
+        assert 5.0 not in [c.args[0] for c in mock_sleep.call_args_list]
+
+    async def test_405_message_points_at_the_base_url(self, client_and_mock, caplog):
+        """The operator needs to be told which URL is wrong, not 'infrastructure'."""
+        client, mock_call = client_and_mock
+        err = APIError(
+            message="Method Not Allowed",
+            request=httpx.Request("POST", "http://fake/v1/chat/completions"),
+            body=None,
+        )
+        err.status_code = 405
+        mock_call.side_effect = err
+
+        with caplog.at_level("ERROR"):
+            with pytest.raises(LLMClientError):
+                await client.generate_batch(_make_tasks(1))
+
+        assert "ENDPOINT ERROR (405)" in caplog.text
+        assert "Infrastructure failure" not in caplog.text
+        if client.base_url:
+            assert client.base_url in caplog.text
+
+    async def test_bad_request_is_not_treated_as_an_endpoint_error(self, client_and_mock, caplog):
+        """400 must never reach the 405 branch.
+
+        Regression guard for the 405 fix: keying on a 4xx range instead of 405
+        alone would turn every unsupported-strategy probe into a fatal endpoint
+        error and break discovery.
+        """
+        client, mock_call = client_and_mock
+        mock_call.side_effect = BadRequestError(
+            message="unsupported parameter: reasoning_effort",
+            response=_fake_httpx_response(400),
+            body=None,
+        )
+
+        with caplog.at_level("ERROR"):
+            await client.generate_batch(_make_tasks(1))
+
+        assert "ENDPOINT ERROR (405)" not in caplog.text
 
     async def test_unknown_model_bad_request_raises_llmclient_error(self, client_and_mock):
         """BadRequestError for invalid/unknown model name → LLMClientError with 'FATAL'."""

@@ -218,17 +218,18 @@ class FaithfulnessPipeline(BaseService):
             explanations = triplet.get(f"{self._namespace}_explanations") or {}
             errors = triplet.get(f"{self._namespace}_errors") or {}
             row = []
-            for d in doc_ids:
+            for idx in range(len(doc_ids)):
                 cell = {
-                    "verdict": verdicts.get(d),
-                    "explanation": explanations.get(d),
+                    "verdict": verdicts.get(idx),
+                    "explanation": explanations.get(idx),
                 }
-                if errors.get(d):
-                    cell["error"] = errors[d]
+                if errors.get(idx):
+                    cell["error"] = errors[idx]
                 row.append(cell)
             matrix.append(row)
             claim_support.append(
-                [d for d in doc_ids if verdicts.get(d) == _ENTAILMENT]
+                [d for idx, d in enumerate(doc_ids)
+                 if verdicts.get(idx) == _ENTAILMENT]
             )
 
         entry = {

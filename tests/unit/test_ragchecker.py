@@ -121,13 +121,13 @@ def _checked_item():
             "subject": "Nile", "predicate": "is", "object": "longest river",
             f"{CHK}_answer2response_verdict": "Entailment",
             f"{CHK}_answer2response_explanation": "stated in gt",
-            f"{CHK}_retrieved2response_verdicts": {"000": "Entailment", "001": "Neutral"},
+            f"{CHK}_retrieved2response_verdicts": {0: "Entailment", 1: "Neutral"},
         }],
         GT_KG: [{
             "subject": "Nile", "predicate": "is", "object": "longest river in the world",
             f"{CHK}_response2answer_verdict": "Entailment",
             f"{CHK}_response2answer_explanation": "stated in response",
-            f"{CHK}_retrieved2answer_verdicts": {"000": "Neutral", "001": "Entailment"},
+            f"{CHK}_retrieved2answer_verdicts": {0: "Neutral", 1: "Entailment"},
         }],
     })
 
@@ -222,7 +222,7 @@ class TestBuildReport:
     def test_relevant_chunks_exposed(self, pipeline):
         """Chunks entailing >=1 gt claim are listed by doc_id."""
         entry = pipeline.build_report([_checked_item()])["results"][0]
-        # gt claim's retrieved2answer: {"000": "Neutral", "001": "Entailment"}
+        # gt claim's retrieved2answer: {0: "Neutral", 1: "Entailment"}
         assert entry["relevant_chunks"] == ["001"]
 
     def test_flat_cell_carries_error_cause(self, pipeline):
@@ -240,8 +240,8 @@ class TestBuildReport:
     def test_matrix_cell_carries_error_cause(self, pipeline):
         item = _checked_item()
         triplet = item[RESPONSE_KG][0]
-        triplet[f"{CHK}_retrieved2response_verdicts"] = {"000": "Entailment", "001": None}
-        triplet[f"{CHK}_retrieved2response_errors"] = {"001": "context_too_long"}
+        triplet[f"{CHK}_retrieved2response_verdicts"] = {0: "Entailment", 1: None}
+        triplet[f"{CHK}_retrieved2response_errors"] = {1: "context_too_long"}
         entry = pipeline.build_report([item])["results"][0]
         row = entry["retrieved2response"][0]
         assert row[0] == {"verdict": "Entailment", "explanation": None}

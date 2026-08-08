@@ -83,9 +83,9 @@ def _checked_item():
     return _full_item(**{
         RESPONSE_KG: [
             {"subject": "Nile", "predicate": "is", "object": "longest river",
-             f"{NAMESPACE}_verdicts": {"000": "Entailment", "001": "Neutral"}},
+             f"{NAMESPACE}_verdicts": {0: "Entailment", 1: "Neutral"}},
             {"subject": "Nile", "predicate": "has", "object": "5M inhabitants",
-             f"{NAMESPACE}_verdicts": {"000": "Neutral", "001": "Neutral"}},
+             f"{NAMESPACE}_verdicts": {0: "Neutral", 1: "Neutral"}},
         ],
     })
 
@@ -133,9 +133,9 @@ class TestBuildReport:
         item = _full_item(**{
             RESPONSE_KG: [
                 {"subject": "a", "predicate": "b", "object": "c",
-                 f"{NAMESPACE}_verdicts": {"000": "Entailment", "001": None}},
+                 f"{NAMESPACE}_verdicts": {0: "Entailment", 1: None}},
                 {"subject": "d", "predicate": "e", "object": "f",
-                 f"{NAMESPACE}_verdicts": {"000": "Neutral", "001": None}},
+                 f"{NAMESPACE}_verdicts": {0: "Neutral", 1: None}},
             ],
         })
         entry = pipeline.build_report([item])["results"][0]

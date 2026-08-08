@@ -1,0 +1,26 @@
+[
+  {
+    "question": "How far away is Kepler-22b?",
+    "response": "Kepler-22b is a super-Earth located about 640 light-years (200 parsecs) from Earth."
+  },
+  {
+    "question": "When was Kepler-22b discovered?",
+    "response": "It was discovered in December 2011 by NASA's Kepler Space Telescope, and was the first known transiting planet orbiting in the habitable zone of a Sun-like star."
+  },
+  {
+    "question": "In which constellation is Kepler-22b located?",
+    "response": "Kepler-22b lies in the constellation Cygnus. Its host star, Kepler-22, is too dim to be seen with the naked eye."
+  },
+  {
+    "question": "What is the mass of Kepler-22b?",
+    "response": "Its mass is unknown. At the discovery announcement it was constrained to fewer than 124 Earth masses at 3-sigma confidence, and fewer than 36 Earth masses at 1-sigma. Its radius was initially estimated at 2.4 Earth radii and revised to 2.1 Earth radii as of 2023."
+  },
+  {
+    "question": "How long is one year on Kepler-22b?",
+    "response": "One year on Kepler-22b lasts about 365 days, matching Earth's orbital period."
+  },
+  {
+    "question": "What is the surface composition of Kepler-22b?",
+    "response": "I don't know."
+  }
+]
