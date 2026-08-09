@@ -193,7 +193,7 @@ class FaithfulnessPipeline(BaseService):
 
         return {
             "_meta": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "report_type": "faithfulness",
                 "extractor_model": self._extractor_model,
                 "checker_model": self._checker_model,
@@ -293,7 +293,7 @@ class FaithfulnessPipeline(BaseService):
                 for cell in row:
                     total_cells += 1
                     none_cells += cell.get("verdict") is None
-        overall["judge_failure_rate"] = _ratio(none_cells, total_cells)
+        overall["checker_failure_rate"] = _ratio(none_cells, total_cells)
         return overall
 
     # -- Serialization: none in place; last_report is the artifact --
@@ -393,7 +393,7 @@ class FaithfulnessPipeline(BaseService):
             text += f"  (n={support['faithfulness']})"
         abstention = om.get("abstention_rate")
         errors = om.get("extraction_error_rate")
-        judge = om.get("judge_failure_rate")
+        checker_fail = om.get("checker_failure_rate")
 
         logger.info(" 📊 Metrics  (macro over %d items)", n)
         logger.info("    ├─ faithfulness:      %s", text)
@@ -402,8 +402,8 @@ class FaithfulnessPipeline(BaseService):
                     "n/a" if abstention is None else f"{abstention * 100:.1f}%")
         logger.info("    ├─ extraction errors: %s",
                     "n/a" if errors is None else f"{errors * 100:.1f}%")
-        logger.info("    └─ judge failures:    %s",
-                    "n/a" if judge is None else f"{judge * 100:.1f}%")
+        logger.info("    └─ checker failures:  %s",
+                    "n/a" if checker_fail is None else f"{checker_fail * 100:.1f}%")
         logger.info("")
 
     def _log_done(self) -> None:

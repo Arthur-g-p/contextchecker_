@@ -28,7 +28,7 @@ Ensures the data has the minimum required structure before attempting extraction
 
 ## Step 2: Extraction
 
-Delegates to `ExtractionService` to extract triplets live using the configured `extractor_model`. Runs silently without printing progress bars to avoid cluttering the evaluator's output. After extraction, any newly predicted triplets are also forced through `canonicalize_triplets` to guarantee a uniform format for the downstream LLM judge.
+Delegates to `ExtractionService` to extract triplets live using the configured `extractor_model`. Runs silently without printing progress bars to avoid cluttering the evaluator's output. After extraction, any newly predicted triplets are also forced through `canonicalize_triplets` to guarantee a uniform format for the downstream LLM checker.
 
 ## Step 3: Classification (`_classify`)
 
@@ -67,7 +67,7 @@ The evaluator is exposed as the **`extractor`** command inside the **`eval`** su
 contextchecker eval extractor <input_file> [options]
 ```
 
-> **Note:** This requires **two** models — one to perform the live extraction (`--extractor-model`) and one to act as the LLM judge in the 2-pass matching step (`--checker-model`). They may be the same model. Both flags are required.
+> **Note:** This requires **two** models — one to perform the live extraction (`--extractor-model`) and one to act as the LLM checker in the 2-pass matching step (`--checker-model`). They may be the same model. Both flags are required.
 
 ### Arguments and Options
 
@@ -75,7 +75,7 @@ contextchecker eval extractor <input_file> [options]
 |---|---|---|---|
 | **Input File** | `input_file` *(Argument)* | *Required* | Path to the eval JSON: items with a `response` and GT triplets. |
 | **Extractor Model** | `--extractor-model`, `-e` | *Required* | Model used to extract triplets live. Also the prefix for the predicted-triplet key (`{model}_response_kg`). |
-| **Checker Model** | `--checker-model` | *Required* | LLM judge used for the 2-pass semantic matching (Recall + Precision passes). |
+| **Checker Model** | `--checker-model` | *Required* | LLM checker used for the 2-pass semantic matching (Recall + Precision passes). |
 | **Extractor API Base** | `--extractor-base-api` | `None` | Base URL for the extractor LLM (OpenAI-SDK route). If unset, LiteLLM provider routing is used. |
 | **Checker API Base** | `--checker-base-api` | `None` | Base URL for the checker/matching LLM. |
 | **GT Key** | `--gt-key` | `claude2_response_kg` | Item key holding the ground-truth triplets. |

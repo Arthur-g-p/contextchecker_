@@ -66,5 +66,5 @@ plus `overall_metrics`. Additional field:
   None-propagation and gating rules as ragcheck (errors and abstentions are
   `null`, unknown matrix rows leave both sides of the ratio).
 - Overall: macro `faithfulness` with `support`, plus `abstention_rate`,
-  `extraction_error_rate`, `judge_failure_rate`. There is no
+  `extraction_error_rate`, `checker_failure_rate`. There is no
   justified/unjustified abstention split here — that requires ground truth.

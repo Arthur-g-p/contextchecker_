@@ -62,7 +62,7 @@ METRIC_NAMES = (
 # tests/unit/test_ragchecker.py).
 #
 # None-verdict propagation: a failed check is UNKNOWN, never "not entailed" -
-# unknown claims leave numerator AND denominator so judge failures cannot
+# unknown claims leave numerator AND denominator so checker failures cannot
 # inflate hallucination. Known cells decide when they can: one Entailment in a
 # matrix row makes the claim entailed regardless of unknown cells.
 
@@ -212,7 +212,7 @@ def compute_overall_metrics(results: list[dict]) -> dict:
     'support' reports how many items actually contributed to each average -
     exclusions shrink N invisibly otherwise. Adds the project's own rates:
     abstention (with the justified/unjustified split from retrieval evidence),
-    extraction errors, and judge failures (None verdicts across all arrays).
+    extraction errors, and checker failures (None verdicts across all arrays).
     """
     overall: dict = {}
     support: dict = {}
@@ -265,7 +265,7 @@ def compute_overall_metrics(results: list[dict]) -> dict:
                 for cell in row:
                     total_cells += 1
                     none_cells += cell.get("verdict") is None
-    overall["judge_failure_rate"] = _ratio(none_cells, total_cells)
+    overall["checker_failure_rate"] = _ratio(none_cells, total_cells)
 
     return overall
 
@@ -480,7 +480,7 @@ class RagCheckerPipeline(BaseService):
 
         return {
             "_meta": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "extractor_model": self._extractor_model,
                 "checker_model": self._checker_model,
                 "total_items": len(data),
@@ -727,14 +727,14 @@ class RagCheckerPipeline(BaseService):
         justified = round((om.get("justified_abstention_rate") or 0) * n)
         unjustified = round((om.get("unjustified_abstention_rate") or 0) * n)
         errors = om.get("extraction_errors", {})
-        judge = om.get("judge_failure_rate")
+        checker_fail = om.get("checker_failure_rate")
         logger.info("    Reliability")
         logger.info("    ├─ abstentions:          %d  (justified %d / unjustified %d)",
                     abstained, justified, unjustified)
         logger.info("    ├─ extraction errors:    %d response · %d gt_answer",
                     errors.get("response", 0), errors.get("gt_answer", 0))
-        logger.info("    └─ judge failures:       %s",
-                    "n/a" if judge is None else f"{judge * 100:.1f}%")
+        logger.info("    └─ checker failures:    %s",
+                    "n/a" if checker_fail is None else f"{checker_fail * 100:.1f}%")
         logger.info("")
 
     def _log_done(self) -> None:

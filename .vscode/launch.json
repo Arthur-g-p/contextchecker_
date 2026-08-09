@@ -1,0 +1,140 @@
+{
+  "version": "0.2.0",
+  "inputs": [
+    {
+      "id": "extractorModel",
+      "type": "promptString",
+      "description": "Extractor model — bare id when a base URL is set (e.g. llama3.2:3b, openai/gpt-5.6-luna)",
+      "default": "llama3.2:3b"
+    },
+    {
+      "id": "extractorBaseApi",
+      "type": "promptString",
+      "description": "Extractor base URL — leave blank for LiteLLM provider routing (then prefix the model, e.g. openrouter/...)",
+      "default": "http://localhost:11434/v1"
+    },
+    {
+      "id": "checkerModel",
+      "type": "promptString",
+      "description": "Checker model — bare id when a base URL is set (e.g. llama3.2:3b, openai/gpt-5.6-luna)",
+      "default": "llama3.2:3b"
+    },
+    {
+      "id": "checkerBaseApi",
+      "type": "promptString",
+      "description": "Checker base URL — leave blank for LiteLLM provider routing (then prefix the model, e.g. openrouter/...)",
+      "default": "http://localhost:11434/v1"
+    }
+  ],
+  "configurations": [
+    {
+      "name": "01 · extract — kepler22b",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "args": [
+        "extract",
+        "examples/extract/kepler22b.json",
+        "--model",
+        "${input:extractorModel}",
+        "--extractor-base-api",
+        "${input:extractorBaseApi}",
+        "--debug"
+      ],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "02 · check — kepler22b (extracted)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "args": [
+        "check",
+        "examples/check/kepler22b_extracted.json",
+        "--extractor-model",
+        "openai/gpt-5.6-luna",
+        "--model",
+        "${input:checkerModel}",
+        "--checker-base-api",
+        "${input:checkerBaseApi}",
+        "--debug"
+      ],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "03 · refcheck — kepler22b",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "args": [
+        "refcheck",
+        "examples/refcheck/kepler22b.json",
+        "--extractor-model",
+        "${input:extractorModel}",
+        "--extractor-base-api",
+        "${input:extractorBaseApi}",
+        "--checker-model",
+        "${input:checkerModel}",
+        "--checker-base-api",
+        "${input:checkerBaseApi}",
+        "--debug"
+      ],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "04 · ragcheck — kepler22b",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "args": [
+        "ragcheck",
+        "examples/ragcheck/kepler22b.json",
+        "--extractor-model",
+        "${input:extractorModel}",
+        "--extractor-base-api",
+        "${input:extractorBaseApi}",
+        "--checker-model",
+        "${input:checkerModel}",
+        "--checker-base-api",
+        "${input:checkerBaseApi}",
+        "--debug"
+      ],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "05 · faithcheck — kepler22b",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "args": [
+        "faithcheck",
+        "examples/faithcheck/kepler22b.json",
+        "--extractor-model",
+        "${input:extractorModel}",
+        "--extractor-base-api",
+        "${input:extractorBaseApi}",
+        "--checker-model",
+        "${input:checkerModel}",
+        "--checker-base-api",
+        "${input:checkerBaseApi}",
+        "--debug"
+      ],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}

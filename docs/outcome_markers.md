@@ -60,7 +60,7 @@ from numerator AND denominator — never counted as "not entailed" or "not
 extracted". Concretely:
 
 - Metrics: error items are fully excluded and counted in
-  `extraction_error_rate`; null verdicts feed `judge_failure_rate`; in
+  `extraction_error_rate`; null verdicts feed `checker_failure_rate`; in
   matrix rows, known cells decide when they can (one Entailment grounds a
   claim regardless of unknown cells; no Entailment + an unknown cell makes
   the claim undecidable and excluded).

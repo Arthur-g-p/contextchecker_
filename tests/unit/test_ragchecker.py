@@ -136,7 +136,7 @@ class TestBuildReport:
 
     def test_structure_and_meta(self, pipeline):
         report = pipeline.build_report([_checked_item()])
-        assert report["_meta"]["schema_version"] == 2
+        assert report["_meta"]["schema_version"] == 3
         assert report["_meta"]["extractor_model"] == EXT
         assert report["_meta"]["evaluated_items"] == 1
         assert report["_meta"]["dropped_items"] == 0
@@ -414,9 +414,9 @@ class TestOverallMetrics:
         assert overall["extraction_error_rate"] == pytest.approx(1 / 3, abs=1e-3)
         assert overall["extraction_errors"] == {"response": 1, "gt_answer": 0}
 
-    def test_judge_failure_rate(self):
+    def test_checker_failure_rate(self):
         entry = _metrics_entry([E, None], [E], [[E], [None]], [[E]], 1)
         entry["metrics"] = compute_item_metrics(entry)
         overall = compute_overall_metrics([entry])
         # 6 cells total (2 + 1 + 2 + 1), 2 of them None
-        assert overall["judge_failure_rate"] == pytest.approx(2 / 6, abs=1e-3)
+        assert overall["checker_failure_rate"] == pytest.approx(2 / 6, abs=1e-3)

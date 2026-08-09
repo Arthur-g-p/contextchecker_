@@ -190,7 +190,7 @@ class PerChunkFakeCheckingService(FakeCheckingService):
                 triplet[self.verdict_key] = (
                     "Entailment" if "supports" in text else "Neutral"
                 )
-                triplet[self.explanation_key] = f"judged against: {text}"
+                triplet[self.explanation_key] = f"checked against: {text}"
         return data
 
 

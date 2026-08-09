@@ -44,7 +44,9 @@ retrieved2answer     gt claims       vs each chunk         (matrix)
 Each direction gets its own CheckingService with a direction-specific
 verdict namespace (`{checker}_answer2response_verdict`, ...) so verdicts
 over the same triplets never collide. Matrix directions run one joint
-check per (item, chunk) and fold back `{doc_id: verdict}` dicts.
+check per (item, chunk) and fold back `{chunk_index: verdict}` dicts —
+keyed by position, because a corpus chunked from one document repeats the
+same doc_id across its chunks.
 
 Crash economics: every LLM response is persisted to `.rag_crash_cache.db`;
 a run that dies in direction 3 of 4 replays directions 1–2 from sqlite on
@@ -70,7 +72,7 @@ directional arrays parallel to the claims) with modernized leaves:
   sensitivity, exposed so consumers never re-derive it from the matrix),
 - `extraction_errors` appears only on items where tooling failed,
 - `metrics` per item plus `overall_metrics` at the top, `_meta` with
-  `schema_version: 2`.
+  `schema_version: 3`.
 
 Consumers reading both old paper outputs and these reports need one
 canonicalization rule: string verdict entry = old format, object = new;
@@ -106,7 +108,7 @@ Identity (enforced by a shared denominator and asserted in tests):
 ### Semantics that make the numbers trustworthy
 
 - **None-verdict propagation.** A failed check is *unknown*, never "not
-  entailed". Unknown claims leave numerator AND denominator, so judge
+  entailed". Unknown claims leave numerator AND denominator, so checker
   failures cannot inflate hallucination. In matrix rows, known cells decide
   when they can: one Entailment makes a claim grounded regardless of unknown
   cells; no Entailment plus an unknown cell makes the claim undecidable and
@@ -132,7 +134,7 @@ Identity (enforced by a shared denominator and asserted in tests):
 | `justified_abstention_rate` | abstained AND no chunk entails any gt claim (item claim_recall = 0) / evaluated | The retriever gave the generator nothing; refusing was right. Diagnostic: fix the retriever. |
 | `unjustified_abstention_rate` | abstained AND retrieval evidence existed / evaluated | Evidence was retrieved and the generator refused anyway. Diagnostic: fix the generator. Computed for free from `retrieved2answer`, which runs for abstained items regardless — a split no string-matching abstention detector can produce. |
 | `extraction_error_rate` (+ per-side counts) | items with tooling failures / evaluated | The report is honest about its own tooling. These items are excluded from every quality metric — our parse failure must never masquerade as the evaluated system's abstention or hallucination. |
-| `judge_failure_rate` | None verdicts / all issued checks | Checker reliability per run: a run with 4% failed judgments deserves less trust than one with 0.1%. Catches loud failures (parse/context); silent judge degradation (all-Entailment bias) is a known open problem — see the drawbacks backlog. |
+| `checker_failure_rate` | None verdicts / all issued checks | Checker reliability per run: a run with 4% failed judgments deserves less trust than one with 0.1%. Catches loud failures (parse/context); silent checker degradation (all-Entailment bias) is a known open problem — see the drawbacks backlog. |
 
 ## Repeated runs: `--runs N` (variance measurement)
 
