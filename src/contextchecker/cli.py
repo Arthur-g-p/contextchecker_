@@ -65,15 +65,15 @@ def _resolve_output(
 
     return path
 
-# Todo: add concurrency to extractor and checker
 @app.command()
 def extract(
     input_file: Path = typer.Argument(..., help="Path to JSON input file."),
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_extract.json."),
-    model: str = typer.Option(None, "--model", "-m", help="Model name used as key prefix."),
+    model: str = typer.Option(None, "--extractor-model", "--model", "-m", help="Model name used as key prefix."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2. Max: Amount of retry stategies defined."),
     dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Remove exact (s,p,o) duplicate triplets from the output. On by default (loss-free cleanup)."),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run the extraction pipeline on a JSON dataset."""
@@ -98,7 +98,7 @@ def extract(
 
     # Call service
     try:
-        service = ExtractionService(model=model, base_url=extractor_base_api, max_retries=max_retries, dedup=dedup)
+        service = ExtractionService(model=model, base_url=extractor_base_api, max_retries=max_retries, dedup=dedup, concurrency=concurrency)
         result = service.run_sync(data)
     except ContextCheckerError as exc:
         logger.error("")
@@ -114,13 +114,14 @@ def extract(
 def check(
     input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_check.json."),
-    model: str = typer.Option(None, "--model", "-m", help="Model name for the checker LLM."),
+    model: str = typer.Option(None, "--checker-model", "--model", "-m", help="Model name for the checker LLM."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model name that was used for extraction (to find the kg_key)."),
     checker_base_api: str = typer.Option(None, "--checker-base-api", help="Optional base URL for the checker LLM API."),
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Use joint checking (multiple claims per LLM call). Default: on."),
     joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per LLM call. Default: 6000 in joint mode, unset in single."),
     max_retries: int = typer.Option(None, "--max-retries", help="Max retry rounds for API/parsing failures."),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Check extracted claims against reference passages."""
@@ -146,6 +147,7 @@ def check(
     # Call service
     try:
         service = CheckingService(
+            concurrency=concurrency,
             model=model,
             extractor_model=extractor_model,
             base_url=checker_base_api,
@@ -169,12 +171,13 @@ def check(
 def atomize(
     input_file: Path = typer.Argument(..., help="Path to JSON file with extracted triplets."),
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_atomize.json."),
-    model: str = typer.Option(None, "--model", "-m", help="Model name for the atomizer LLM."),
+    model: str = typer.Option(None, "--atomizer-model", "--model", "-m", help="Model name for the atomizer LLM."),
     source_kg_key: str = typer.Option(..., "--source-kg-key", "-s", help="Key containing triplets to atomize (e.g. 'gemini-3.1_response_kg')."),
     atomizer_base_api: str = typer.Option(None, "--atomizer-base-api", help="Optional base URL for the atomizer LLM API."),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2."),
     dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Remove exact duplicate claims from the atomized output (e.g. a split reproducing an existing fact). On by default (loss-free)."),
     trace: bool = typer.Option(True, "--trace/--no-trace", help="Also write a per-triplet decision trace to {output}_decisions.json."),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Atomize compound triplets into atomic facts."""
@@ -200,6 +203,7 @@ def atomize(
     # Call service
     try:
         service = AtomizationService(
+            concurrency=concurrency,
             model=model,
             source_kg_key=source_kg_key,
             base_url=atomizer_base_api,
@@ -240,6 +244,7 @@ def refcheck(
     max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
     extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
     checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run RefChecker: extraction + checking in one pass, one output document."""
@@ -265,6 +270,7 @@ def refcheck(
     # Call pipeline (CLI owns I/O; pipeline composes the services)
     try:
         pipeline = RefCheckerPipeline(
+            concurrency=concurrency,
             extractor_model=extractor_model,
             checker_model=checker_model,
             extractor_base_url=extractor_base_api,
@@ -302,6 +308,7 @@ def ragcheck(
     extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
     checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
     runs: int = typer.Option(1, "--runs", help="Repeat the whole run N times and report variance (N x LLM cost)."),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run RagChecker: 2 extractions + 4 checking directions, one report file."""
@@ -326,6 +333,7 @@ def ragcheck(
     # Call pipeline
     try:
         pipeline = RagCheckerPipeline(
+            concurrency=concurrency,
             extractor_model=extractor_model,
             checker_model=checker_model,
             extractor_base_url=extractor_base_api,
@@ -365,6 +373,7 @@ def faithcheck(
     extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
     checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
     runs: int = typer.Option(1, "--runs", help="Repeat the whole run N times and report variance (N x LLM cost)."),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run faithfulness checking without ground truth: response claims vs retrieved context."""
@@ -389,6 +398,7 @@ def faithcheck(
     # Call pipeline
     try:
         pipeline = FaithfulnessPipeline(
+            concurrency=concurrency,
             extractor_model=extractor_model,
             checker_model=checker_model,
             extractor_base_url=extractor_base_api,
@@ -455,6 +465,7 @@ def eval_checker(
     runs: int = typer.Option(
         1, "--runs", help="Repeat the whole eval N times and report variance (N x LLM cost)."
     ),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(
         False, "--debug", help="Enable debug output."
     ),
@@ -480,6 +491,7 @@ def eval_checker(
     # Evaluate
     try:
         evaluator = CheckerEvaluator(
+            concurrency=concurrency,
             checker_model=checker_model,
             gt_key=gt_key,
             checker_base_url=checker_base_api,
@@ -555,6 +567,7 @@ def eval_extractor(
     runs: int = typer.Option(
         1, "--runs", help="Repeat the whole eval N times and report variance (N x LLM cost)."
     ),
+    concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(
         False, "--debug", help="Enable debug output.",
     ),
@@ -583,6 +596,7 @@ def eval_extractor(
     # Evaluate
     try:
         evaluator = ExtractorEvaluator(
+            concurrency=concurrency,
             extractor_model=extractor_model,
             gt_key=gt_key,
             extractor_base_url=extractor_base_api,

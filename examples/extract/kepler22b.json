@@ -22,5 +22,13 @@
   {
     "question": "What is the surface composition of Kepler-22b?",
     "response": "I don't know."
+  },
+  {
+    "question": "Is Kepler-22b in the Milky Way?",
+    "response": "Yes, Kepler-22b lies within the Milky Way galaxy."
+  },
+  {
+    "question": "What type of star is Kepler-22?",
+    "response": "I have no idea what type of star Kepler-22 is."
   }
 ]
