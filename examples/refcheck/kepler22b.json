@@ -58,5 +58,25 @@
       "Kepler-22b's radius is roughly twice that of Earth. Its mass and surface composition are unknown. However, an Earth-like composition for the planet is believed to be unlikely; it is more likely to be an ocean planet or have a volatile-rich composition with a liquid or gaseous outer shell. The only parameters of the planet's orbit that are currently available are its orbital period (about 290 days) and its inclination (approximately 90°).",
       "The host star, Kepler-22, is a G-type star that is 3% less massive than the Sun and 2% smaller in volume. It has a surface temperature of 5,518 K compared with the Sun, which has a surface temperature of 5,778 K. The star is about 4 billion years old. In comparison, the Sun is 4.6 billion years old. The apparent magnitude of Kepler-22 is 11.5, which means it is too dim to be seen with the naked eye."
     ]
+  },
+  {
+    "question": "Is Kepler-22b in the Milky Way?",
+    "response": "Yes, Kepler-22b lies within the Milky Way galaxy.",
+    "reference": [
+      "Kepler-22b (also known by its Kepler Object of Interest designation KOI-087.01) is an exoplanet orbiting within the habitable zone of the Sun-like star Kepler-22. It is located about 640 light-years (200 parsecs) from Earth in the constellation of Cygnus. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface. The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+      "Kepler-22b's radius was initially thought to be 2.4 times that of Earth, but has since been revised to 2.1 times that of Earth as of 2023. Its mass and surface composition remain unknown, with only some rough estimates established: at the time of the discovery announcement, it was known to have fewer than 124 Earth masses at the 3-sigma confidence limit, and fewer than 36 Earth masses at 1-sigma confidence.",
+      "Kepler-22b's radius is roughly twice that of Earth. Its mass and surface composition are unknown. However, an Earth-like composition for the planet is believed to be unlikely; it is more likely to be an ocean planet or have a volatile-rich composition with a liquid or gaseous outer shell. The only parameters of the planet's orbit that are currently available are its orbital period (about 290 days) and its inclination (approximately 90°).",
+      "The host star, Kepler-22, is a G-type star that is 3% less massive than the Sun and 2% smaller in volume. It has a surface temperature of 5,518 K compared with the Sun, which has a surface temperature of 5,778 K. The star is about 4 billion years old. In comparison, the Sun is 4.6 billion years old. The apparent magnitude of Kepler-22 is 11.5, which means it is too dim to be seen with the naked eye."
+    ]
+  },
+  {
+    "question": "What type of star is Kepler-22?",
+    "response": "I have no idea what type of star Kepler-22 is.",
+    "reference": [
+      "Kepler-22b (also known by its Kepler Object of Interest designation KOI-087.01) is an exoplanet orbiting within the habitable zone of the Sun-like star Kepler-22. It is located about 640 light-years (200 parsecs) from Earth in the constellation of Cygnus. It was discovered by NASA's Kepler Space Telescope in December 2011 and was the first known transiting planet to orbit within the habitable zone of a Sun-like star, where liquid water could exist on the planet's surface. The planet's host star Kepler-22 is too dim to be seen with the naked eye.",
+      "Kepler-22b's radius was initially thought to be 2.4 times that of Earth, but has since been revised to 2.1 times that of Earth as of 2023. Its mass and surface composition remain unknown, with only some rough estimates established: at the time of the discovery announcement, it was known to have fewer than 124 Earth masses at the 3-sigma confidence limit, and fewer than 36 Earth masses at 1-sigma confidence.",
+      "Kepler-22b's radius is roughly twice that of Earth. Its mass and surface composition are unknown. However, an Earth-like composition for the planet is believed to be unlikely; it is more likely to be an ocean planet or have a volatile-rich composition with a liquid or gaseous outer shell. The only parameters of the planet's orbit that are currently available are its orbital period (about 290 days) and its inclination (approximately 90°).",
+      "The host star, Kepler-22, is a G-type star that is 3% less massive than the Sun and 2% smaller in volume. It has a surface temperature of 5,518 K compared with the Sun, which has a surface temperature of 5,778 K. The star is about 4 billion years old. In comparison, the Sun is 4.6 billion years old. The apparent magnitude of Kepler-22 is 11.5, which means it is too dim to be seen with the naked eye."
+    ]
   }
 ]

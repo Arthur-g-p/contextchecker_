@@ -24,6 +24,18 @@
       "type": "promptString",
       "description": "Checker base URL — leave blank for LiteLLM provider routing (then prefix the model, e.g. openrouter/...)",
       "default": "http://localhost:11434/v1"
+    },
+    {
+      "id": "atomizerModel",
+      "type": "promptString",
+      "description": "Atomizer model — measures whether extracted claims are atomic. Needs ATOMIZER_API_KEY.",
+      "default": "openai/gpt-5.6-luna"
+    },
+    {
+      "id": "atomizerBaseApi",
+      "type": "promptString",
+      "description": "Atomizer base URL — leave blank for LiteLLM provider routing",
+      "default": "https://openrouter.ai/api/v1"
     }
   ],
   "configurations": [
@@ -44,7 +56,11 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "presentation": {
+        "group": "1 · Walkthrough",
+        "order": 1
+      }
     },
     {
       "name": "02 · check — kepler22b (extracted)",
@@ -65,7 +81,11 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "presentation": {
+        "group": "1 · Walkthrough",
+        "order": 2
+      }
     },
     {
       "name": "03 · refcheck — kepler22b",
@@ -88,7 +108,11 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "presentation": {
+        "group": "1 · Walkthrough",
+        "order": 3
+      }
     },
     {
       "name": "04 · faithcheck — kepler22b",
@@ -111,7 +135,11 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "presentation": {
+        "group": "1 · Walkthrough",
+        "order": 4
+      }
     },
     {
       "name": "05 · ragcheck — kepler22b",
@@ -134,7 +162,67 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "presentation": {
+        "group": "1 · Walkthrough",
+        "order": 5
+      }
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "name": "01 · eval checker — msmarco_gpt4_25",
+      "args": [
+        "eval",
+        "checker",
+        "eval_data/msmarco/msmarco_gpt4_25.json",
+        "--checker-model",
+        "${input:checkerModel}",
+        "--checker-base-api",
+        "${input:checkerBaseApi}",
+        "--debug"
+      ],
+      "presentation": {
+        "group": "2 · Evaluation",
+        "order": 1
+      }
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "name": "02 · eval extractor — msmarco_gpt4_25",
+      "args": [
+        "eval",
+        "extractor",
+        "eval_data/msmarco/msmarco_gpt4_25.json",
+        "--extractor-model",
+        "${input:extractorModel}",
+        "--extractor-base-api",
+        "${input:extractorBaseApi}",
+        "--checker-model",
+        "${input:checkerModel}",
+        "--checker-base-api",
+        "${input:checkerBaseApi}",
+        "--atomizer-model",
+        "${input:atomizerModel}",
+        "--atomizer-base-api",
+        "${input:atomizerBaseApi}",
+        "--debug"
+      ],
+      "presentation": {
+        "group": "2 · Evaluation",
+        "order": 2
+      }
     }
   ]
 }

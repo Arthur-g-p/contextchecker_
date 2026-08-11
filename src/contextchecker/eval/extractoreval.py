@@ -410,7 +410,7 @@ class ExtractorEvaluator:
     # ── Duplicate-claims axis (orthogonal, read-only) ────────────
 
     def _measure_duplicates(self, valid: list[dict]) -> dict | None:
-        """Count exact (syntactic) duplicate claims in the predictions.
+        """Count exact (by string) duplicate claims in the predictions.
 
         Fully independent of coverage: read-only, never mutates predictions, the
         eval is never run on deduplicated data. The duplicate triplets are listed
@@ -1075,7 +1075,7 @@ class ExtractorEvaluator:
             logger.info("")
             logger.info(" 🔁 Duplicates")
             logger.info(
-                "    Found %d syntactic duplicates  (%.1f%% of %d predicted)",
+                "    Found %d exact duplicates  (%.1f%% of %d predicted)",
                 d["duplicate_claims"], d["duplicate_rate"] * 100, d["predicted_claims"],
             )
             for entry in d["items"]:
@@ -1087,7 +1087,9 @@ class ExtractorEvaluator:
         """Print ✅ Done summary line."""
         logger.info("")
         logger.info(
-            " ✅ Done: %d items matched (%d GT covered, %d preds correct, %d FP, %d FN)",
-            result.to_compare_items, result.tp_recall, result.tp_precision,
-            result.fp, result.fn,
+            " ✅ Done: %d items compared · recall %d/%d GT claims (%d missed)"
+            " · precision %d/%d predictions (%d non-entailment)",
+            result.to_compare_items,
+            result.tp_recall, result.tp_recall + result.fn, result.fn,
+            result.tp_precision, result.tp_precision + result.fp, result.fp,
         )

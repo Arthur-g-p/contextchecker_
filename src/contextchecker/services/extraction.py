@@ -365,14 +365,14 @@ class ExtractionService(BaseService):
         """Print 📝 Extraction summary.
 
         Shows items with output: how many generated claims vs empty, and any
-        syntactic duplicates removed by the dedup pass.
+        exact duplicates removed by the dedup pass.
         """
         logger.info(" 📝 Extraction:")
         logger.info("    %d items with output", valid_items)
         # Sub-lines after the 💎 line; the last one gets the └─ connector.
         tail = []
         if dups_removed > 0:
-            tail.append(("🔁", f"{dups_removed} syntactic duplicates removed"))
+            tail.append(("🔁", f"{dups_removed} exact duplicates removed"))
         if empty_count > 0:
             tail.append(("⚪", f"{empty_count} abstentions → 0 claims"))
         prefix = "├─" if tail else "└─"
