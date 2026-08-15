@@ -13,7 +13,7 @@ Input (list[dict])
   └─ serialize    →  writes results back into the original dicts
 ```
 
-For a detailed view of error handling, client classification, and retries, see the [Extractor Flow Diagram](file:///c:/Users/Arthur/contextchecker/docs/extractor_flow.md).
+For a detailed view of error handling, client classification, and retries, see the [Extractor Flow Diagram](extractor_flow.md).
 
 ```mermaid
 flowchart LR

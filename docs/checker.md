@@ -20,7 +20,7 @@ Input (list[dict])
   └─ _serialize()          →  Writes verdict + explanation directly into each triplet dict
 ```
 
-For a detailed view of error handling, client classification, retries, and dynamic claim-gap recovery, see the [Checker Flow Diagram](file:///c:/Users/Arthur/contextchecker/docs/checker_flow.md).
+For a detailed view of error handling, client classification, retries, and dynamic claim-gap recovery, see the [Checker Flow Diagram](checker_flow.md).
 
 ### Single Mode Flow (`--no-joint`)
 

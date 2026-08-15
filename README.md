@@ -17,7 +17,7 @@ disagree with.
 | `ragcheck` | RAGChecker-style RAG evaluation: 2 extractions + 4 checking directions, one self-contained JSON report (precision, recall, F1, faithfulness, and claim-level detail) |
 | `faithcheck` | Faithfulness checking **without ground truth**: response claims vs the retrieved context. Works on live traffic. |
 | `refcheck` | Classic reference checking: extraction + checking in one pass |
-| `extract` / `check` / `atomize` | The individual building blocks, runnable standalone |
+| `extract` / `check` / `atomize` | The individual building blocks, runnable standalone — walked through in order under [examples/](examples/README.md) |
 | `eval extractor` / `eval checker` | Meta-evaluation: measure the extractor and checker themselves against labeled data |
 
 ## Why this instead of a single judge score
@@ -129,30 +129,39 @@ Input is a JSON list of items. For `ragcheck`, each item needs `response`,
 The input file is a **positional** argument on every command — pass the path
 bare, with no flag in front of it.
 
-To try the toolkit right away without preparing data, the repo ships a small
-example file you can run against directly:
+You do not need to prepare data to start. `examples/` ships a five-step
+walkthrough over one dataset, where each step needs a little more than the last,
+plus `eval_data/` with human-labelled data for the `eval` commands.
+
+Start at step 01 — decompose responses into claims:
 
 ```bash
-contextchecker extract tests/fixtures/example.json -m gpt-4o-mini
+contextchecker extract examples/extract/kepler22b.json --extractor-model gpt-4o-mini
 ```
 
-Run the full RAG pipeline on your own `data.json`:
+Run the full RAG pipeline (step 05), which needs `gt_answer` and
+`retrieved_context` as well:
 
 ```bash
-contextchecker ragcheck data.json -e gpt-4o-mini -c gpt-4o-mini
+contextchecker ragcheck examples/ragcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini
 ```
 
 Repeat the whole experiment five times and report variance (5x LLM cost):
 
 ```bash
-contextchecker ragcheck data.json -e gpt-4o-mini -c gpt-4o-mini --runs 5
+contextchecker ragcheck examples/ragcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini --runs 5
 ```
 
-Check faithfulness with no ground truth at all:
+Check faithfulness with no ground truth at all (step 04):
 
 ```bash
-contextchecker faithcheck data.json -e gpt-4o-mini -c gpt-4o-mini
+contextchecker faithcheck examples/faithcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini
 ```
+
+The model flags have short aliases (`-e`, `-c`, `-m`), but the long names are
+spelled the same way in every command, so those are the ones worth learning.
+[examples/README.md](examples/README.md) lists which fields and which arguments
+each step needs.
 
 Every command writes a single self-contained JSON report including a
 `_meta` block (models, config, timings), overall metrics, and per-claim
@@ -168,9 +177,9 @@ to reach a non-OpenAI endpoint.
 the model name must **not** carry a provider prefix:
 
 ```bash
-contextchecker extract tests/fixtures/example.json \
+contextchecker extract examples/extract/kepler22b.json \
   --extractor-base-api https://openrouter.ai/api/v1 \
-  -m openai/gpt-5.6-luna
+  --extractor-model openai/gpt-5.6-luna
 ```
 
 The same flag points at any OpenAI-compatible server, including a local one
@@ -180,7 +189,7 @@ The same flag points at any OpenAI-compatible server, including a local one
 instead. LiteLLM resolves the endpoint:
 
 ```bash
-contextchecker extract tests/fixtures/example.json -m openrouter/openai/gpt-5.6-luna
+contextchecker extract examples/extract/kepler22b.json --extractor-model openrouter/openai/gpt-5.6-luna
 ```
 
 Prefer the direct endpoint for very new models: LiteLLM routing depends on the
@@ -190,6 +199,12 @@ lookup entirely. Either way the key comes from `EXTRACTOR_API_KEY` /
 
 ## Documentation
 
+- [examples/README.md](examples/README.md) — the five-step walkthrough:
+  what each command needs, what it produces, and a worked dataset with
+  deliberate errors planted in it
+- [eval_data/msmarco/README.md](eval_data/msmarco/README.md) — provenance of
+  the human-labelled evaluation data, what was repaired in it, and what it can
+  and cannot measure
 - [architecture.md](architecture.md) — the full design document (layer
   model, data contract, error propagation)
 - [docs/ragchecker.md](docs/ragchecker.md) — the RAG evaluation pipeline

@@ -176,7 +176,7 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": false,
-      "name": "01 · eval checker — msmarco_gpt4_25",
+      "name": "01 · eval checker — msmarco_gpt4_100‚",
       "args": [
         "eval",
         "checker",
