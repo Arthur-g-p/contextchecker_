@@ -145,3 +145,48 @@ def find_duplicate_triplets(
             seen.add(k)
     return dups
 
+
+
+# ── Report envelope ──────────────────────────────────────────────────────────
+
+REPORT_SCHEMA_VERSION = 4
+
+
+def build_meta(
+    report_type: str,
+    *,
+    timestamp: str,
+    duration_seconds: float,
+    total_items: int,
+    evaluated_items: int,
+    dropped_items: int,
+    **extras,
+) -> dict:
+    """The ``_meta`` block: what the run was, as opposed to what was asked for.
+
+    Everything here is *discovered* — derived keys, counts, timings. Anything
+    the caller passed on the command line belongs in ``_args`` instead.
+
+    The eight core keys are identical in every report type and come first;
+    report-specific ``extras`` are appended after them. Timestamp and duration
+    are supplied by the caller so this stays deterministic under test.
+    """
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "report_type": report_type,
+        "contextchecker_version": _package_version(),
+        "timestamp": timestamp,
+        "duration_seconds": round(duration_seconds, 1),
+        "total_items": total_items,
+        "evaluated_items": evaluated_items,
+        "dropped_items": dropped_items,
+        **extras,
+    }
+
+
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("contextchecker")
+    except Exception:
+        return "unknown"

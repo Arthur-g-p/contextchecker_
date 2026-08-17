@@ -136,10 +136,13 @@ class TestBuildReport:
 
     def test_structure_and_meta(self, pipeline):
         report = pipeline.build_report([_checked_item()])
-        assert report["_meta"]["schema_version"] == 3
-        assert report["_meta"]["extractor_model"] == EXT
-        assert report["_meta"]["evaluated_items"] == 1
-        assert report["_meta"]["dropped_items"] == 0
+        meta = report["_meta"]
+        assert meta["schema_version"] == 4
+        assert meta["report_type"] == "ragcheck"
+        assert meta["evaluated_items"] == 1
+        assert meta["dropped_items"] == 0
+        # Models are arguments, not discovered facts — they live in _args now.
+        assert "extractor_model" not in meta
         assert "overall_metrics" in report
         assert len(report["results"]) == 1
 

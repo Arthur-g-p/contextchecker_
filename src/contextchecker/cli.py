@@ -39,6 +39,75 @@ def _print_header(command: str) -> None:
     logger.info("")
 
 
+# Canonical order for the _args block: identity, then each model role with its
+# endpoint, then keys, then behaviour, then runtime. Anything not listed is
+# appended alphabetically, so a new flag lands predictably instead of mid-list.
+_ARGS_ORDER = (
+    "command",
+    "input_file",
+    "output_file",
+    "extractor_model",
+    "extractor_base_api",
+    "checker_model",
+    "checker_base_api",
+    "atomizer_model",
+    "atomizer_base_api",
+    "gt_key",
+    "source_kg_key",
+    "joint",
+    "joint_num",
+    "max_words",
+    "max_retries",
+    "extractor_max_retries",
+    "checker_max_retries",
+    "dedup",
+    "runs",
+    "concurrency",
+    "debug",
+)
+
+# Params are captured wholesale from Click, so a future credential flag would
+# otherwise land in every report on disk.
+_ARGS_DENYLIST = frozenset({
+    "api_key", "extractor_api_key", "checker_api_key", "atomizer_api_key",
+    "token", "password", "secret",
+})
+
+
+def _capture_args(command: str) -> dict:
+    """The ``_args`` block: every parameter of the current invocation.
+
+    Read from Click rather than enumerated by hand, so it cannot drift when a
+    flag is added. ``_explicit`` names the keys that were actually typed —
+    ``joint=true`` given on the command line and ``joint=true`` by default are
+    different facts when reconstructing a run later.
+    """
+    import click
+
+    ctx = click.get_current_context(silent=True)
+    params = dict(ctx.params) if ctx else {}
+    explicit = []
+    if ctx:
+        from click.core import ParameterSource
+        explicit = sorted(
+            name for name in params
+            if name not in _ARGS_DENYLIST
+            and ctx.get_parameter_source(name) is ParameterSource.COMMANDLINE
+        )
+
+    values = {"command": command}
+    for name, value in params.items():
+        if name in _ARGS_DENYLIST:
+            continue
+        values[name] = str(value) if isinstance(value, Path) else value
+
+    known = [k for k in _ARGS_ORDER if k in values]
+    unknown = sorted(k for k in values if k not in _ARGS_ORDER)
+    ordered = {k: values[k] for k in known + unknown}
+    ordered["_explicit"] = explicit
+    return ordered
+
+
 def _resolve_output(
     input_file: Path,
     operation: str,
@@ -353,7 +422,7 @@ def ragcheck(
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write the single report artifact
+    report = {"_args": _capture_args("ragcheck"), **report}
     output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Report written to %s", output_file)
 
@@ -418,7 +487,7 @@ def faithcheck(
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write the single report artifact
+    report = {"_args": _capture_args("faithcheck"), **report}
     output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Report written to %s", output_file)
 
@@ -509,7 +578,9 @@ def eval_checker(
 
     # Write the document verbatim — the evaluator assembled it.
     output_file.write_text(
-        json.dumps(result_doc, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"_args": _capture_args("eval checker"), **result_doc},
+                   indent=2, ensure_ascii=False),
+        encoding="utf-8"
     )
     logger.info("")
     logger.info("Results written to %s", output_file)
@@ -610,6 +681,7 @@ def eval_extractor(
             runs=runs,
         )
         summary_doc, disagreements_doc = evaluator.run_sync(data)
+        _args = _capture_args("eval extractor")
     except ContextCheckerError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
@@ -617,10 +689,12 @@ def eval_extractor(
 
     # Write both documents verbatim — the evaluator assembled them.
     output_file.write_text(
-        json.dumps(summary_doc, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"_args": _args, **summary_doc}, indent=2, ensure_ascii=False),
+        encoding="utf-8"
     )
     disagree_file.write_text(
-        json.dumps(disagreements_doc, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"_args": _args, **disagreements_doc}, indent=2, ensure_ascii=False),
+        encoding="utf-8"
     )
 
     logger.info("")

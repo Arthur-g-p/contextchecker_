@@ -28,6 +28,7 @@ from contextchecker.stats import (
     log_variance_block,
 )
 from contextchecker.utils import (
+    build_meta,
     build_variance,
     canonicalize_triplets,
     find_duplicate_triplets,
@@ -235,6 +236,9 @@ class ExtractorEvaluator:
             (summary_doc, disagreements_doc) — two ready-to-write JSON
             documents incl. _meta. The CLI only resolves paths and dumps.
         """
+        self._started_at = datetime.now().isoformat(timespec="seconds")
+        self._started_perf = time.perf_counter()
+
         # Step 0: Canonicalize key aliases
         BaseService._canonicalize_keys(data)
 
@@ -315,15 +319,16 @@ class ExtractorEvaluator:
         Split details are debug material: they move from the summary's
         atomicity block into the disagreements document.
         """
-        meta = {
-            "eval_type": "extractor",
-            "extractor_model": self._extractor_model,
-            "gt_key": self._gt_key,
-            "pred_key": self._pred_key,
-            "matching": "llm-2-pass",
-            "checker_model": self._checker_model,
-            "timestamp": datetime.now().isoformat(),
-        }
+        meta = build_meta(
+            "extractor_eval",
+            timestamp=self._started_at,
+            duration_seconds=time.perf_counter() - self._started_perf,
+            total_items=result.total_items,
+            evaluated_items=result.to_compare_items,
+            dropped_items=result.total_items - result.to_compare_items,
+            pred_key=self._pred_key,
+            matching="llm-2-pass",
+        )
 
         summary_doc = {"_meta": meta, **asdict(result)}
         atomicity_splits = None

@@ -579,7 +579,7 @@ class TestEvaluateIntegration:
         assert summary_doc["precision"] == 1.0
         assert summary_doc["recall"] == 1.0
         assert summary_doc["f1"] == 1.0
-        assert summary_doc["_meta"]["eval_type"] == "extractor"
+        assert summary_doc["_meta"]["report_type"] == "extractor_eval"
         assert disagreements_doc["total_disagreements"] == 0
 
     def test_wrongful_abstention_from_extraction(self):

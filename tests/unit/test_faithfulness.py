@@ -94,7 +94,7 @@ class TestBuildReport:
 
     def test_entry_shape_and_metric(self, pipeline):
         report = pipeline.build_report([_checked_item()])
-        assert report["_meta"]["report_type"] == "faithfulness"
+        assert report["_meta"]["report_type"] == "faithcheck"
         entry = report["results"][0]
         assert entry["response_claims"] == [
             {"subject": "Nile", "predicate": "is", "object": "longest river"},

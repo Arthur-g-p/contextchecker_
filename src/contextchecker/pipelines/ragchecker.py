@@ -21,6 +21,7 @@ four directional arrays) with modernized leaves (dict claims, verdict
 objects). Metrics are stubbed until the formulas are settled.
 """
 
+import time
 from datetime import datetime
 
 from contextchecker import settings
@@ -36,6 +37,7 @@ from contextchecker.pipelines.directions import (
     unwrap_items,
 )
 from contextchecker.stats import log_token_stats
+from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
 
@@ -399,6 +401,8 @@ class RagCheckerPipeline(BaseService):
                           mode - the VARIANCE block reports instead)
         7. Return mutated data
         """
+        self._started_at = datetime.now().isoformat(timespec="seconds")
+        self._started_perf = time.perf_counter()
         data = unwrap_items(data)                     # Step 0: accept the
         self._canonicalize_keys(data)                 # paper's {"results": [...]}
         valid = self._validate(data)                  # envelope; query→question
@@ -478,19 +482,25 @@ class RagCheckerPipeline(BaseService):
                 continue
             results.append(self._build_result_entry(item))
 
+        timestamp, duration = self._run_timing()
         return {
-            "_meta": {
-                "schema_version": 3,
-                "extractor_model": self._extractor_model,
-                "checker_model": self._checker_model,
-                "total_items": len(data),
-                "evaluated_items": len(results),
-                "dropped_items": dropped,
-                "timestamp": datetime.now().isoformat(),
-            },
+            "_meta": build_meta(
+                "ragcheck",
+                timestamp=timestamp,
+                duration_seconds=duration,
+                total_items=len(data),
+                evaluated_items=len(results),
+                dropped_items=dropped,
+            ),
             "overall_metrics": compute_overall_metrics(results),
             "results": results,
         }
+
+    def _run_timing(self) -> tuple[str, float]:
+        """(timestamp, elapsed) for the report envelope; safe before a run."""
+        if not hasattr(self, "_started_at"):
+            return datetime.now().isoformat(timespec="seconds"), 0.0
+        return self._started_at, time.perf_counter() - self._started_perf
 
     def _build_result_entry(self, item: dict) -> dict:
         response_claims = item.get(self._response_kg) or []

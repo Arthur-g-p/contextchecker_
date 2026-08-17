@@ -30,7 +30,7 @@ from contextchecker.stats import (
     log_token_stats,
     log_variance_block,
 )
-from contextchecker.utils import build_variance, canonicalize_triplets
+from contextchecker.utils import build_meta, build_variance, canonicalize_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 
@@ -145,6 +145,9 @@ class CheckerEvaluator:
             Ready-to-write JSON document incl. _meta — accuracy, per-label
             report, confusion matrix. The CLI only resolves paths and dumps.
         """
+        self._started_at = datetime.now().isoformat(timespec="seconds")
+        self._started_perf = time.perf_counter()
+
         # Step 0: Canonicalize key aliases (context→reference, query→question)
         BaseService._canonicalize_keys(data)
 
@@ -196,13 +199,14 @@ class CheckerEvaluator:
     def _assemble_document(self, result: CheckerEvalResult) -> dict:
         """Build the output document the CLI writes verbatim."""
         return {
-            "_meta": {
-                "eval_type": "checker",
-                "checker_model": self._checker_model,
-                "gt_key": self._gt_key,
-                "joint": self._service.joint,
-                "timestamp": datetime.now().isoformat(),
-            },
+            "_meta": build_meta(
+                "checker_eval",
+                timestamp=self._started_at,
+                duration_seconds=time.perf_counter() - self._started_perf,
+                total_items=result.total_items,
+                evaluated_items=result.total_items,
+                dropped_items=sum(result.skipped.values()),
+            ),
             **asdict(result),
         }
 
