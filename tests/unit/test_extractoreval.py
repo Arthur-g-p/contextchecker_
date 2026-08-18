@@ -330,6 +330,95 @@ class TestMeasureDuplicates:
         assert len(preds) == 2  # the eval never deduplicates its data
 
 
+# ── Test _count_pass (pure verdict counting, one pass) ───────────────────────
+
+V_KEY = "test-checker_checker_verdict"
+E_KEY = "test-checker_checker_explanation"
+
+
+def _checked(*verdicts, explanation=None):
+    """Build checked triplets carrying the given verdicts (None = no verdict key)."""
+    out = []
+    for v in verdicts:
+        t = {}
+        if v is not None:
+            t[V_KEY] = v
+        if explanation is not None:
+            t[E_KEY] = explanation
+        out.append(t)
+    return out
+
+
+def _originals(n):
+    return [_make_canonical_triplet(f"s{i}", f"p{i}", f"o{i}") for i in range(n)]
+
+
+class TestCountPass:
+    """Three-way verdict split: Entailment / judged miss / unjudged (None)."""
+
+    def _run(self, checked, originals, field="gt_triplet"):
+        return ExtractorEvaluator._count_pass(checked, originals, V_KEY, E_KEY, field)
+
+    def test_all_entailment(self):
+        entailed, misses, unjudged = self._run(
+            _checked("Entailment", "Entailment"), _originals(2))
+        assert entailed == 2
+        assert misses == []
+        assert unjudged == []
+
+    def test_real_verdicts_are_misses(self):
+        entailed, misses, unjudged = self._run(
+            _checked("Entailment", "Neutral", "Contradiction"), _originals(3))
+        assert entailed == 1
+        assert [m["verdict"] for m in misses] == ["Neutral", "Contradiction"]
+        assert unjudged == []
+
+    def test_miss_carries_triplet_string_and_field_name(self):
+        _, misses, _ = self._run(_checked("Neutral"), _originals(1), field="pred_triplet")
+        assert misses[0]["pred_triplet"] == "s0 p0 o0"
+
+    def test_explanation_used_as_reason(self):
+        _, misses, _ = self._run(
+            _checked("Neutral", explanation="not in reference"), _originals(1))
+        assert misses[0]["reason"] == "not in reference"
+
+    def test_verdict_falls_back_as_reason(self):
+        _, misses, _ = self._run(_checked("Neutral"), _originals(1))
+        assert misses[0]["reason"] == "Neutral"
+
+    def test_none_verdict_is_unjudged_never_a_miss(self):
+        """The fix: a None verdict (checker failure — nobody judged the claim)
+        is no evidence about the extractor. It leaves numerator AND
+        denominator instead of being charged as a miss."""
+        entailed, misses, unjudged = self._run(
+            _checked("Entailment", None), _originals(2))
+        assert entailed == 1
+        assert misses == []
+        assert len(unjudged) == 1
+        assert unjudged[0]["gt_triplet"] == "s1 p1 o1"
+        assert unjudged[0]["cause"] == "checker_failure"
+
+    def test_missing_verdict_key_is_unjudged(self):
+        """A triplet the checker never touched (no verdict key at all) is
+        indistinguishable from an explicit None — both are unjudged."""
+        entailed, misses, unjudged = self._run(_checked(None), _originals(1))
+        assert (entailed, misses) == (0, [])
+        assert len(unjudged) == 1
+
+    def test_all_unjudged_zero_denominator(self):
+        """Checker failed everything: nothing entailed, nothing missed —
+        the pass contributes an empty (0/0) measurement, not a zero score."""
+        entailed, misses, unjudged = self._run(_checked(None, None), _originals(2))
+        assert (entailed, len(misses), len(unjudged)) == (0, 0, 2)
+
+    def test_three_way_partition_is_exhaustive(self):
+        """Every claim lands in exactly one bucket — the counts must always
+        re-add to the number of issued claims."""
+        checked = _checked("Entailment", "Neutral", None, "Contradiction", None)
+        entailed, misses, unjudged = self._run(checked, _originals(5))
+        assert entailed + len(misses) + len(unjudged) == 5
+
+
 # ── Test _build_result ───────────────────────────────────────────────────────
 
 class TestBuildResult:
@@ -352,10 +441,11 @@ class TestBuildResult:
         assert result.precision == 1.0
         assert result.recall == 1.0
         assert result.f1 == 1.0
-        assert result.tp_recall == 1
-        assert result.tp_precision == 1
-        assert result.fp == 0
-        assert result.fn == 0
+        assert result.recall_counts["covered"] == 1
+        assert result.recall_counts["denominator"] == 1
+        assert result.precision_counts["supported"] == 1
+        assert result.precision_counts["denominator"] == 1
+        assert result.checker_failures["count"] == 0
         assert result.to_compare_items == 1
         assert result.correct_abstention == 0
 
@@ -376,9 +466,13 @@ class TestBuildResult:
         item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
         result = ev._build_result(item_results, buckets, total_items=2)
-        assert result.tp_recall == 1
-        assert result.fn == 2  # penalty from abstention
-        assert result.abstention_errors["wrongful_abstention_fn_penalty"] == 2
+        rc = result.recall_counts
+        assert rc["covered"] == 1
+        assert rc["missed"] == 0
+        assert rc["wrongful_abstention_penalty"] == 2  # penalty IS in the denominator
+        assert rc["denominator"] == 3
+        assert result.recall == round(1 / 3, 4)
+        assert result.abstention_errors["wrongful_abstention"] == 1
 
     def test_wrongful_answer_fp_penalty(self):
         ev = _evaluator()
@@ -397,17 +491,154 @@ class TestBuildResult:
         item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
         result = ev._build_result(item_results, buckets, total_items=2)
-        assert result.tp_precision == 1
-        assert result.fp == 1  # penalty from wrongful answer
-        assert result.abstention_errors["wrongful_answer_fp_penalty"] == 1
+        pc = result.precision_counts
+        assert pc["supported"] == 1
+        assert pc["unsupported"] == 0
+        assert pc["wrongful_answer_penalty"] == 1  # penalty IS in the denominator
+        assert pc["denominator"] == 2
+        assert result.precision == 0.5
+        assert result.abstention_errors["wrongful_answer"] == 1
 
     def test_zero_items(self):
+        """Empty denominator → None, never 0.0: nothing judged is not a score."""
         ev = _evaluator()
         buckets = _ItemBucket(to_compare=[], wrongful_answer=[], wrongful_abstention=[], correct_abstention=[])
         result = ev._build_result([], buckets, total_items=0)
-        assert result.precision == 0.0
-        assert result.recall == 0.0
-        assert result.f1 == 0.0
+        assert result.precision is None
+        assert result.recall is None
+        assert result.f1 is None
+
+    def test_all_unjudged_yields_null_not_zero(self):
+        """Checker failed everything: 0/0 on both sides must be None — a 0.0
+        would give the worst possible score for zero information."""
+        ev = _evaluator()
+        buckets = _ItemBucket(
+            to_compare=[
+                _make_item(gt_triplets=[_make_triplet("a", "b", "c")],
+                           pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
+            ],
+            wrongful_answer=[],
+            wrongful_abstention=[],
+            correct_abstention=[],
+        )
+        item_results = [_ItemMatchResult(
+            tp_recall=0, tp_precision=0, fp=0, fn=0,
+            false_positives=[], false_negatives=[],
+            unjudged_gt=[{"gt_triplet": "a b c", "cause": "checker_failure"}],
+            unjudged_pred=[{"pred_triplet": "a b c", "cause": "checker_failure"}],
+        )]
+        result = ev._build_result(item_results, buckets, total_items=1)
+        assert result.precision is None
+        assert result.recall is None
+        assert result.f1 is None
+        assert result.checker_failures == {
+            "count": 2, "issued_verdicts": 2, "rate": 1.0,
+            "items_affected": 1, "unjudged_gt": 1, "unjudged_pred": 1,
+        }
+
+    def test_unjudged_excluded_from_denominator(self):
+        """1 covered + 1 unjudged GT claim → recall 1/1, not 1/2; the unjudged
+        claim shows up in checker_failures instead."""
+        ev = _evaluator()
+        buckets = _ItemBucket(
+            to_compare=[
+                _make_item(gt_triplets=[_make_triplet("a", "b", "c"),
+                                        _make_triplet("d", "e", "f")],
+                           pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
+            ],
+            wrongful_answer=[],
+            wrongful_abstention=[],
+            correct_abstention=[],
+        )
+        item_results = [_ItemMatchResult(
+            tp_recall=1, tp_precision=1, fp=0, fn=0,
+            false_positives=[], false_negatives=[],
+            unjudged_gt=[{"gt_triplet": "d e f", "cause": "checker_failure"}],
+        )]
+        result = ev._build_result(item_results, buckets, total_items=1)
+        assert result.recall == 1.0
+        assert result.recall_counts["denominator"] == 1
+        assert result.recall_counts["unjudged"] == 1
+        assert result.recall_counts["total_gt_claims"] == 2
+        assert result.checker_failures["count"] == 1
+
+    def test_counts_are_exhaustive_partitions(self):
+        """total = judged buckets + penalty + unjudged, denominator = total - unjudged."""
+        ev = _evaluator()
+        buckets = _ItemBucket(
+            to_compare=[
+                _make_item(gt_triplets=[_make_triplet(c, c, c) for c in "abcd"],
+                           pred_triplets=[_make_canonical_triplet(c, c, c) for c in "abc"]),
+            ],
+            wrongful_answer=[
+                _make_item(gt_triplets=None,
+                           pred_triplets=[_make_canonical_triplet("x", "y", "z")]),
+            ],
+            wrongful_abstention=[
+                _make_item(gt_triplets=[_make_triplet("d", "e", "f")]),
+            ],
+            correct_abstention=[],
+        )
+        item_results = [_ItemMatchResult(
+            tp_recall=2, tp_precision=1, fp=1, fn=1,
+            false_positives=[{"pred_triplet": "b b b", "verdict": "Neutral", "reason": "r"}],
+            false_negatives=[{"gt_triplet": "c c c", "verdict": "Contradiction", "reason": "r"}],
+            unjudged_gt=[{"gt_triplet": "d d d", "cause": "checker_failure"}],
+            unjudged_pred=[{"pred_triplet": "c c c", "cause": "checker_failure"}],
+        )]
+        result = ev._build_result(item_results, buckets, total_items=3)
+        rc, pc = result.recall_counts, result.precision_counts
+        assert (rc["covered"] + rc["missed"] + rc["wrongful_abstention_penalty"]
+                + rc["unjudged"]) == rc["total_gt_claims"] == 5
+        assert rc["denominator"] == rc["total_gt_claims"] - rc["unjudged"] == 4
+        assert (pc["supported"] + pc["unsupported"] + pc["wrongful_answer_penalty"]
+                + pc["unjudged"]) == pc["total_pred_claims"] == 4
+        assert pc["denominator"] == pc["total_pred_claims"] - pc["unjudged"] == 3
+        # Totals must equal what the extraction stats report
+        assert rc["total_gt_claims"] == result.gt_stats["total_triplets"]
+        assert pc["total_pred_claims"] == result.pred_stats["total_triplets"]
+        # Issued verdicts: judged + unjudged, penalties never sent to the checker
+        assert result.checker_failures["issued_verdicts"] == 7
+
+
+class TestUnjudgedInDisagreements:
+    """Checker failures are not disagreements, but affected items must stay
+    identifiable in the disagreements file with their unjudged claims."""
+
+    def test_item_with_only_unjudged_appears(self):
+        ev = _evaluator()
+        item = _make_item(gt_triplets=[_make_canonical_triplet("a", "b", "c")],
+                          pred_triplets=[_make_canonical_triplet("a", "b", "c")],
+                          item_id="u1")
+        buckets = _ItemBucket(
+            to_compare=[item], wrongful_answer=[],
+            wrongful_abstention=[], correct_abstention=[],
+        )
+        item_results = [_ItemMatchResult(
+            tp_recall=0, tp_precision=1, fp=0, fn=0,
+            false_positives=[], false_negatives=[],
+            unjudged_gt=[{"gt_triplet": "a b c", "cause": "checker_failure"}],
+        )]
+        disagreements = ev._build_disagreements(buckets, item_results)
+        assert len(disagreements) == 1
+        assert disagreements[0]["id"] == "u1"
+        assert disagreements[0]["false_negatives"] == []
+        assert disagreements[0]["unjudged"] == [
+            {"gt_triplet": "a b c", "cause": "checker_failure"}]
+
+    def test_perfect_match_still_excluded(self):
+        ev = _evaluator()
+        item = _make_item(gt_triplets=[_make_canonical_triplet("a", "b", "c")],
+                          pred_triplets=[_make_canonical_triplet("a", "b", "c")])
+        buckets = _ItemBucket(
+            to_compare=[item], wrongful_answer=[],
+            wrongful_abstention=[], correct_abstention=[],
+        )
+        item_results = [_ItemMatchResult(
+            tp_recall=1, tp_precision=1, fp=0, fn=0,
+            false_positives=[], false_negatives=[],
+        )]
+        assert ev._build_disagreements(buckets, item_results) == []
 
 
 # ── Test extraction-error handling (tooling failures, never abstentions) ─────
@@ -448,7 +679,8 @@ class TestExtractionErrors:
         )
         result = ev._build_result([], buckets, total_items=2)
         # The errored item's 2 GT triplets added NO FN penalty
-        assert result.fn == 0
+        assert result.recall_counts["wrongful_abstention_penalty"] == 0
+        assert result.recall_counts["total_gt_claims"] == 0
         assert result.extraction_errors == {
             "count": 1,
             "rate": 0.5,
@@ -607,10 +839,12 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_done"):
             summary_doc, disagreements_doc = ev.run_sync(data)
 
-        assert summary_doc["tp_recall"] == 0
-        assert summary_doc["fn"] == 2
+        assert summary_doc["recall"] == 0.0  # measured: 0 of 2 GT claims covered
+        assert summary_doc["recall_counts"]["covered"] == 0
+        assert summary_doc["recall_counts"]["wrongful_abstention_penalty"] == 2
+        assert summary_doc["recall_counts"]["denominator"] == 2
+        assert summary_doc["precision"] is None  # no predictions → nothing to judge
         assert summary_doc["abstention_errors"]["wrongful_abstention"] == 1
-        assert summary_doc["abstention_errors"]["wrongful_abstention_fn_penalty"] == 2
         assert disagreements_doc["total_disagreements"] == 1
         assert disagreements_doc["items"][0]["error_type"] == "wrongful_abstention"
 
@@ -647,8 +881,8 @@ class TestEvaluateIntegration:
             summary_doc, disagreements_doc = ev.run_sync(data)
 
         assert summary_doc["abstention_errors"]["wrongful_answer"] == 1
-        assert summary_doc["abstention_errors"]["wrongful_answer_fp_penalty"] == 1
-        assert summary_doc["fp"] == 1
+        assert summary_doc["precision_counts"]["wrongful_answer_penalty"] == 1
+        assert summary_doc["precision"] == 0.0  # measured: 1 penalty claim, 0 supported
         assert disagreements_doc["total_disagreements"] == 1
         assert disagreements_doc["items"][0]["error_type"] == "wrongful_answer"
         assert disagreements_doc["items"][0]["false_positives"][0]["verdict"] == "no comparison made."

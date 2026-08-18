@@ -70,6 +70,10 @@ class _ItemMatchResult:
     RAGChecker uses two independent coverage counts (no shared TP / no min):
       - tp_recall:    GT triplets entailed by the predictions  (recall numerator)
       - tp_precision: pred triplets entailed by the GT         (precision numerator)
+
+    fp/fn count judged misses only. Claims the checker never returned a
+    verdict for (tooling failure) sit in unjudged_* — excluded from both
+    numerator and denominator, never charged to the extractor.
     """
     tp_recall: int
     tp_precision: int
@@ -77,6 +81,8 @@ class _ItemMatchResult:
     fn: int
     false_positives: list[dict]     # disagreement detail per FP
     false_negatives: list[dict]     # disagreement detail per FN
+    unjudged_gt: list[dict] = field(default_factory=list)    # pass 1 checker failures
+    unjudged_pred: list[dict] = field(default_factory=list)  # pass 2 checker failures
 
 
 class ExtractorEvaluator:
@@ -537,40 +543,81 @@ class ExtractorEvaluator:
         atomicity: dict | None = None,
         duplicates: dict | None = None,
     ) -> ExtractorEvalResult:
-        """Aggregate the two coverage counts + abstention penalties, compute P/R/F1.
+        """Aggregate judged counts + abstention penalties, compute P/R/F1.
 
         RAGChecker semantics:
             recall    = entailed_GT   / total_GT      (coverage of ground truth)
             precision = entailed_pred / total_pred    (correctness of predictions)
         Two independent ratios — no shared TP, no min().
+
+        Denominators carry judged claims + penalties. Unjudged claims
+        (checker failure) leave numerator AND denominator; an empty
+        denominator yields None, never 0.0 — nothing judged is not a score.
         """
-        # Accumulate the two numerators + the two error counts from matched items
-        tp_recall, tp_precision, fp, fn = 0, 0, 0, 0
-        for ir in item_results:
-            tp_recall += ir.tp_recall
-            tp_precision += ir.tp_precision
-            fp += ir.fp
-            fn += ir.fn
+        # Accumulate the judged counts + unjudged tallies from matched items
+        covered = sum(ir.tp_recall for ir in item_results)
+        missed = sum(ir.fn for ir in item_results)
+        supported = sum(ir.tp_precision for ir in item_results)
+        unsupported = sum(ir.fp for ir in item_results)
+        unjudged_gt = sum(len(ir.unjudged_gt) for ir in item_results)
+        unjudged_pred = sum(len(ir.unjudged_pred) for ir in item_results)
 
         # Wrongful abstention: every GT triplet is an uncovered GT claim (FN)
         abstention_fn_penalty = sum(
             len(item[self._gt_key]) for item in buckets.wrongful_abstention
         )
-        fn += abstention_fn_penalty
 
         # Wrongful answer: every predicted triplet is an unsupported prediction (FP)
         answer_fp_penalty = sum(
             len(item[self._pred_key]) for item in buckets.wrongful_answer
         )
-        fp += answer_fp_penalty
 
-        # Two independent ratios. Denominators:
-        #   tp_recall + fn    == total GT claims    (incl. wrongful-abstention GT)
-        #   tp_precision + fp == total pred claims  (incl. wrongful-answer preds)
-        recall = tp_recall / (tp_recall + fn) if (tp_recall + fn) > 0 else 0.0
-        precision = tp_precision / (tp_precision + fp) if (tp_precision + fp) > 0 else 0.0
-        f1 = (2 * precision * recall / (precision + recall)
-               if (precision + recall) > 0 else 0.0)
+        recall_den = covered + missed + abstention_fn_penalty
+        precision_den = supported + unsupported + answer_fp_penalty
+
+        recall = round(covered / recall_den, 4) if recall_den > 0 else None
+        precision = round(supported / precision_den, 4) if precision_den > 0 else None
+        if precision is None or recall is None:
+            f1 = None
+        elif precision + recall == 0:
+            f1 = 0.0
+        else:
+            f1 = round(2 * precision * recall / (precision + recall), 4)
+
+        # Exhaustive partitions: total = judged + penalty + unjudged.
+        recall_counts = {
+            "total_gt_claims": recall_den + unjudged_gt,
+            "covered": covered,
+            "missed": missed,
+            "wrongful_abstention_penalty": abstention_fn_penalty,
+            "unjudged": unjudged_gt,
+            "denominator": recall_den,
+        }
+        precision_counts = {
+            "total_pred_claims": precision_den + unjudged_pred,
+            "supported": supported,
+            "unsupported": unsupported,
+            "wrongful_answer_penalty": answer_fp_penalty,
+            "unjudged": unjudged_pred,
+            "denominator": precision_den,
+        }
+
+        # Checker failures — eval tooling reliability, co-equal with the
+        # extraction error rate but never mixed into P/R/F1. Denominator:
+        # every verdict actually asked of the checker (penalty claims were
+        # never sent, so they don't count as issued).
+        issued = covered + missed + supported + unsupported + unjudged_gt + unjudged_pred
+        unjudged_total = unjudged_gt + unjudged_pred
+        checker_failures = {
+            "count": unjudged_total,
+            "issued_verdicts": issued,
+            "rate": round(unjudged_total / issued, 4) if issued else 0.0,
+            "items_affected": sum(
+                1 for ir in item_results if ir.unjudged_gt or ir.unjudged_pred
+            ),
+            "unjudged_gt": unjudged_gt,
+            "unjudged_pred": unjudged_pred,
+        }
 
         # Extraction stats
         gt_triplets = sum(
@@ -605,13 +652,11 @@ class ExtractorEvaluator:
         }
 
         return ExtractorEvalResult(
-            precision=round(precision, 4),
-            recall=round(recall, 4),
-            f1=round(f1, 4),
-            tp_recall=tp_recall,
-            tp_precision=tp_precision,
-            fp=fp,
-            fn=fn,
+            precision=precision,
+            recall=recall,
+            f1=f1,
+            recall_counts=recall_counts,
+            precision_counts=precision_counts,
             total_items=total_items,
             to_compare_items=to_compare_count,
             gt_stats={
@@ -625,10 +670,9 @@ class ExtractorEvaluator:
             abstention_errors={
                 "wrongful_answer": len(buckets.wrongful_answer),
                 "wrongful_abstention": len(buckets.wrongful_abstention),
-                "wrongful_abstention_fn_penalty": abstention_fn_penalty,
-                "wrongful_answer_fp_penalty": answer_fp_penalty,
             },
             correct_abstention=len(buckets.correct_abstention),
+            checker_failures=checker_failures,
             atomicity=atomicity,
             duplicates=duplicates,
             extraction_errors=extraction_errors,
@@ -711,50 +755,80 @@ class ExtractorEvaluator:
             # Pass 2 verdicts: one per pred triplet
             pass2_triplets = pass2_items[i][service_kg_key]
 
-            # Count matches from Pass 1 (recall)
-            fn_list = []
-            tp_from_recall = 0
-            for j, t in enumerate(pass1_triplets):
-                verdict = t.get(verdict_key)
-                if verdict == "Entailment":
-                    tp_from_recall += 1
-                else:
-                    fn_list.append({
-                        "gt_triplet": self._triplet_to_str(gt_triplets[j]),
-                        "verdict": verdict,
-                        "reason": t.get(explanation_key) or verdict or "Parse error",
-                    })
+            # Pass 1 (recall): GT triplets the predictions failed to cover → FN
+            tp_from_recall, fn_list, unjudged_gt = self._count_pass(
+                pass1_triplets, gt_triplets,
+                verdict_key, explanation_key, "gt_triplet",
+            )
 
-            # Count FPs from Pass 2 (precision)
-            fp_list = []
-            tp_from_precision = 0
-            for j, t in enumerate(pass2_triplets):
-                verdict = t.get(verdict_key)
-                if verdict == "Entailment":
-                    tp_from_precision += 1
-                else:
-                    fp_list.append({
-                        "pred_triplet": self._triplet_to_str(pred_triplets[j]),
-                        "verdict": verdict,
-                        "reason": t.get(explanation_key) or verdict or "Parse error",
-                    })
+            # Pass 2 (precision): predictions the GT does not support → FP
+            tp_from_precision, fp_list, unjudged_pred = self._count_pass(
+                pass2_triplets, pred_triplets,
+                verdict_key, explanation_key, "pred_triplet",
+            )
 
             # RAGChecker: two independent coverage counts, no shared TP, no min().
             #   recall  side: GT triplets entailed by predictions (tp_from_recall)
             #   precision side: pred triplets entailed by GT      (tp_from_precision)
-            # FN = GT not covered; FP = predictions not supported.
-            fn = len(gt_triplets) - tp_from_recall
-            fp = len(pred_triplets) - tp_from_precision
-
+            # FN/FP derive from the judged misses alone — unjudged claims
+            # (checker failure) leave numerator and denominator entirely.
             results.append(_ItemMatchResult(
                 tp_recall=tp_from_recall,
                 tp_precision=tp_from_precision,
-                fp=fp, fn=fn,
+                fp=len(fp_list), fn=len(fn_list),
                 false_positives=fp_list,
                 false_negatives=fn_list,
+                unjudged_gt=unjudged_gt,
+                unjudged_pred=unjudged_pred,
             ))
 
         return results
+
+    @staticmethod
+    def _count_pass(
+        checked: list[dict],
+        originals: list[dict],
+        verdict_key: str,
+        explanation_key: str,
+        triplet_field: str,
+    ) -> tuple[int, list[dict], list[dict]]:
+        """Count one matching pass: checker verdicts → (entailed, misses, unjudged).
+
+        Three-way split:
+            "Entailment"       → entailed (TP for this pass)
+            other real verdict → miss (a judged disagreement: FN or FP)
+            None               → unjudged (the checker never returned a verdict
+                                 after all retries — a tooling failure)
+
+        A claim nobody judged is no evidence about the extractor: unjudged
+        claims leave numerator AND denominator, same rule as ragcheck's
+        None-verdict propagation. They must never be charged as misses.
+
+        Args:
+            checked: Triplets carrying the pass's verdicts (parallel to originals).
+            originals: The original triplets of this pass's claims side.
+            triplet_field: Key name for the triplet string in miss/unjudged
+                entries ("gt_triplet" for pass 1, "pred_triplet" for pass 2).
+        """
+        entailed = 0
+        misses: list[dict] = []
+        unjudged: list[dict] = []
+        for j, t in enumerate(checked):
+            verdict = t.get(verdict_key)
+            if verdict == "Entailment":
+                entailed += 1
+            elif verdict is None:
+                unjudged.append({
+                    triplet_field: ExtractorEvaluator._triplet_to_str(originals[j]),
+                    "cause": "checker_failure",
+                })
+            else:
+                misses.append({
+                    triplet_field: ExtractorEvaluator._triplet_to_str(originals[j]),
+                    "verdict": verdict,
+                    "reason": t.get(explanation_key) or verdict,
+                })
+        return entailed, misses, unjudged
 
     def _build_pass_items(
         self,
@@ -814,6 +888,13 @@ class ExtractorEvaluator:
         """Convert a triplet dict to a natural-language string."""
         return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
 
+    @staticmethod
+    def _fmt_ratio(value: float | None, numerator: int, denominator: int) -> str:
+        """Format a metric with its fraction; None = empty denominator."""
+        if value is None:
+            return f"n/a  ({numerator} / {denominator} — nothing judged)"
+        return f"{value:.3f}  ({numerator} / {denominator})"
+
     # ── Disagreement collection ──────────────────────────────────
 
     def _build_disagreements(
@@ -839,9 +920,12 @@ class ExtractorEvaluator:
                 "cause": item.get(self._error_key, "unknown"),
             })
 
-        # to_compare items with disagreements
+        # to_compare items with disagreements — or with unjudged claims:
+        # a checker failure is not a disagreement, but the affected item
+        # must stay identifiable in this file.
         for i, (item, ir) in enumerate(zip(buckets.to_compare, item_results)):
-            if ir.fp == 0 and ir.fn == 0:
+            unjudged = ir.unjudged_gt + ir.unjudged_pred
+            if ir.fp == 0 and ir.fn == 0 and not unjudged:
                 continue  # perfect match, no disagreement
 
             disagreements.append({
@@ -860,6 +944,8 @@ class ExtractorEvaluator:
                 ],
                 "false_positives": ir.false_positives,
                 "false_negatives": ir.false_negatives,
+                # Checker failures on this item — excluded from fp/fn above.
+                "unjudged": unjudged,
             })
 
         # Wrongful answers — model predicted but shouldn't have
@@ -992,17 +1078,49 @@ class ExtractorEvaluator:
         logger.info(settings.section_rule("EXTRACTOR EVAL"))
         logger.info("")
 
-        # ── Matching quality
-        logger.info(" 🔎 Matching Quality")
+        # ── Matching quality: one funnel per side. Every issued claim lands
+        # in exactly one branch; the first three sum to the denominator, the
+        # 💥 branch is explicitly outside it.
+        rc = result.recall_counts
+        pc = result.precision_counts
+        ae = result.abstention_errors
+
+        logger.info(" 🔎 Matching Quality  (LLM 2-pass)")
+        logger.info("    Recall — %d total GT claims", rc["total_gt_claims"])
+        logger.info("     ├─ ✅ %d covered by predictions  (judged)", rc["covered"])
+        logger.info("     ├─ ❌ %d missed  (judged)", rc["missed"])
+        if rc["wrongful_abstention_penalty"]:
+            logger.info(
+                "     ├─ ⚪ %d wrongful-abstention penalty  (%d items, 0 predictions for %d claims)",
+                rc["wrongful_abstention_penalty"], ae["wrongful_abstention"],
+                rc["wrongful_abstention_penalty"],
+            )
+        else:
+            logger.info("     ├─ ⚪ 0 wrongful-abstention penalty")
         logger.info(
-            "    Precision:  %.3f   (%d / %d)",
-            result.precision, result.tp_precision, result.tp_precision + result.fp,
+            "     ├─ 💥 %d unjudged by checker  (excluded from evaluation! No verdict for %d claims.)",
+            rc["unjudged"], rc["unjudged"],
         )
+        logger.info("     └─ → Recall %s", self._fmt_ratio(result.recall, rc["covered"], rc["denominator"]))
+
+        logger.info("    Precision — %d total predicted claims", pc["total_pred_claims"])
+        logger.info("     ├─ ✅ %d supported by GT  (judged)", pc["supported"])
+        logger.info("     ├─ ❌ %d unsupported  (judged)", pc["unsupported"])
+        if pc["wrongful_answer_penalty"]:
+            logger.info(
+                "     ├─ ⚪ %d wrongful-answer penalty  (%d items, no GT for %d claims)",
+                pc["wrongful_answer_penalty"], ae["wrongful_answer"],
+                pc["wrongful_answer_penalty"],
+            )
+        else:
+            logger.info("     ├─ ⚪ 0 wrongful-answer penalty")
         logger.info(
-            "    Recall:     %.3f   (%d / %d)",
-            result.recall, result.tp_recall, result.tp_recall + result.fn,
+            "     ├─ 💥 %d unjudged by checker  (excluded from evaluation! No verdict for %d claims.)",
+            pc["unjudged"], pc["unjudged"],
         )
-        logger.info("    F1:         %.3f", result.f1)
+        logger.info("     └─ → Precision %s", self._fmt_ratio(result.precision, pc["supported"], pc["denominator"]))
+
+        logger.info("    F1: %s", "n/a" if result.f1 is None else f"{result.f1:.3f}")
 
         # ── Extraction stats
         logger.info("")
@@ -1024,36 +1142,35 @@ class ExtractorEvaluator:
             direction = "over-extraction" if delta > 0 else "under-extraction"
             logger.info("    Delta: %+.1f/item  (%s)", delta, direction)
 
-        # ── Extraction errors (only if any) — tooling reliability, co-equal
-        # headline with P/R/F1 but never mixed into it.
-        ee = result.extraction_errors
-        if ee and ee["count"] > 0:
+        # ── Eval tooling failures — the eval's own reliability, co-equal
+        # headline with P/R/F1 but never mixed into it. Extraction and
+        # checker failures speak the same language: excluded, counted, rated.
+        ee = result.extraction_errors or {"count": 0, "rate": 0.0, "by_cause": {}}
+        cf = result.checker_failures
+        if ee["count"] > 0 or cf["count"] > 0:
             logger.info("")
-            logger.info(" 💥 Extraction Errors (excluded from metrics)")
-            logger.info(
-                "    %d items failed  (error rate %.1f%%)",
-                ee["count"], ee["rate"] * 100,
+            logger.info(" 💥 Eval Tooling Failures  (excluded from all metrics)")
+            causes = ", ".join(
+                f"{cause}: {n}"
+                for cause, n in sorted(ee["by_cause"].items(), key=lambda kv: -kv[1])
             )
-            causes = sorted(ee["by_cause"].items(), key=lambda kv: -kv[1])
-            for i, (cause, n) in enumerate(causes):
-                prefix = "└─" if i == len(causes) - 1 else "├─"
-                logger.info("     %s %s: %d", prefix, cause, n)
-
-        # ── Abstention errors (only if any)
-        wa = result.abstention_errors["wrongful_answer"]
-        wab = result.abstention_errors["wrongful_abstention"]
-        if wa > 0 or wab > 0:
-            logger.info("")
-            logger.info(" ⚠️  Abstention Errors")
-            if wa > 0:
-                logger.info(
-                    "    Wrongful answers:     %d items → %d FP added",
-                    wa, result.abstention_errors["wrongful_answer_fp_penalty"],
+            logger.info(
+                "     ├─ Extraction:  %d items  (%.1f%%)%s",
+                ee["count"], ee["rate"] * 100, f"  → {causes}" if causes else "",
+            )
+            if cf["count"] > 0:
+                # warning level: the measurement is partial — this must
+                # survive quieter log configurations.
+                logger.warning(
+                    "     └─ Checker:     %d of %d verdicts  (%.1f%%, %d items)"
+                    " — run `eval checker` to qualify '%s'",
+                    cf["count"], cf["issued_verdicts"], cf["rate"] * 100,
+                    cf["items_affected"], self._checker_model,
                 )
-            if wab > 0:
+            else:
                 logger.info(
-                    "    Wrongful abstentions: %d items → %d FN added",
-                    wab, result.abstention_errors["wrongful_abstention_fn_penalty"],
+                    "     └─ Checker:     0 of %d verdicts  (0.0%%)",
+                    cf["issued_verdicts"],
                 )
 
         # ── Atomicity (orthogonal to coverage; only if measured)
@@ -1090,11 +1207,19 @@ class ExtractorEvaluator:
 
     def _log_done(self, result: ExtractorEvalResult) -> None:
         """Print ✅ Done summary line."""
+        rc = result.recall_counts
+        pc = result.precision_counts
         logger.info("")
         logger.info(
-            " ✅ Done: %d items compared · recall %d/%d GT claims (%d missed)"
-            " · precision %d/%d predictions (%d non-entailment)",
+            " ✅ Done: %d items compared"
+            " · recall %d/%d GT claims (%d missed, %d penalty)"
+            " · precision %d/%d predictions (%d unsupported, %d penalty)"
+            "%s",
             result.to_compare_items,
-            result.tp_recall, result.tp_recall + result.fn, result.fn,
-            result.tp_precision, result.tp_precision + result.fp, result.fp,
+            rc["covered"], rc["denominator"],
+            rc["missed"], rc["wrongful_abstention_penalty"],
+            pc["supported"], pc["denominator"],
+            pc["unsupported"], pc["wrongful_answer_penalty"],
+            (f" · 💥 {result.checker_failures['count']} unjudged excluded"
+             if result.checker_failures["count"] else ""),
         )

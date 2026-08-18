@@ -104,23 +104,38 @@ class ExtractorEvalResult:
 
     Returned by ExtractorEvaluator.evaluate() alongside a disagreement list.
     Uses IR metrics (Precision/Recall/F1) rather than classification metrics.
+
+    Metrics are None (never 0.0) when their denominator is empty: a zero
+    denominator means nothing was judged, and "not computable" is not a score.
+
+    The counts dicts are exhaustive partitions of the issued claims — every
+    claim of a side lands in exactly one bucket:
+        total = judged buckets + penalty + unjudged
+        denominator = total - unjudged   (unjudged claims leave the ratio)
     """
 
-    precision: float
-    recall: float
-    f1: float
-    tp_recall: int                         # GT triplets entailed by predictions (recall numerator)
-    tp_precision: int                      # pred triplets entailed by GT (precision numerator)
-    fp: int                                # predictions not supported by GT
-    fn: int                                # GT triplets not covered by predictions
+    precision: float | None
+    recall: float | None
+    f1: float | None
+    recall_counts: dict                    # {"total_gt_claims", "covered", "missed",
+                                           #  "wrongful_abstention_penalty", "unjudged",
+                                           #  "denominator"}
+    precision_counts: dict                 # {"total_pred_claims", "supported", "unsupported",
+                                           #  "wrongful_answer_penalty", "unjudged",
+                                           #  "denominator"}
     total_items: int                       # items in dataset
     to_compare_items: int                  # items with GT + predictions to compare
     gt_stats: dict                         # {"total_triplets": N, "avg_per_item": float}
     pred_stats: dict                       # {"total_triplets": N, "avg_per_item": float}
-    abstention_errors: dict                # {"wrongful_answer": N, "wrongful_abstention": N,
-                                           #  "wrongful_abstention_fn_penalty": N,
-                                           #  "wrongful_answer_fp_penalty": N}
+    abstention_errors: dict                # item counts: {"wrongful_answer": N,
+                                           #  "wrongful_abstention": N} — the claim-level
+                                           #  penalties live in the counts dicts
     correct_abstention: int                # items with neither GT nor predictions
+    checker_failures: dict                 # {"count": N, "issued_verdicts": N, "rate": float,
+                                           #  "items_affected": N, "unjudged_gt": N,
+                                           #  "unjudged_pred": N} — matching verdicts the
+                                           #  checker never returned; excluded from ALL
+                                           #  metrics, charged to the eval tooling
     atomicity: dict | None = None          # {"extracted_claims", "atomic_units",
                                            #  "non_atomic", "failed", "atomicity_rate",
                                            #  "information_density"} or None if skipped
