@@ -6,7 +6,7 @@ Owns no validation, filtering, or orchestration logic.
 The service layer handles all of that before calling us.
 
 Error handling:
-    generate_batch() returns list[str | LLMError].
+    generate_batch() returns list[str | WorkerError].
     Per-item errors are VALUES in the list, not raised exceptions.
     Fatal errors (auth, connection) propagate — the worker doesn't catch them.
     This worker classifies per-item errors, retries parse failures in
@@ -261,8 +261,7 @@ class Extractor:
                     stats.total_items += len(parsed.triplets)
                 else:
                     stats.empty += 1
-            except Exception as exc:
-                logger.debug("Parse failed for item %d: %s", i, exc)
+            except Exception:
                 stats.parse_error += 1
                 retry_indices.append(i)
                 stats.failed_indices.append(i)

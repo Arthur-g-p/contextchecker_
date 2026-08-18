@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import random
 import sqlite3
@@ -17,11 +18,12 @@ from openai import (
     RateLimitError, InternalServerError,
 )
 from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from pydantic import ValidationError
 
 from contextchecker.stats import GLOBAL_STATS
 from contextchecker import settings as default_config
-from contextchecker.exceptions import LLMClientError, LLMError, ContextTooLongError, ContentPolicyError, LLMParseError
+from contextchecker.exceptions import LLMClientError, WorkerError, ContextTooLongError, ContentPolicyError, LLMParseError
 from contextchecker.utils import build_compact_schema_example
 
 logger = default_config.get_logger(__name__)
@@ -56,11 +58,39 @@ RETRY_MATRIX = [
 ]
 
 
+# Seconds a request must be outstanding before the bar shows its age.
+HEARTBEAT_MIN_WAIT = 3.0
+
+# Wall-clock timer for the progress bar, bound at import. Tests patch
+# asyncio.sleep to skip back-offs, which would turn the heartbeat into a
+# spin loop; the bar's repaint interval is not a back-off.
+_ui_sleep = asyncio.sleep
+
+
+def _describe_error(e: Exception | None) -> str:
+    """One-line, human-readable rendering of an error for the console.
+
+    Pydantic's own repr is multi-line and blows past any truncation mid-word
+    ('... [type=json'), so validation errors get flattened to their locations
+    and messages instead.
+    """
+    if isinstance(e, ValidationError):
+        parts = []
+        for err in e.errors():
+            # A whole-body parse failure has no loc — don't prefix it with ': '.
+            loc = " -> ".join(str(x) for x in err.get("loc", []))
+            msg = err.get("msg", "")
+            parts.append(f"{loc}: {msg}" if loc else msg)
+        return " | ".join(parts)
+    return str(e)[:200]
+
+
 class ErrorAction(Enum):
     """What to do when an API error occurs."""
     FATAL = "fatal"   # Exit program — unrecoverable
     SKIP  = "skip"    # Return "", continue batch — per-item failure
     RETRY = "retry"   # Backoff and retry — transient
+    RESAMPLE = "resample" # Immediate retry, no backoff — response arrived but didn't parse
     RATE_LIMIT = "rate_limit" # Long backoff, no attempt increment
     SERVER_ERROR = "server_error" # Independent attempts backoff for infrastructure
 
@@ -118,6 +148,10 @@ class LLMClient:
         self._rate_limited_since: float | None = None  # monotonic start of current episode
         self._rate_limit_last_log = 0.0      # monotonic time of last 429 console message
 
+        # Start times of requests currently awaiting a response, keyed by call id.
+        self._inflight: dict[int, float] = {}
+        self._call_n = 0
+
         # Reuse a strategy already discovered this process for the same endpoint+model.
         self._try_adopt_cached_strategy()
 
@@ -155,6 +189,25 @@ class LLMClient:
     def strategy(self) -> RetryStrategy:
         """Current retry strategy."""
         return RETRY_MATRIX[self._strategy_index]
+
+
+    @contextlib.contextmanager
+    def _inflight_request(self):
+        """Mark a request as awaiting a response for the duration of the block."""
+        self._call_n += 1
+        key = self._call_n
+        self._inflight[key] = time.monotonic()
+        try:
+            yield
+        finally:
+            self._inflight.pop(key, None)
+
+
+    def oldest_inflight_age(self) -> float | None:
+        """Seconds the longest-waiting request has been outstanding, if any."""
+        if not self._inflight:
+            return None
+        return time.monotonic() - min(self._inflight.values())
 
 
     def _try_adopt_cached_strategy(self) -> bool:
@@ -313,8 +366,7 @@ class LLMClient:
             return ErrorAction.SKIP
 
         if e.__class__.__name__ == 'JSONSchemaValidationError':
-            logger.warning("⚠️  SCHEMA VALIDATION FAILED (%s): %s", self.model, str(e)[:300])
-            return ErrorAction.RETRY
+            return ErrorAction.RESAMPLE
 
         if isinstance(e, UnprocessableEntityError):
             logger.warning("⚠️  UNPROCESSABLE ENTITY (%s): %s", self.model, str(e)[:300])
@@ -435,15 +487,7 @@ class LLMClient:
             return ErrorAction.SERVER_ERROR
 
         if isinstance(e, ValidationError):
-            # Format validation errors nicely
-            error_details = []
-            for err in e.errors():
-                loc = " -> ".join(str(x) for x in err.get("loc", []))
-                msg = err.get("msg", "")
-                error_details.append(f"{loc}: {msg}")
-            details_str = " | ".join(error_details)
-            logger.warning("⚠️ LOCAL SCHEMA VALIDATION FAILED (%s): %s", self.model, details_str)
-            return ErrorAction.RETRY 
+            return ErrorAction.RESAMPLE
         # ── UNKNOWN ───────────────────────────────────────────────
 
         logger.warning("💥 UNEXPECTED ERROR (%s): %s: %s", self.model, type(e).__name__, str(e)[:300])
@@ -513,6 +557,7 @@ class LLMClient:
                 attempt = 0
                 schema_retries = 0
                 server_err_count = 0
+                only_parse_failures = True
 
                 while attempt <= max_retries:
                     sent_drop_params = False  # did THIS request carry drop_params?
@@ -577,7 +622,8 @@ class LLMClient:
                                         }
                                     call_kwargs["messages"] = patched_messages
 
-                            response = await self.client.chat.completions.parse(**call_kwargs)
+                            with self._inflight_request():
+                                response = await self.client.chat.completions.parse(**call_kwargs)
 
                         else:
                             # ── LiteLLM Path (no matrix, passthrough) ─────
@@ -597,7 +643,8 @@ class LLMClient:
                             if schema:
                                 call_kwargs["response_format"] = schema
 
-                            response = await acompletion(**call_kwargs)
+                            with self._inflight_request():
+                                response = await acompletion(**call_kwargs)
 
                         # ── Success ────────────────────────────────────
                         # A 429 episode (if any) has cleared — reset so a later one
@@ -653,6 +700,9 @@ class LLMClient:
 
                         if action != ErrorAction.SERVER_ERROR:
                             server_err_count = 0
+
+                        if action != ErrorAction.RESAMPLE:
+                            only_parse_failures = False
 
                         if action == ErrorAction.FATAL:
                             self._save_and_raise(f"FATAL: {type(e).__name__} — {str(e)[:200]}")
@@ -727,6 +777,14 @@ class LLMClient:
                             await asyncio.sleep(wait_time)
                             continue
 
+                        elif action == ErrorAction.RESAMPLE:
+                            # No backoff, waiting cannot make output parseable.
+                            if attempt < max_retries:
+                                attempt += 1
+                                continue
+                            else:
+                                break
+
                         elif action == ErrorAction.RETRY:
                             if attempt < max_retries:
                                 wait_time = 0.5 * (attempt + 1)
@@ -738,7 +796,8 @@ class LLMClient:
                                 break
 
                 # All retries exhausted for this try. Breaking
-                logger.error("🔴 FAILED after %d attempts. Last error: %s", attempt + 1, str(last_error)[:100])
+                if not only_parse_failures:
+                    logger.error("🔴 FAILED after %d attempts. Last error: %s", attempt + 1, _describe_error(last_error))
                 GLOBAL_STATS.log_error()
                 raise LLMParseError(f"Exhausted {attempt + 1} retries: {str(last_error)[:200]}") from last_error
 
@@ -789,7 +848,7 @@ class LLMClient:
         self.save_cache()
         raise LLMClientError(message)
 
-    async def _generate_safe(self, **task_args) -> str | LLMError:
+    async def _generate_safe(self, **task_args) -> str | WorkerError:
         """Wrapper that catches per-item errors and returns them as values.
 
         Fatal errors (LLMClientError) propagate — they kill the batch.
@@ -803,11 +862,11 @@ class LLMClient:
         # LLMClientError and anything else propagates → kills batch
 
 
-    async def generate_batch(self, tasks_data: list[dict], description="Processing", task: str = None) -> list[str | LLMError]:
+    async def generate_batch(self, tasks_data: list[dict], description="Processing", task: str = None) -> list[str | WorkerError]:
         """
-        Batch helper. Returns List[Union[str, LLMError]].
-        Successful items are strings, failed items are LLMError instances.
-        
+        Batch helper. Returns List[Union[str, WorkerError]].
+        Successful items are strings, failed items are WorkerError instances.
+
         Args:
             tasks_data: List of dicts with messages, schema, temperature, etc.
             description: tqdm progress bar label
@@ -826,30 +885,57 @@ class LLMClient:
         # inside standard asyncio.gather, ensuring perfect exception cancellation.
         pbar = tqdm(total=len(tasks_data), desc="  " + description)
 
+        failed = 0
+
+        def _set_postfix():
+            bits = []
+            waiting = self.oldest_inflight_age()
+            # Below a few seconds the number is noise that flickers every tick.
+            if waiting is not None and waiting >= HEARTBEAT_MIN_WAIT:
+                bits.append(f"waiting {waiting:.0f}s/{self.timeout:.0f}s")
+            if failed:
+                bits.append(f"{failed} failed")
+            pbar.set_postfix_str(" · ".join(bits), refresh=False)
+
         async def _run_and_update(args):
+            nonlocal failed
             completed = False
             try:
                 res = await _run_safe(args)
                 completed = True
+                # ParsingError is not an LLMError
+                if isinstance(res, Exception):
+                    failed += 1
                 return res
             finally:
                 if completed:
+                    _set_postfix()
                     pbar.update(1)
 
+        async def _heartbeat():
+            """Repaint on a timer so the elapsed clock moves while requests hang."""
+            while True:
+                await _ui_sleep(1.0)
+                _set_postfix()
+                pbar.refresh()
+
         tasks = [asyncio.create_task(_run_and_update(args)) for args in tasks_data]
-        try:
-            results = await asyncio.gather(*tasks)
-        except BaseException as e:
-            # Cancel all other tasks immediately!
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-            # Wait for all tasks to be cancelled/done to avoid orphaned tasks
-            await asyncio.gather(*tasks, return_exceptions=True)
-            self.save_cache()
-            raise
-        finally:
-            pbar.close()
+        heartbeat = asyncio.create_task(_heartbeat())
+        with logging_redirect_tqdm(loggers=[logger.parent]):
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException as e:
+                # Cancel all other tasks immediately!
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                # Wait for all tasks to be cancelled/done to avoid orphaned tasks
+                await asyncio.gather(*tasks, return_exceptions=True)
+                self.save_cache()
+                raise
+            finally:
+                heartbeat.cancel()
+                pbar.close()
 
         # Scan for fatal LLMClientError that leaked through as a value (just in case)
         for r in results:

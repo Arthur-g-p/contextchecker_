@@ -245,8 +245,7 @@ class Checker:
                 )
                 stats.success += 1
                 stats.total_items += 1
-            except Exception as exc:
-                logger.debug("Parse failed for item %d: %s", i, exc)
+            except Exception:
                 stats.parse_error += 1
                 retry_indices.append(i)
                 stats.failed_indices.append(i)
@@ -445,8 +444,7 @@ class Checker:
                 # Save the successful ones
                 results[i].update(chunk_result)
 
-            except Exception as exc:
-                logger.debug("Failed to parse joint check result for chunk %d: %s", i, exc)
+            except Exception:
                 stats.parse_error += 1
                 retryable_claims[i] = expected_ids.copy()
                 stats.failed_indices.append(i)
@@ -519,8 +517,7 @@ class Checker:
                     else:
                         round_result.recovered += 1
 
-                except Exception as exc:
-                    logger.debug("Failed to parse joint retry result for chunk %d: %s", idx, exc)
+                except Exception:
                     next_retryable[idx] = failed_ids
                     round_result.still_failed += 1
 

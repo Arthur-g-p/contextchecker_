@@ -5,6 +5,10 @@ Rate limits (429) must never drop an item: the request is retried indefinitely,
 honoring a server Retry-After when present (or a jittered fallback otherwise),
 and aborting only if the server asks to wait longer than the configured cap.
 
+A parse failure is not a transient server condition: the response arrived and was
+billed, it just wasn't valid JSON. Those retry immediately, with no back-off —
+while genuinely transient errors keep theirs.
+
 drop_params is a LiteLLM-proxy-only field. Against a direct endpoint it 400s, so
 the client learns the endpoint type via an A/B probe: on the first drop_params
 rejection it retries the SAME strategy without drop_params (keeping reasoning),
@@ -22,10 +26,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openai import RateLimitError, BadRequestError
+from openai import RateLimitError, BadRequestError, ConflictError
+from pydantic import BaseModel, ValidationError
 
 from contextchecker.llmclient import LLMClient, RETRY_MATRIX
-from contextchecker.exceptions import LLMClientError
+from contextchecker.exceptions import LLMClientError, LLMParseError
 
 
 BASE_URL = "http://fake/v1"
@@ -58,6 +63,23 @@ def _rate_limit_error(retry_after=None) -> RateLimitError:
         response=_httpx_response(429, headers),
         body=None,
     )
+
+
+class _Probe(BaseModel):
+    ok: bool
+
+
+def _validation_error() -> ValidationError:
+    """A real pydantic ValidationError, as .parse() raises on unparseable output."""
+    try:
+        _Probe.model_validate_json("Entailment: [1]")
+    except ValidationError as e:
+        return e
+    raise AssertionError("expected a ValidationError")
+
+
+def _conflict_error() -> ConflictError:
+    return ConflictError(message="conflict", response=_httpx_response(409), body=None)
 
 
 def _bad_request(message: str) -> BadRequestError:
@@ -172,6 +194,94 @@ class TestRateLimit:
         rate_msgs = [m for m in msgs if "Rate limited by" in m]
         assert len(rate_msgs) == 1                       # one per episode, not per 429
         assert not any("Attempt" in m for m in msgs)     # bogus label removed
+
+
+# ── Parse failures ───────────────────────────────────────────────
+
+
+@pytest.mark.integration
+class TestParseRetryNoBackoff:
+
+    async def test_parse_failure_retries_without_sleeping(self, tmp_path):
+        """Unparseable output is resampled immediately — no back-off."""
+        c = _make_client(tmp_path, discovered=True)
+        c.client.chat.completions.parse.side_effect = [
+            _validation_error(),
+            _validation_error(),
+            _fake_response(),
+        ]
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            out = await c.generate([{"role": "user", "content": "hi"}])
+
+        assert out == '{"ok": true}'
+        assert c.client.chat.completions.parse.call_count == 3
+        mock_sleep.assert_not_called()
+
+    async def test_transient_error_still_backs_off(self, tmp_path):
+        """Regression guard for the RETRY/RESAMPLE split: a real transient
+        error (409) keeps the back-off that parse failures lost."""
+        c = _make_client(tmp_path, discovered=True)
+        c.client.chat.completions.parse.side_effect = [
+            _conflict_error(),
+            _fake_response(),
+        ]
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            out = await c.generate([{"role": "user", "content": "hi"}])
+
+        assert out == '{"ok": true}'
+        assert mock_sleep.call_args.args[0] == 0.5
+
+    async def test_attempt_accounting_is_unchanged(self, tmp_path):
+        """Dropping the sleep must not change how many attempts an item gets."""
+        c = _make_client(tmp_path, discovered=True)
+        c.client.chat.completions.parse.side_effect = [_validation_error()] * 3
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(LLMParseError, match="Exhausted 3 retries"):
+                await c.generate([{"role": "user", "content": "hi"}])
+
+        assert c.client.chat.completions.parse.call_count == 3
+
+    async def test_exhausted_parse_failure_is_silent(self, tmp_path, caplog):
+        """The expected case is counted on the bar and in stats — not printed."""
+        c = _make_client(tmp_path, discovered=True)
+        c.client.chat.completions.parse.side_effect = [_validation_error()] * 3
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with caplog.at_level(logging.ERROR, logger="contextchecker"):
+                with pytest.raises(LLMParseError):
+                    await c.generate([{"role": "user", "content": "hi"}])
+
+        assert caplog.records == []
+
+    async def test_mixed_sequence_ending_in_parse_failure_reports(self, tmp_path, caplog):
+        """Gating on the last error alone would silence this — a transient error
+        occurred, so the item is not the expected all-parse-failure case."""
+        c = _make_client(tmp_path, discovered=True)
+        c.client.chat.completions.parse.side_effect = [
+            _conflict_error(),
+            _validation_error(),
+            _validation_error(),
+        ]
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with caplog.at_level(logging.ERROR, logger="contextchecker"):
+                with pytest.raises(LLMParseError):
+                    await c.generate([{"role": "user", "content": "hi"}])
+
+        assert any("FAILED after 3 attempts" in r.getMessage() for r in caplog.records)
+
+    async def test_exhausted_transient_error_still_reports(self, tmp_path, caplog):
+        """A non-parse exhaustion is unusual — it keeps its line."""
+        c = _make_client(tmp_path, discovered=True)
+        c.client.chat.completions.parse.side_effect = [_conflict_error()] * 3
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with caplog.at_level(logging.ERROR, logger="contextchecker"):
+                with pytest.raises(LLMParseError):
+                    await c.generate([{"role": "user", "content": "hi"}])
+
+        assert any("FAILED after 3 attempts" in r.getMessage() for r in caplog.records)
 
 
 # ── drop_params A/B probe ────────────────────────────────────────
