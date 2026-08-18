@@ -397,7 +397,7 @@ class AtomizationService(BaseService):
 
         logger.info(" 📝 Atomization:")
         logger.info(
-            "    %d input triplets → %d output triplets", stats["input"], stats["output"]
+            "    %d input claims → %d output claims", stats["input"], stats["output"]
         )
 
         # Only present sections show; the last one gets the └─ connector.

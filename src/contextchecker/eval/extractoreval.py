@@ -1097,10 +1097,13 @@ class ExtractorEvaluator:
             )
         else:
             logger.info("     ├─ ⚪ 0 wrongful-abstention penalty")
-        logger.info(
-            "     ├─ 💥 %d unjudged by checker  (excluded from evaluation! No verdict for %d claims.)",
-            rc["unjudged"], rc["unjudged"],
-        )
+        if rc["unjudged"]:
+            logger.info(
+                "     ├─ 💥 %d unjudged by checker  (excluded from evaluation — no verdict returned)",
+                rc["unjudged"],
+            )
+        else:
+            logger.info("     ├─ 💥 0 unjudged by checker")
         logger.info("     └─ → Recall %s", self._fmt_ratio(result.recall, rc["covered"], rc["denominator"]))
 
         logger.info("    Precision — %d total predicted claims", pc["total_pred_claims"])
@@ -1114,10 +1117,13 @@ class ExtractorEvaluator:
             )
         else:
             logger.info("     ├─ ⚪ 0 wrongful-answer penalty")
-        logger.info(
-            "     ├─ 💥 %d unjudged by checker  (excluded from evaluation! No verdict for %d claims.)",
-            pc["unjudged"], pc["unjudged"],
-        )
+        if pc["unjudged"]:
+            logger.info(
+                "     ├─ 💥 %d unjudged by checker  (excluded from evaluation — no verdict returned)",
+                pc["unjudged"],
+            )
+        else:
+            logger.info("     ├─ 💥 0 unjudged by checker")
         logger.info("     └─ → Precision %s", self._fmt_ratio(result.precision, pc["supported"], pc["denominator"]))
 
         logger.info("    F1: %s", "n/a" if result.f1 is None else f"{result.f1:.3f}")
@@ -1126,13 +1132,13 @@ class ExtractorEvaluator:
         logger.info("")
         logger.info(" 📊 Extraction Stats")
         logger.info(
-            "    GT:    %d triplets across %d items  (avg %.1f/item)",
+            "    GT:    %d claims across %d items  (avg %.1f/item)",
             result.gt_stats["total_triplets"],
             result.to_compare_items,
             result.gt_stats["avg_per_item"],
         )
         logger.info(
-            "    Pred:  %d triplets across %d items  (avg %.1f/item)",
+            "    Pred:  %d claims across %d items  (avg %.1f/item)",
             result.pred_stats["total_triplets"],
             result.to_compare_items,
             result.pred_stats["avg_per_item"],
