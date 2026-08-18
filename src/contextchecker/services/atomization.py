@@ -141,21 +141,10 @@ class AtomizationService(BaseService):
         - response text (needed as LLM context for atomization)
         """
         valid = []
-        for i, item in enumerate(data):
-            if self._source_kg_key not in item:
-                logger.debug(
-                    "Item %d has no '%s' key — skipping.", i, self._source_kg_key,
-                )
+        for item in data:
+            if not item.get(self._source_kg_key):
                 continue
-            if not item[self._source_kg_key]:
-                logger.debug(
-                    "Item %d has empty '%s' — skipping.", i, self._source_kg_key,
-                )
-                continue
-            if "response" not in item or not item["response"]:
-                logger.debug(
-                    "Item %d has no 'response' key — skipping.", i,
-                )
+            if not item.get("response"):
                 continue
             valid.append(item)
 
@@ -422,9 +411,9 @@ class AtomizationService(BaseService):
             last = i == len(rows) - 1
             conn = "└─" if last else "├─"
             if kind == "atomic":
-                logger.info("    %s ✅ %d triplets already atomic", conn, keep)
+                logger.info("    %s ✅ %d claims already atomic", conn, keep)
             elif kind == "split":
-                logger.info("    %s 🔀 %d compound triplets split", conn, split)
+                logger.info("    %s 🔀 %d compound claims split", conn, split)
                 bar = "    " if last else "│   "
                 word = "claim" if gross_new == 1 else "claims"
                 logger.info("    %s└─ ➕ %d new %s from splitting", bar, gross_new, word)

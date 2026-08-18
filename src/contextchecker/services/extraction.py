@@ -376,7 +376,7 @@ class ExtractionService(BaseService):
         if empty_count > 0:
             tail.append(("⚪", f"{empty_count} abstentions → 0 claims"))
         prefix = "├─" if tail else "└─"
-        logger.info("     %s 💎 %d items → %d triplets", prefix, with_claims, claims)
+        logger.info("     %s 💎 %d items → %d claims", prefix, with_claims, claims)
         for i, (icon, text) in enumerate(tail):
             prefix = "└─" if i == len(tail) - 1 else "├─"
             logger.info("     %s %s %s", prefix, icon, text)

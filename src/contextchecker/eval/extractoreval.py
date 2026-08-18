@@ -1062,9 +1062,9 @@ class ExtractorEvaluator:
             logger.info("")
             logger.info(" 🧬 Atomicity")
             if a.get("failed"):
-                logger.info("    ⚠️  %d triplets failed atomization (omitted from stats)", a["failed"])
+                logger.info("    ⚠️  %d claims failed atomization (omitted from stats)", a["failed"])
             logger.info(
-                "    Evaluated:   %d triplets → %d atomic units",
+                "    Evaluated:   %d claims → %d atomic units",
                 a.get("evaluated_claims", a["extracted_claims"] - a.get("failed", 0)), 
                 a["atomic_units"],
             )
@@ -1072,7 +1072,7 @@ class ExtractorEvaluator:
                 "    Non-atomic:  %d  (atomicity %.1f%%)",
                 a["non_atomic"], a["atomicity_rate"] * 100,
             )
-            logger.info("    Density:     %.2f facts/triplet", a["information_density"])
+            logger.info("    Density:     %.2f facts/claim", a["information_density"])
 
         # ── Duplicates (orthogonal to coverage; read-only, never deduped here)
         d = result.duplicates
