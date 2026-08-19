@@ -118,7 +118,7 @@ class FaithfulnessPipeline(BaseService):
 
         1. Validate     - hard drop: response + retrieved_context required
                           non-empty; chunks normalized to {doc_id, text}
-        2. Filter       - none (no skipping; crash cache covers re-runs)
+        2. Filter       - none (no skipping)
         3. Log pre-exec - validation + config
         4. Execute      - extraction, then the matrix direction
         5. Serialize    - none in place; report goes to last_report
@@ -174,7 +174,7 @@ class FaithfulnessPipeline(BaseService):
         return valid
 
     def _filter(self, valid):
-        """No skipping; the LLM crash cache covers re-run economics."""
+        """No skipping — a failed run is re-run from the start."""
         pass
 
     # -- Report (the single output artifact) --

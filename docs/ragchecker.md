@@ -48,10 +48,9 @@ check per (item, chunk) and fold back `{chunk_index: verdict}` dicts —
 keyed by position, because a corpus chunked from one document repeats the
 same doc_id across its chunks.
 
-Crash economics: every LLM response is persisted to `.rag_crash_cache.db`;
-a run that dies in direction 3 of 4 replays directions 1–2 from sqlite on
-re-run. There is no item-level skipping in v1 (planned for 2.0 together
-with report re-ingestion for manually corrected ground truth).
+There is no item-level skipping in v1 (planned for 2.0 together with
+report re-ingestion for manually corrected ground truth). A run that dies
+part-way is re-run from the start.
 
 ## Output: the report (single artifact)
 

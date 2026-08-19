@@ -387,7 +387,7 @@ class RagCheckerPipeline(BaseService):
         1. Validate     - hard drop: response, gt_answer, retrieved_context
                           all required non-empty; chunks normalized to
                           {doc_id, text} dicts
-        2. Filter       - none (v1: no skipping; crash cache covers re-runs)
+        2. Filter       - none (v1: no skipping)
         3. Log pre-exec - validation + config (announce=False in variance
                           mode after run 1 - they are run-invariant)
         4. Execute      - 2 extractions, then the 4 directions
@@ -457,7 +457,7 @@ class RagCheckerPipeline(BaseService):
         return valid
 
     def _filter(self, valid):
-        """No skipping in v1 (2.0 feature); LLM crash cache covers re-runs."""
+        """No skipping in v1 (2.0 feature)."""
         pass
 
     # -- Report (the single output artifact) --

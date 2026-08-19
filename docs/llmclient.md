@@ -98,18 +98,6 @@ ValidationError              → RETRY
 Unknown                      → RETRY
 ```
 
-## Crash Cache
-
-On fatal errors or rate limit exhaustion, the client saves all successful responses to a local SQLite file (`.rag_crash_cache.db`). On the next run, cached responses are loaded and skipped — the user picks up where they left off without re-processing (and re-paying for) completed items.
-
-**Lifecycle:**
-
-1. Run starts → check for existing cache file → load if found
-2. Each successful API response → stored in memory dict
-3. Fatal error → dump memory dict to SQLite → raise exception
-4. Next run → cache loaded → cached items return instantly → new items processed normally
-5. Successful completion → caller deletes cache file (nothing to recover)
-
 ## Error Propagation
 
 ```
@@ -121,7 +109,7 @@ LLMClient.generate()
   │
   └─ fatal error (Auth, Connection, Budget)
       └─ _generate_safe() does NOT catch → propagates
-          └─ generate_batch() saves cache → re-raises
+          └─ generate_batch() re-raises
               └─ Worker lets it propagate
                   └─ Service lets it propagate
                       └─ CLI catches ContextCheckerError → logs → exit(1)

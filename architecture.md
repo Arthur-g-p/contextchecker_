@@ -38,13 +38,9 @@ CLI (controllers)  →  Pipelines / Services (orchestration)  →  Workers (exec
   eval result dataclasses).
 - `llmclient.py` — shared LLM client (top-level, not in workers/). Owns
   connection preflight, response-format strategy discovery + process-level
-  caching, drop-params handling, and the crash cache: on a FATAL error,
-  in-flight responses are saved to `.rag_crash_cache.db` (sqlite) so the
-  next run resumes without re-paying; on successful completion the client
-  deletes the file. It exists ONLY to rescue crashed runs — it never
-  replays across successful runs. Per-item errors (ContextTooLong,
+  caching, and drop-params handling. Per-item errors (ContextTooLong,
   ContentPolicy, parse) are returned as *values* in the batch result list;
-  fatal errors (auth, connection, budget) save the cache and propagate.
+  fatal errors (auth, connection, budget) propagate.
   **[UNVERIFIED: internals beyond this contract]**
 - `stats.py` — `PhaseStats` (per-batch outcomes incl. per-index
   `error_causes`), `RoundResult`, global `TokenStats`, shared log helpers.
@@ -162,7 +158,7 @@ LLMClient.generate()
   │    → worker classifies: permanent vs retryable, records error_causes
   │    → service persists {model}_extraction_error / {namespace}_error
   └─ fatal error (Auth, Connection, Budget)
-       → crash cache saved → re-raised → propagates through worker + service
+       → re-raised → propagates through worker + service
        → CLI catches ContextCheckerError → logs → exit(1)
 ```
 
