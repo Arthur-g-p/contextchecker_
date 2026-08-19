@@ -7,15 +7,21 @@ The caller-facing interface is identical, so it subclasses BaseService - there
 is no separate pipeline base (see the note in services/base.py).
 
 It talks to services only, never a worker. The two services consolidate their
-results into the shared data in place, so this class serializes nothing of its
-own; the controller (cli.py) persists the returned data.
+results into the shared data in place; this class wraps them in the report
+envelope (`_meta` + `results`) that every other report-producing command emits,
+and the controller (cli.py) persists it from `last_report`.
 """
+
+import time
+from datetime import datetime
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
+from contextchecker.pipelines.directions import unwrap_items
 from contextchecker.services.base import BaseService
-from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
+from contextchecker.services.extraction import ExtractionService
+from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
 
@@ -40,6 +46,7 @@ class RefCheckerPipeline(BaseService):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
         self._init_verbosity(verbosity)
+        self.last_report: dict | None = None
 
         # Compose the two services. Each fail-fasts on its own API key here.
         self._extraction = ExtractionService(
@@ -69,13 +76,17 @@ class RefCheckerPipeline(BaseService):
         2. Filter       - none (pass); child services filter their own
         3. Log pre-exec - validation + config
         4. Execute      - delegate to ExtractionService then CheckingService
-        5. Serialize    - none; the services consolidated into data already
+        5. Serialize    - none in place (the services consolidated into data
+                          already); the report lands on last_report
         6. Log results  - done line
         7. Return mutated data
 
         Raises InvalidInputError if no item carries both keys.
         """
-        self._canonicalize_keys(data)                 # Step 0: normalize aliases
+        self._started_at = datetime.now().isoformat(timespec="seconds")
+        self._started_perf = time.perf_counter()
+        data = unwrap_items(data)                     # Step 0: accept a
+        self._canonicalize_keys(data)                 # {"results": [...]} envelope
         valid = self._validate(data)                  # 1
         #self._filter(valid)                          # 2 (no-op)
         self._log_validation(len(data), len(valid))   # 3
@@ -85,6 +96,7 @@ class RefCheckerPipeline(BaseService):
         await self._checking.run(valid)               #    writes verdicts onto each triplet
 
         self._serialize()                             # 5 (no-op)
+        self.last_report = self.build_report(data)    #    the single artifact
         self._log_results(len(data), len(valid))      # 6
         return data                                   # 7
 
@@ -120,6 +132,40 @@ class RefCheckerPipeline(BaseService):
 
     def _serialize(self, *args, **kwargs) -> None:
         pass
+
+    # -- Report --
+
+    def build_report(self, data: list[dict]) -> dict:
+        """The single output artifact: `_meta` + the checked items.
+
+        Pure projection - loss-free from the in-memory items, no LLM calls,
+        safe to rebuild anytime. Unlike ragcheck/faithcheck there are no
+        metrics to aggregate: refcheck produces claim-level verdicts, and the
+        items already carry them.
+        """
+        dropped = sum(
+            1 for item in data
+            if not isinstance(item, dict)
+            or any(k not in item for k in ("response", "reference"))
+        )
+        timestamp, duration = self._run_timing()
+        return {
+            "_meta": build_meta(
+                "refcheck",
+                timestamp=timestamp,
+                duration_seconds=duration,
+                total_items=len(data),
+                evaluated_items=len(data) - dropped,
+                dropped_items=dropped,
+            ),
+            "results": data,
+        }
+
+    def _run_timing(self) -> tuple[str, float]:
+        """(timestamp, elapsed) for the report envelope; safe before a run."""
+        if not hasattr(self, "_started_at"):
+            return datetime.now().isoformat(timespec="seconds"), 0.0
+        return self._started_at, time.perf_counter() - self._started_perf
 
     # -- Logging --
 

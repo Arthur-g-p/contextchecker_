@@ -72,6 +72,7 @@ class TestMetaConformance:
     @pytest.mark.parametrize("report_type,extras", [
         ("ragcheck", {}),
         ("faithcheck", {}),
+        ("refcheck", {}),
         ("checker_eval", {}),
         ("extractor_eval", {"pred_key": "m_response_kg", "matching": "llm-2-pass"}),
     ])

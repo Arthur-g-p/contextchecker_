@@ -85,6 +85,12 @@ contextchecker refcheck examples/refcheck/kepler22b.json \
 Use 01 + 02 when you want the intermediate claims on disk to inspect or edit.
 Use `refcheck` when you only care about the verdicts.
 
+One difference in the *file*, not the verdicts: steps 01 and 02 emit the bare
+item list, so each step's output feeds straight into the next. `refcheck` is a
+pipeline, not a building block, so it emits a report — `_args`, `_meta`, and
+the items under `results` — the same envelope `ragcheck` and `faithcheck`
+write. It also accepts that envelope as input.
+
 ## 04 · faithcheck — `faithcheck/kepler22b.json`
 
 This checks which claims are actually **faithful to the context**. No ground

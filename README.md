@@ -164,9 +164,14 @@ spelled the same way in every command, so those are the ones worth learning.
 [examples/README.md](examples/README.md) lists which fields and which arguments
 each step needs.
 
-Every command writes a single self-contained JSON report including a
-`_meta` block (models, config, timings), overall metrics, and per-claim
-verdicts. `contextchecker --help` lists all commands and flags.
+The pipelines and evals (`ragcheck`, `faithcheck`, `refcheck`, `eval
+extractor`, `eval checker`) write a single self-contained JSON report: an
+`_args` block (what you asked for — every flag of the invocation), a `_meta`
+block (what the run turned out to be — counts, timings, derived keys),
+metrics where the command computes any, and per-claim verdicts. The building
+blocks (`extract`, `check`, `atomize`) instead emit the item list itself,
+enriched in place, so each one's output is the next one's input.
+`contextchecker --help` lists all commands and flags.
 
 ## Using other providers and local models
 

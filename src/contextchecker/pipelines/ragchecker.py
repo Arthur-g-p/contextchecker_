@@ -400,7 +400,7 @@ class RagCheckerPipeline(BaseService):
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
         data = unwrap_items(data)                     # Step 0: accept the
-        self._canonicalize_keys(data)                 # paper's {"results": [...]}
+        self._canonicalize_keys(data)                 # {"results": [...]}
         valid = self._validate(data)                  # envelope; query→question
 
         self._filter(valid)                           # 2 (no-op)

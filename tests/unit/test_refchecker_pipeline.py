@@ -161,3 +161,68 @@ class TestRun:
         p = _running_pipeline()
         with pytest.raises(InvalidInputError):
             p.run_sync([{"id": "bad"}])
+
+
+# ── Report envelope: _meta + results, like every other report producer ───────
+
+class TestReport:
+
+    def test_run_populates_last_report(self):
+        p = _running_pipeline()
+        p.run_sync([_item()])
+        assert list(p.last_report) == ["_meta", "results"]
+        assert p.last_report["_meta"]["report_type"] == "refcheck"
+
+    def test_results_carry_the_checked_items(self):
+        p = _running_pipeline()
+        data = [_item()]
+        p.run_sync(data)
+        results = p.last_report["results"]
+        assert results is data
+        assert results[0][KG_KEY][0][VERDICT_KEY] == "Entailment"
+
+    def test_meta_counts_dropped_items(self):
+        """Invalid items stay in results but are counted, not evaluated."""
+        p = _running_pipeline()
+        p.run_sync([_item(item_id="good"), {"id": "bad"}])
+        meta = p.last_report["_meta"]
+        assert (meta["total_items"], meta["evaluated_items"],
+                meta["dropped_items"]) == (2, 1, 1)
+        assert len(p.last_report["results"]) == 2
+
+    def test_no_arguments_leak_into_meta(self):
+        """Models are given, not discovered — they belong in _args."""
+        p = _running_pipeline()
+        p.run_sync([_item()])
+        assert "extractor_model" not in p.last_report["_meta"]
+        assert "checker_model" not in p.last_report["_meta"]
+
+    def test_last_report_is_none_before_a_run(self):
+        assert _pipeline().last_report is None
+
+    def test_build_report_is_pure_projection(self):
+        """Rebuildable anytime, no LLM calls, same content."""
+        p = _running_pipeline()
+        data = [_item()]
+        p.run_sync(data)
+        assert p.build_report(data)["results"] == p.last_report["results"]
+
+
+# ── Envelope input: {"results": [...]} accepted, like ragcheck/faithcheck ────
+
+class TestEnvelopeInput:
+
+    def test_results_envelope_is_unwrapped(self):
+        p = _running_pipeline()
+        p.run_sync({"results": [_item()]})
+        assert p.last_report["results"][0][KG_KEY][0][VERDICT_KEY] == "Entailment"
+
+    def test_bare_list_still_accepted(self):
+        p = _running_pipeline()
+        p.run_sync([_item()])
+        assert p.last_report["_meta"]["total_items"] == 1
+
+    def test_neither_list_nor_envelope_raises(self):
+        p = _running_pipeline()
+        with pytest.raises(InvalidInputError):
+            p.run_sync({"items": [_item()]})

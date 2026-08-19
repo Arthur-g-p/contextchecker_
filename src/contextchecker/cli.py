@@ -339,14 +339,15 @@ def refcheck(
             joint_num=joint_num,
             max_words=max_words,
         )
-        result = pipeline.run_sync(data)
+        pipeline.run_sync(data)
+        report = pipeline.last_report
     except ContextCheckerError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write output
-    output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    report = {"_args": _capture_args("refcheck"), **report}
+    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Results written to %s", output_file)
 
 
