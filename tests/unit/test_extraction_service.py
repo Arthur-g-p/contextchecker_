@@ -378,7 +378,7 @@ class TestWorkerErrorCauses:
         from contextchecker.models import ExtractionPayload
 
         with patch("contextchecker.workers.extractor.LLMClient"):
-            extractor = Extractor(api_key=FAKE_API_KEY, model=MODEL, max_retries=1)
+            extractor = Extractor(api_key=FAKE_API_KEY, model=MODEL)
 
         async def always_invalid(tasks, **kwargs):
             return [ValueError("not json") for _ in tasks]

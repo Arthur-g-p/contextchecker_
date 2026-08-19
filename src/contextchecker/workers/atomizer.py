@@ -54,15 +54,15 @@ class AtomizationDecision(BaseModel):
 
 @dataclass
 class RetryRoundConfig:
-    """Config for one retry round."""
+    """Config for one retry round. Prompt can be 'standard' or 'vanilla'."""
     temperature: float = 0.3
     prompt: str = "standard"
 
 
-# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 higher still.
+# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 vanilla.
 DEFAULT_RETRY_ROUNDS = [
     RetryRoundConfig(temperature=0.3, prompt="standard"),
-    RetryRoundConfig(temperature=0.5, prompt="standard"),
+    RetryRoundConfig(temperature=0.5, prompt="vanilla"),
 ]
 
 
@@ -82,7 +82,6 @@ class Atomizer:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
-        max_retries: int | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -94,21 +93,27 @@ class Atomizer:
         self._prompt_template = settings.PROMPTS["atomizer_prompt"]
         self.last_stats: PhaseStats | None = None
 
-        # Retry config
-        if max_retries is None:
-            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS)
-        else:
-            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS[:max_retries])
+        # Vanilla prompt for retry — falls back to the standard template if
+        # "atomizer_prompt_vanilla" is not in prompt_map.json
+        self._vanilla_prompt = settings.PROMPTS.get("atomizer_prompt_vanilla", None)
+
+        self._retry_rounds = DEFAULT_RETRY_ROUNDS
 
     # ── Message builders ─────────────────────────────────────────
 
-    def _build_messages(self, payload: AtomizationPayload) -> list[dict]:
+    def _build_messages(
+        self, payload: AtomizationPayload, prompt_type: str = "standard",
+    ) -> list[dict]:
         """Build chat messages for a single atomization call.
 
         Substitutes structured S/P/O + response into the prompt template
         so the LLM sees labeled roles, never an ambiguous joined string.
         """
-        prompt = format_prompt(self._prompt_template, {
+        template = self._prompt_template
+        if prompt_type == "vanilla" and self._vanilla_prompt:
+            template = self._vanilla_prompt
+
+        prompt = format_prompt(template, {
             "subject": payload.subject,
             "predicate": payload.predicate,
             "object": payload.object,
@@ -124,11 +129,15 @@ class Atomizer:
     ) -> dict:
         """Build a generate_batch task dict for one item.
 
-        Uses the round config to determine temperature.
-        None means first pass (temp 0.0).
+        Uses the round config to determine prompt and temperature.
+        None means first pass (standard prompt, temp 0.0).
         """
-        messages = self._build_messages(payload)
-        temperature = 0.0 if round_config is None else round_config.temperature
+        if round_config is None:
+            messages = self._build_messages(payload)
+            temperature = 0.0
+        else:
+            messages = self._build_messages(payload, round_config.prompt)
+            temperature = round_config.temperature
 
         return {
             "messages": messages,
@@ -165,7 +174,7 @@ class Atomizer:
         raw_responses = await self.client.generate_batch(
             tasks, description=description or "Atomizing", task="atomize",
         )
-        stats.http_requests += len(tasks)
+        stats.http_requests += self.client.last_batch_requests
         stats.first_pass_count = len(tasks)
 
         results, retry_indices = self._classify(raw_responses, originals, stats)
@@ -177,8 +186,9 @@ class Atomizer:
                 break
 
             logger.info(
-                "   ♻️  Round %d: retrying %d items (temp=%.1f)...",
+                "   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
                 round_num + 1, len(retry_indices), round_config.temperature,
+                round_config.prompt,
             )
 
             retry_tasks = [
@@ -188,7 +198,7 @@ class Atomizer:
             raw_retries = await self.client.generate_batch(
                 retry_tasks, description=f"Retry round {round_num + 1}", task="atomize",
             )
-            stats.http_requests += len(retry_tasks)
+            stats.http_requests += self.client.last_batch_requests
 
             round_result, retry_indices = self._apply_retries(
                 raw_retries, retry_indices, results, originals, stats,

@@ -57,9 +57,6 @@ _ARGS_ORDER = (
     "joint",
     "joint_num",
     "max_words",
-    "max_retries",
-    "extractor_max_retries",
-    "checker_max_retries",
     "dedup",
     "runs",
     "concurrency",
@@ -140,7 +137,6 @@ def extract(
     output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_extract.json."),
     model: str = typer.Option(None, "--extractor-model", "--model", "-m", help="Model name used as key prefix."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the LLM API."),
-    max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2. Max: Amount of retry stategies defined."),
     dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Remove exact (s,p,o) duplicate triplets from the output. On by default (loss-free cleanup)."),
     concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
@@ -167,7 +163,7 @@ def extract(
 
     # Call service
     try:
-        service = ExtractionService(model=model, base_url=extractor_base_api, max_retries=max_retries, dedup=dedup, concurrency=concurrency)
+        service = ExtractionService(model=model, base_url=extractor_base_api, dedup=dedup, concurrency=concurrency)
         result = service.run_sync(data)
     except ContextCheckerError as exc:
         logger.error("")
@@ -189,7 +185,6 @@ def check(
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Use joint checking (multiple claims per LLM call). Default: on."),
     joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per LLM call. Default: 6000 in joint mode, unset in single."),
-    max_retries: int = typer.Option(None, "--max-retries", help="Max retry rounds for API/parsing failures."),
     concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
@@ -223,7 +218,6 @@ def check(
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            max_retries=max_retries,
         )
         result = service.run_sync(data)
     except ContextCheckerError as exc:
@@ -243,7 +237,6 @@ def atomize(
     model: str = typer.Option(None, "--atomizer-model", "--model", "-m", help="Model name for the atomizer LLM."),
     source_kg_key: str = typer.Option(..., "--source-kg-key", "-s", help="Key containing triplets to atomize (e.g. 'gemini-3.1_response_kg')."),
     atomizer_base_api: str = typer.Option(None, "--atomizer-base-api", help="Optional base URL for the atomizer LLM API."),
-    max_retries: int = typer.Option(2, "--max-retries", help="Max retry rounds for failed parse errors. Default: 2."),
     dedup: bool = typer.Option(True, "--dedup/--no-dedup", help="Remove exact duplicate claims from the atomized output (e.g. a split reproducing an existing fact). On by default (loss-free)."),
     trace: bool = typer.Option(True, "--trace/--no-trace", help="Also write a per-triplet decision trace to {output}_decisions.json."),
     concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
@@ -276,7 +269,6 @@ def atomize(
             model=model,
             source_kg_key=source_kg_key,
             base_url=atomizer_base_api,
-            max_retries=max_retries,
             dedup=dedup,
         )
         result = service.run_sync(data)
@@ -311,8 +303,6 @@ def refcheck(
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Joint checking (multiple claims per call). Default: on."),
     joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
-    extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
-    checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
     concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
@@ -348,8 +338,6 @@ def refcheck(
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            extractor_max_retries=extractor_max_retries,
-            checker_max_retries=checker_max_retries,
         )
         result = pipeline.run_sync(data)
     except ContextCheckerError as exc:
@@ -374,8 +362,6 @@ def ragcheck(
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Joint checking (multiple claims per call). Default: on."),
     joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
-    extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
-    checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
     runs: int = typer.Option(1, "--runs", help="Repeat the whole run N times and report variance (N x LLM cost)."),
     concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
@@ -411,8 +397,6 @@ def ragcheck(
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            extractor_max_retries=extractor_max_retries,
-            checker_max_retries=checker_max_retries,
             runs=runs,
         )
         pipeline.run_sync(data)
@@ -439,8 +423,6 @@ def faithcheck(
     joint: bool = typer.Option(True, "--joint/--no-joint", help="Joint checking (multiple claims per call). Default: on."),
     joint_num: int = typer.Option(settings.DEFAULT_JOINT_NUM, "--joint-num", help="Max claims per joint LLM call."),
     max_words: int = typer.Option(None, "--max-words", help="Word budget per checker call. Default: 6000 in joint mode."),
-    extractor_max_retries: int = typer.Option(2, "--extractor-max-retries", help="Max retry rounds for extraction parse errors. Default: 2."),
-    checker_max_retries: int = typer.Option(None, "--checker-max-retries", help="Max retry rounds for checking failures."),
     runs: int = typer.Option(1, "--runs", help="Repeat the whole run N times and report variance (N x LLM cost)."),
     concurrency: int = typer.Option(10, "--concurrency", help="Max simultaneous LLM requests, per LLM client. Default: 10."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
@@ -476,8 +458,6 @@ def faithcheck(
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            extractor_max_retries=extractor_max_retries,
-            checker_max_retries=checker_max_retries,
             runs=runs,
         )
         pipeline.run_sync(data)
@@ -528,9 +508,6 @@ def eval_checker(
     max_words: int = typer.Option(
         None, "--max-words", help="Word budget per call."
     ),
-    max_retries: int = typer.Option(
-        None, "--max-retries", help="Max retry rounds for API/parsing failures."
-    ),
     runs: int = typer.Option(
         1, "--runs", help="Repeat the whole eval N times and report variance (N x LLM cost)."
     ),
@@ -567,7 +544,6 @@ def eval_checker(
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            max_retries=max_retries,
             runs=runs,
         )
         result_doc = evaluator.run_sync(data)
@@ -623,10 +599,6 @@ def eval_extractor(
     max_words: int = typer.Option(
         None, "--max-words", help="Word budget per call.",
     ),
-    max_retries: int = typer.Option(
-        None, "--max-retries",
-        help="Max retry rounds for API/parsing failures.",
-    ),
     atomizer_model: str = typer.Option(
         None, "--atomizer-model",
         help="Optional: model for the atomicity axis. Needs ATOMIZER_API_KEY; skipped if unset.",
@@ -675,7 +647,6 @@ def eval_extractor(
             checker_base_url=checker_base_api,
             joint_num=joint_num,
             max_words=max_words,
-            max_retries=max_retries,
             atomizer_model=atomizer_model,
             atomizer_base_url=atomizer_base_api,
             runs=runs,

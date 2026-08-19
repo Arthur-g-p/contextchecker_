@@ -73,7 +73,6 @@ class Extractor:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
-        max_retries: int | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -89,11 +88,7 @@ class Extractor:
         # if "extractor_prompt_vanilla" is not in prompt_map.json
         self._vanilla_prompt = settings.PROMPTS.get("extractor_prompt_vanilla", None)
 
-        # Retry config — max_retries caps how many rounds from DEFAULT_RETRY_ROUNDS to use
-        if max_retries is None:
-            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS)
-        else:
-            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS[:max_retries])
+        self._retry_rounds = DEFAULT_RETRY_ROUNDS
 
     # ── Message builders ─────────────────────────────────────────
 
@@ -183,7 +178,7 @@ class Extractor:
         raw_responses = await self.client.generate_batch(
             tasks, description=description or "Extracting", task="extract",
         )
-        stats.http_requests += len(tasks)
+        stats.http_requests += self.client.last_batch_requests
         stats.first_pass_count = len(tasks)
 
         results, retry_indices = self._classify(raw_responses, stats)
@@ -206,7 +201,7 @@ class Extractor:
             raw_retries = await self.client.generate_batch(
                 retry_tasks, description=f"Retry round {round_num + 1}", task="extract",
             )
-            stats.http_requests += len(retry_tasks)
+            stats.http_requests += self.client.last_batch_requests
 
             round_result, retry_indices = self._apply_retries(
                 raw_retries, retry_indices, results, stats

@@ -119,7 +119,12 @@ class LLMClient:
 
         # OpenAI SDK client — only created if base_url is set (direct endpoint mode)
         if self.base_url:
-            self.client = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, timeout=self.timeout)
+            self.client = AsyncOpenAI(
+                base_url=self.base_url, api_key=self.api_key, timeout=self.timeout,
+                # Retrying is this class's job. The SDK's own retries are invisible
+                # here: they multiply the request count and hide timeouts.
+                max_retries=0,
+            )
         else:
             self.client = None  # LiteLLM mode — no direct client needed
         
@@ -151,6 +156,7 @@ class LLMClient:
         # Start times of requests currently awaiting a response, keyed by call id.
         self._inflight: dict[int, float] = {}
         self._call_n = 0
+        self._last_batch_requests = 0
 
         # Reuse a strategy already discovered this process for the same endpoint+model.
         self._try_adopt_cached_strategy()
@@ -201,6 +207,16 @@ class LLMClient:
             yield
         finally:
             self._inflight.pop(key, None)
+
+
+    @property
+    def last_batch_requests(self) -> int:
+        """Requests the most recent generate_batch() actually put on the wire.
+
+        Exact only because the SDK's own retry layer is off — one attempt here
+        is one HTTP request.
+        """
+        return self._last_batch_requests
 
 
     def oldest_inflight_age(self) -> float | None:
@@ -564,13 +580,17 @@ class LLMClient:
                     try:
                         if self.base_url:
                             # ── OpenAI SDK Path ────────────────────────────
-                            # kwargs go in first, strategy overwrites on top
+                            # Strategy sets the default temperature, but caller
+                            # kwargs win: the workers' retry rounds vary it to
+                            # shake a model out of a bad completion, and a
+                            # strategy-owned 0.0 would silently discard that.
+                            # Format and reasoning below stay strategy-owned.
                             strategy = self.strategy
                             call_kwargs = {
                                 "model": self.model,
                                 "messages": messages,
+                                "temperature": strategy.temperature,
                                 **kwargs,
-                                "temperature": strategy.temperature
                             }
 
                             # Strategy controls reasoning — always overwrites
@@ -638,6 +658,10 @@ class LLMClient:
                                 "api_key": self.api_key,
                                 "drop_params": True, # Does NOT try out capability matrix. Trust in Litellm. If you want to do capabilitytesting set base_url even when using a provider.
                                 "timeout": self.timeout,
+                                # See max_retries=0 above. num_retries is LiteLLM's own
+                                # layer, max_retries the openai client it builds underneath.
+                                "max_retries": 0,
+                                "num_retries": 0,
                                 **kwargs
                             }
                             if schema:
@@ -919,6 +943,7 @@ class LLMClient:
                 _set_postfix()
                 pbar.refresh()
 
+        calls_before = self._call_n
         tasks = [asyncio.create_task(_run_and_update(args)) for args in tasks_data]
         heartbeat = asyncio.create_task(_heartbeat())
         with logging_redirect_tqdm(loggers=[logger.parent]):
@@ -935,6 +960,7 @@ class LLMClient:
                 raise
             finally:
                 heartbeat.cancel()
+                self._last_batch_requests = self._call_n - calls_before
                 pbar.close()
 
         # Scan for fatal LLMClientError that leaked through as a value (just in case)

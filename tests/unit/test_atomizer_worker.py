@@ -243,15 +243,18 @@ class TestAtomizeBatch:
 
     @pytest.mark.asyncio
     async def test_batch_with_failure_keeps_original(self):
-        a = _atomizer(max_retries=0)
+        a = _atomizer()
         payloads = [
             _payload("cats", "are", "animals"),
             _payload("dogs", "are", "animals"),
         ]
 
-        a.client.generate_batch = AsyncMock(return_value=[
-            _result_json(reasoning="r1", is_atomic=True),
-            ParsingError("bad json"),
+        # First pass, then one response per retry round — the failing item never
+        # recovers, so it must end on the fallback decision.
+        a.client.generate_batch = AsyncMock(side_effect=[
+            [_result_json(reasoning="r1", is_atomic=True), ParsingError("bad json")],
+            [ParsingError("bad json")],
+            [ParsingError("bad json")],
         ])
 
         results = await a.atomize_batch(payloads)

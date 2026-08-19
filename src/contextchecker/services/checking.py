@@ -124,7 +124,6 @@ class CheckingService(BaseService):
         joint: bool = True,
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
-        max_retries: int | None = None,
         verbosity: str = "full",
         section_label: str | None = None,
         joint_prompt_key: str | None = None,
@@ -164,7 +163,6 @@ class CheckingService(BaseService):
             model=model,
             base_url=base_url,
             concurrency=concurrency,
-            max_retries=max_retries,
             joint_prompt_key=joint_prompt_key,
         )
 

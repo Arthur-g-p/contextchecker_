@@ -77,7 +77,6 @@ class ExtractionService(BaseService):
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
-        max_retries: int | None = None,
         verbosity: str = "full",
         section_label: str | None = None,
         dedup: bool = True,
@@ -112,7 +111,6 @@ class ExtractionService(BaseService):
             model=model,
             base_url=base_url,
             concurrency=concurrency,
-            max_retries=max_retries,
         )
 
         self._init_verbosity(verbosity, section_label)

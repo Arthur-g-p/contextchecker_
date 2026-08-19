@@ -283,12 +283,10 @@ class RagCheckerPipeline(BaseService):
         extractor_base_url: str | None = None,
         checker_base_url: str | None = None,
         concurrency: int = 10,
-        extractor_max_retries: int | None = 2,
         dedup: bool = True,
         joint: bool = True,
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
-        checker_max_retries: int | None = None,
         verbosity: str = "full",
         runs: int = 1,
     ):
@@ -320,7 +318,6 @@ class RagCheckerPipeline(BaseService):
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
-            max_retries=extractor_max_retries,
             verbosity=child_verbosity,
             dedup=dedup,
         )
@@ -353,7 +350,6 @@ class RagCheckerPipeline(BaseService):
                 joint=joint,
                 joint_num=joint_num,
                 max_words=max_words,
-                max_retries=checker_max_retries,
                 verbosity=child_verbosity,
                 section_label=f"Direction: {name}",
                 kg_key=kg_key,

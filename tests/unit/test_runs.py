@@ -59,6 +59,39 @@ class TestAggregation:
         # dict-valued keys never enter the aggregate
         assert "support" not in means
 
+    def test_all_null_metric_keeps_its_key(self):
+        """A metric that was null in every run must not vanish from the
+        multi-run document — single-run and multi-run expose the same
+        metric surface."""
+        means, variance = build_variance([
+            {"precision": None, "recall": 0.5},
+            {"precision": None, "recall": 0.7},
+        ])
+        assert "precision" in means
+        assert means["precision"] is None
+        assert variance["precision"] == {
+            "n": 0, "std": None, "min": None, "max": None, "values": []}
+        assert means["recall"] == 0.6
+
+    def test_partial_null_reports_contributing_n(self):
+        """A mean over fewer runs than executed must carry n so the
+        shrunken support is visible."""
+        means, variance = build_variance([
+            {"precision": 0.9}, {"precision": None}, {"precision": 0.95},
+        ])
+        assert means["precision"] == 0.925
+        assert variance["precision"]["n"] == 2
+        assert variance["precision"]["values"] == [0.9, 0.95]
+
+    def test_key_nonscalar_in_any_run_is_excluded(self):
+        """None in one run + dict in another = structural field, not a
+        nullable metric (e.g. atomicity skipped vs measured)."""
+        means, _ = build_variance([
+            {"atomicity": None},
+            {"atomicity": {"rate": 1.0}},
+        ])
+        assert "atomicity" not in means
+
 
 # ── Pipeline-internal runs mode ──────────────────────────────────────────────
 

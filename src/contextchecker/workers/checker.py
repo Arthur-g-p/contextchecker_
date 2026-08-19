@@ -126,7 +126,6 @@ class Checker:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
-        max_retries: int | None = None,
         joint_prompt_key: str | None = None,
     ):
         self.model = model
@@ -146,10 +145,7 @@ class Checker:
         self._joint_vanilla_prompt = settings.PROMPTS.get("checker_prompt_joint_vanilla", None)
         self.last_stats: PhaseStats | None = None
 
-        if max_retries is None:
-            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS)
-        else:
-            self._retry_rounds = list(DEFAULT_RETRY_ROUNDS[:max_retries])
+        self._retry_rounds = DEFAULT_RETRY_ROUNDS
 
     # ── Single mode ──────────────────────────────────────────────
 
@@ -217,7 +213,7 @@ class Checker:
         raw_responses = await self.client.generate_batch(
             tasks, description=description or "Checking", task="check",
         )
-        stats.http_requests += len(tasks)
+        stats.http_requests += self.client.last_batch_requests
         stats.first_pass_count = len(tasks)
 
         # Classify first pass
@@ -273,7 +269,7 @@ class Checker:
             raw_retries = await self.client.generate_batch(
                 retry_tasks, description=f"Retry round {round_num + 1}", task="check",
             )
-            stats.http_requests += len(retry_tasks)
+            stats.http_requests += self.client.last_batch_requests
 
             # Apply retries
             round_result = RoundResult()
@@ -389,7 +385,7 @@ class Checker:
         raw_responses = await self.client.generate_batch(
             tasks, description=description or "Checking (joint)", task="check",
         )
-        stats.http_requests += len(tasks)
+        stats.http_requests += self.client.last_batch_requests
         stats.first_pass_count = len(tasks)
 
         # Classify first pass
@@ -477,7 +473,7 @@ class Checker:
             raw_retries = await self.client.generate_batch(
                 retry_tasks, description=f"Retry round {round_num + 1}", task="check",
             )
-            stats.http_requests += len(retry_tasks)
+            stats.http_requests += self.client.last_batch_requests
 
             # Apply retries
             round_result = RoundResult()

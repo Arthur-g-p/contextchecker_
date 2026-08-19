@@ -114,7 +114,6 @@ RATE_LIMIT_HEARTBEAT: float = float(os.getenv("RATE_LIMIT_HEARTBEAT", "30"))
 """How often (seconds) to emit a 'still rate-limited' heartbeat during a long
 back-off, so the run never looks hung."""
 
-
 # ── Console formatting ───────────────────────────────────────────────────────
 
 SECTION_WIDTH: int = 60

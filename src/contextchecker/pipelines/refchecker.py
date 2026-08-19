@@ -31,12 +31,10 @@ class RefCheckerPipeline(BaseService):
         extractor_base_url: str | None = None,
         checker_base_url: str | None = None,
         concurrency: int = 10,
-        extractor_max_retries: int | None = 2,
         dedup: bool = True,
         joint: bool = True,
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
-        checker_max_retries: int | None = None,
         verbosity: str = "full",
     ):
         self._extractor_model = extractor_model
@@ -48,7 +46,6 @@ class RefCheckerPipeline(BaseService):
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
-            max_retries=extractor_max_retries,
             verbosity=verbosity,
             dedup=dedup,
         )
@@ -60,7 +57,6 @@ class RefCheckerPipeline(BaseService):
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            max_retries=checker_max_retries,
             verbosity=verbosity,
         )
 

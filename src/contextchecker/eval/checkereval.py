@@ -68,7 +68,6 @@ class CheckerEvaluator:
         joint: bool = True,
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
-        max_retries: int | None = None,
         runs: int = 1,
     ):
         self._checker_model = checker_model
@@ -91,7 +90,6 @@ class CheckerEvaluator:
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            max_retries=max_retries,
             verbosity="compact",
         )
 
