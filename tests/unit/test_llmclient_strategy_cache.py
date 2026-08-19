@@ -34,9 +34,8 @@ def _fake_response(content: str = '{"ok": true}') -> MagicMock:
 
 def _make_client(tmp_path, base_url=BASE_URL, model=MODEL) -> LLMClient:
     """Build an LLMClient with a mocked SDK backend, preflight skipped."""
-    cache_file = str(tmp_path / f"{model}.db")
     with patch("contextchecker.llmclient.AsyncOpenAI"):
-        c = LLMClient(api_key="k", model=model, base_url=base_url, cache_file=cache_file)
+        c = LLMClient(api_key="k", model=model, base_url=base_url)
     c._connection_verified = True  # skip preflight
     c.client.chat.completions.parse = AsyncMock(return_value=_fake_response())
     return c

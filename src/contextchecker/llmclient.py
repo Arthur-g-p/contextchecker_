@@ -1,8 +1,6 @@
 import asyncio
 import contextlib
-import os
 import random
-import sqlite3
 import sys
 import time
 import traceback
@@ -109,7 +107,7 @@ class LLMClient:
     # constructions don't spam startup. Repeats still log at debug.
     _INIT_LOGGED: set[tuple[str, str, str | None]] = set()
 
-    def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10, cache_file: str | None = None):
+    def __init__(self, api_key: str, model: str, base_url: str | None = None, concurrency: int = 10):
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
@@ -160,26 +158,6 @@ class LLMClient:
 
         # Reuse a strategy already discovered this process for the same endpoint+model.
         self._try_adopt_cached_strategy()
-
-        self._session_cache = {}
-        self._new_cache_entries = 0
-        self._cache_enabled = True
-        self._cache_loaded_from_disk = False
-        self._cache_file = cache_file or ".rag_crash_cache.db"
-        if os.path.exists(self._cache_file):
-            try:
-                with sqlite3.connect(self._cache_file) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cache'")
-                    if cursor.fetchone():
-                        cursor.execute("SELECT hash, response FROM cache")
-                        for row in cursor.fetchall():
-                            self._session_cache[row[0]] = row[1]
-                        self._cache_loaded_from_disk = True
-                        logger.info("   ♻️  Found %d cached responses in %s", len(self._session_cache), self._cache_file)
-            except Exception as e:
-                logger.warning("   ⚠️  Failed to load crash cache. No optional caching will take place. (%s)", e)
-                self._cache_enabled = False
 
         sdk_mode = "OpenAI SDK" if self.base_url else "LiteLLM"
         # Collapse duplicate init lines: the first unique (model, mode, url) logs
@@ -522,15 +500,6 @@ class LLMClient:
         - First request discovers the best strategy (serialized via lock).
         - All subsequent requests use the locked strategy concurrently.
         """
-        prompt_text = messages[-1]["content"] if isinstance(messages, list) and messages and "content" in messages[-1] else None
-        # TODO: cache key only covers model + last user message. It ignores the
-        # system prompt, the schema, and `task`, so two calls that share a final
-        # user message but differ in schema/system prompt collide and return the
-        # wrong cached response. Widen the key (hash of full messages + schema).
-        cache_key = f"{self.model}:{prompt_text}" if prompt_text else None
-        if self._cache_loaded_from_disk and cache_key and cache_key in self._session_cache:
-            return self._session_cache[cache_key]
-
         if not self._connection_verified:
             await self.check_connection()
 
@@ -697,11 +666,7 @@ class LLMClient:
                                 logger.info("   💾 Cache hit detected — provider is caching responses.")
                                 self._cache_hit_logged = True
 
-                        response_str = response.choices[0].message.content
-                        if cache_key:
-                            self._session_cache[cache_key] = response_str
-                            self._new_cache_entries += 1
-                        return response_str
+                        return response.choices[0].message.content
 
                     except (TypeError, AttributeError, KeyError, NameError, SyntaxError, ImportError) as e:
                         # Local coding bugs
@@ -841,7 +806,6 @@ class LLMClient:
                     ):
                         pass  # let fatal errors and system/cancellation exceptions propagate
                     else:
-                        self.save_cache()
                         raise LLMClientError(
                             f"No compatible strategy found for '{self.model}'. "
                             f"Exhausted all {len(RETRY_MATRIX)} strategies."
@@ -851,25 +815,10 @@ class LLMClient:
 
     # ── Fatal checkpoint support ──────────────────────────────
 
-    def save_cache(self):
-        """Dump the in-memory session cache to SQLite on crash."""
-        if not getattr(self, '_cache_enabled', False) or getattr(self, '_new_cache_entries', 0) == 0:
-            return
-        try:
-            with sqlite3.connect(self._cache_file) as conn:
-                cursor = conn.cursor()
-                cursor.execute("CREATE TABLE IF NOT EXISTS cache (hash TEXT PRIMARY KEY, response TEXT)")
-                cursor.executemany("INSERT OR REPLACE INTO cache (hash, response) VALUES (?, ?)", list(self._session_cache.items()))
-                conn.commit()
-            logger.info("   💾 Saved %d total responses to %s for rescue.", len(self._session_cache), self._cache_file)
-        except Exception:
-            pass # Swallow errors on shutdown
-
     def _save_and_raise(self, message: str):
-        """Log error, save partial results to crash cache, and raise LLMClientError."""
+        """Log the error and raise LLMClientError, aborting the batch."""
         self._fatal_error_occurred = True
         logger.error("💀 %s", message)
-        self.save_cache()
         raise LLMClientError(message)
 
     async def _generate_safe(self, **task_args) -> str | WorkerError:
@@ -956,7 +905,6 @@ class LLMClient:
                         t.cancel()
                 # Wait for all tasks to be cancelled/done to avoid orphaned tasks
                 await asyncio.gather(*tasks, return_exceptions=True)
-                self.save_cache()
                 raise
             finally:
                 heartbeat.cancel()
@@ -966,7 +914,6 @@ class LLMClient:
         # Scan for fatal LLMClientError that leaked through as a value (just in case)
         for r in results:
             if isinstance(r, LLMClientError) and not isinstance(r, (ContextTooLongError, ContentPolicyError)):
-                self.save_cache()
                 raise r
 
         return results

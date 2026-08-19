@@ -91,13 +91,11 @@ def client(tmp_path):
     Preflight connection check and strategy discovery are both skipped
     so tests can focus purely on error handling during generate/generate_batch.
     """
-    cache_path = str(tmp_path / ".test_cache.db")
     with patch("contextchecker.llmclient.AsyncOpenAI"):
         c = LLMClient(
             api_key="test-key-abc123",
             model="test-model",
             base_url="http://fake/v1",
-            cache_file=cache_path,
         )
     # Skip preflight and discovery — tested separately
     c._connection_verified = True
@@ -112,14 +110,12 @@ def client(tmp_path):
 def client_and_mock(request, tmp_path):
     """Fixture parameterizing the client across OpenAI and LiteLLM paths."""
     mode = request.param
-    cache_path = str(tmp_path / f".test_cache_{mode}.db")
     if mode == "openai":
         with patch("contextchecker.llmclient.AsyncOpenAI"):
             c = LLMClient(
                 api_key="test-key-abc123",
                 model="test-model",
                 base_url="http://fake/v1",
-                cache_file=cache_path,
             )
         c._connection_verified = True
         c._strategy_discovered = True
@@ -131,7 +127,6 @@ def client_and_mock(request, tmp_path):
             api_key="test-key-abc123",
             model="google/gemini-2.0-flash",
             base_url=None,
-            cache_file=cache_path,
         )
         c._connection_verified = True
         c._strategy_discovered = True
@@ -309,7 +304,7 @@ class TestFatalErrorsStopBatch:
         """4 consecutive InternalServerError → LLMClientError('Infrastructure failure').
 
         The client tolerates up to 3 consecutive server errors with progressive
-        backoff (5s, 10s, 15s). The 4th triggers a fatal crash with cache save.
+        backoff (5s, 10s, 15s). The 4th triggers a fatal abort.
         """
         client, mock_call = client_and_mock
         mock_call.side_effect = InternalServerError(
@@ -402,62 +397,6 @@ class TestPreflightFatalErrors:
         assert len(results) == 2
 
 
-# ── Group 1c: Cache saved on fatal errors ────────────────────────
-
-
-@pytest.mark.integration
-class TestCacheSavedOnFatal:
-    """When a fatal error occurs, save_cache must be called before raising.
-
-    This ensures partial results are preserved for crash recovery.
-    """
-
-    async def test_cache_saved_on_auth_error(self, client_and_mock):
-        """Auth failure triggers save_cache before the LLMClientError propagates."""
-        client, mock_call = client_and_mock
-        mock_call.side_effect = AuthenticationError(
-            message="expired",
-            response=_fake_httpx_response(401),
-            body=None,
-        )
-
-        with patch.object(client, "save_cache") as mock_save:
-            with pytest.raises(LLMClientError):
-                await client.generate_batch(_make_tasks(3))
-
-            # save_cache called at least once (by _save_and_raise and/or generate_batch)
-            assert mock_save.called
-
-    async def test_cache_saved_on_server_crash(self, client_and_mock):
-        """Infrastructure failure (4× server error) triggers cache save."""
-        client, mock_call = client_and_mock
-        mock_call.side_effect = InternalServerError(
-            message="Bad gateway",
-            response=_fake_httpx_response(502),
-            body=None,
-        )
-
-        with patch("asyncio.sleep", new_callable=AsyncMock):
-            with patch.object(client, "save_cache") as mock_save:
-                with pytest.raises(LLMClientError):
-                    await client.generate_batch(_make_tasks(1))
-
-                assert mock_save.called
-
-    async def test_no_cache_save_on_clean_run(self, client_and_mock):
-        """Successful batch → save_cache is NOT called.
-
-        Cache saves are expensive (SQLite I/O). They should only happen
-        on errors, not on every successful completion.
-        """
-        client, mock_call = client_and_mock
-        mock_call.return_value = _fake_response()
-
-        with patch.object(client, "save_cache") as mock_save:
-            results = await client.generate_batch(_make_tasks(3))
-
-            assert len(results) == 3
-            mock_save.assert_not_called()
 
 
 # ── Group 1d: Fatal abort is honest — no fake progress, no doomed calls ──

@@ -91,9 +91,8 @@ def _bad_request(message: str) -> BadRequestError:
 
 
 def _make_client(tmp_path, *, discovered: bool) -> LLMClient:
-    cache_file = str(tmp_path / "cache.db")
     with patch("contextchecker.llmclient.AsyncOpenAI"):
-        c = LLMClient(api_key="k", model=MODEL, base_url=BASE_URL, cache_file=cache_file)
+        c = LLMClient(api_key="k", model=MODEL, base_url=BASE_URL)
     c._connection_verified = True
     if discovered:
         c._strategy_discovered = True
