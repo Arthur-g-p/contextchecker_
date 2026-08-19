@@ -211,8 +211,8 @@ class TestClassify:
         buckets = ev._classify(data)
         assert len(buckets.to_compare) == 1
         assert len(buckets.wrongful_answer) == 0
-        assert len(buckets.wrongful_abstention) == 0
-        assert len(buckets.correct_abstention) == 0
+        assert len(buckets.unjustified_abstention) == 0
+        assert len(buckets.justified_abstention) == 0
 
     def test_wrongful_answer(self):
         """Item with predictions but no GT → wrongful answer."""
@@ -224,7 +224,7 @@ class TestClassify:
         buckets = ev._classify(data)
         assert len(buckets.wrongful_answer) == 1
 
-    def test_wrongful_abstention(self):
+    def test_unjustified_abstention(self):
         """Item with GT but no predictions → wrongful abstention."""
         ev = _evaluator()
         data = [_make_item(
@@ -232,14 +232,14 @@ class TestClassify:
             pred_triplets=None,
         )]
         buckets = ev._classify(data)
-        assert len(buckets.wrongful_abstention) == 1
+        assert len(buckets.unjustified_abstention) == 1
 
     def test_skipped(self):
-        """Item with neither GT nor predictions → correct_abstention."""
+        """Item with neither GT nor predictions → justified_abstention."""
         ev = _evaluator()
         data = [_make_item(gt_triplets=None, pred_triplets=None)]
         buckets = ev._classify(data)
-        assert len(buckets.correct_abstention) == 1
+        assert len(buckets.justified_abstention) == 1
 
     def test_empty_gt_treated_as_no_gt(self):
         ev = _evaluator()
@@ -257,7 +257,7 @@ class TestClassify:
             pred_triplets=[],
         )]
         buckets = ev._classify(data)
-        assert len(buckets.wrongful_abstention) == 1
+        assert len(buckets.unjustified_abstention) == 1
 
     def test_mixed_classification(self):
         ev = _evaluator()
@@ -271,8 +271,8 @@ class TestClassify:
         buckets = ev._classify(data)
         assert len(buckets.to_compare) == 1
         assert len(buckets.wrongful_answer) == 1
-        assert len(buckets.wrongful_abstention) == 1
-        assert len(buckets.correct_abstention) == 1
+        assert len(buckets.unjustified_abstention) == 1
+        assert len(buckets.justified_abstention) == 1
 
 
 # ── Test _triplet_to_str ─────────────────────────────────────────────────────
@@ -432,8 +432,8 @@ class TestBuildResult:
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
             wrongful_answer=[],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
@@ -447,9 +447,9 @@ class TestBuildResult:
         assert result.precision_counts["denominator"] == 1
         assert result.checker_failures["count"] == 0
         assert result.to_compare_items == 1
-        assert result.correct_abstention == 0
+        assert result.abstentions["justified"] == 0
 
-    def test_abstention_fn_penalty(self):
+    def test_unjustified_abstention_penalty(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[
@@ -457,11 +457,11 @@ class TestBuildResult:
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
             wrongful_answer=[],
-            wrongful_abstention=[
+            unjustified_abstention=[
                 _make_item(gt_triplets=[_make_triplet("d", "e", "f"),
                                         _make_triplet("g", "h", "i")]),
             ],
-            correct_abstention=[],
+            justified_abstention=[],
         )
         item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
@@ -469,10 +469,10 @@ class TestBuildResult:
         rc = result.recall_counts
         assert rc["covered"] == 1
         assert rc["missed"] == 0
-        assert rc["wrongful_abstention_penalty"] == 2  # penalty IS in the denominator
+        assert rc["unjustified_abstention_penalty"] == 2  # penalty IS in the denominator
         assert rc["denominator"] == 3
         assert result.recall == round(1 / 3, 4)
-        assert result.abstention_errors["wrongful_abstention"] == 1
+        assert result.abstentions["unjustified"] == 1
 
     def test_wrongful_answer_fp_penalty(self):
         ev = _evaluator()
@@ -485,8 +485,8 @@ class TestBuildResult:
                 _make_item(gt_triplets=None,
                            pred_triplets=[_make_canonical_triplet("x", "y", "z")]),
             ],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         item_results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
 
@@ -497,12 +497,12 @@ class TestBuildResult:
         assert pc["wrongful_answer_penalty"] == 1  # penalty IS in the denominator
         assert pc["denominator"] == 2
         assert result.precision == 0.5
-        assert result.abstention_errors["wrongful_answer"] == 1
+        assert result.abstentions["wrongful_answer"] == 1
 
     def test_zero_items(self):
         """Empty denominator → None, never 0.0: nothing judged is not a score."""
         ev = _evaluator()
-        buckets = _ItemBucket(to_compare=[], wrongful_answer=[], wrongful_abstention=[], correct_abstention=[])
+        buckets = _ItemBucket(to_compare=[], wrongful_answer=[], unjustified_abstention=[], justified_abstention=[])
         result = ev._build_result([], buckets, total_items=0)
         assert result.precision is None
         assert result.recall is None
@@ -518,8 +518,8 @@ class TestBuildResult:
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
             wrongful_answer=[],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
             tp_recall=0, tp_precision=0, fp=0, fn=0,
@@ -547,8 +547,8 @@ class TestBuildResult:
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
             wrongful_answer=[],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
             tp_recall=1, tp_precision=1, fp=0, fn=0,
@@ -574,10 +574,10 @@ class TestBuildResult:
                 _make_item(gt_triplets=None,
                            pred_triplets=[_make_canonical_triplet("x", "y", "z")]),
             ],
-            wrongful_abstention=[
+            unjustified_abstention=[
                 _make_item(gt_triplets=[_make_triplet("d", "e", "f")]),
             ],
-            correct_abstention=[],
+            justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
             tp_recall=2, tp_precision=1, fp=1, fn=1,
@@ -588,7 +588,7 @@ class TestBuildResult:
         )]
         result = ev._build_result(item_results, buckets, total_items=3)
         rc, pc = result.recall_counts, result.precision_counts
-        assert (rc["covered"] + rc["missed"] + rc["wrongful_abstention_penalty"]
+        assert (rc["covered"] + rc["missed"] + rc["unjustified_abstention_penalty"]
                 + rc["unjudged"]) == rc["total_gt_claims"] == 5
         assert rc["denominator"] == rc["total_gt_claims"] - rc["unjudged"] == 4
         assert (pc["supported"] + pc["unsupported"] + pc["wrongful_answer_penalty"]
@@ -612,7 +612,7 @@ class TestUnjudgedInDisagreements:
                           item_id="u1")
         buckets = _ItemBucket(
             to_compare=[item], wrongful_answer=[],
-            wrongful_abstention=[], correct_abstention=[],
+            unjustified_abstention=[], justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
             tp_recall=0, tp_precision=1, fp=0, fn=0,
@@ -632,7 +632,7 @@ class TestUnjudgedInDisagreements:
                           pred_triplets=[_make_canonical_triplet("a", "b", "c")])
         buckets = _ItemBucket(
             to_compare=[item], wrongful_answer=[],
-            wrongful_abstention=[], correct_abstention=[],
+            unjustified_abstention=[], justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
             tp_recall=1, tp_precision=1, fp=0, fn=0,
@@ -661,7 +661,7 @@ class TestExtractionErrors:
         buckets = ev._classify([errored, normal])
         assert buckets.extraction_error == [errored]
         # Crucially NOT scored as wrongful abstention despite GT + empty pred
-        assert buckets.wrongful_abstention == []
+        assert buckets.unjustified_abstention == []
         assert buckets.to_compare == [normal]
 
     def test_error_rate_computed_and_no_fn_penalty(self):
@@ -673,13 +673,13 @@ class TestExtractionErrors:
         buckets = _ItemBucket(
             to_compare=[],
             wrongful_answer=[],
-            wrongful_abstention=[],
-            correct_abstention=[_make_item()],
+            unjustified_abstention=[],
+            justified_abstention=[_make_item()],
             extraction_error=[errored],
         )
         result = ev._build_result([], buckets, total_items=2)
         # The errored item's 2 GT triplets added NO FN penalty
-        assert result.recall_counts["wrongful_abstention_penalty"] == 0
+        assert result.recall_counts["unjustified_abstention_penalty"] == 0
         assert result.recall_counts["total_gt_claims"] == 0
         assert result.extraction_errors == {
             "count": 1,
@@ -692,8 +692,8 @@ class TestExtractionErrors:
         errored = _make_item(item_id="broken-1")
         errored[ERROR_KEY] = "context_too_long"
         buckets = _ItemBucket(
-            to_compare=[], wrongful_answer=[], wrongful_abstention=[],
-            correct_abstention=[], extraction_error=[errored],
+            to_compare=[], wrongful_answer=[], unjustified_abstention=[],
+            justified_abstention=[], extraction_error=[errored],
         )
         disagreements = ev._build_disagreements(buckets, [])
         assert len(disagreements) == 1
@@ -713,8 +713,8 @@ class TestBuildDisagreements:
                 pred_triplets=[_make_canonical_triplet("a", "b", "c")],
             )],
             wrongful_answer=[],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
         disagreements = ev._build_disagreements(buckets, results)
@@ -729,8 +729,8 @@ class TestBuildDisagreements:
                 pred_triplets=[_make_canonical_triplet("x", "y", "z")],
             )],
             wrongful_answer=[],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         results = [_ItemMatchResult(tp_recall=0, tp_precision=0, fp=1, fn=1,
                                      false_positives=[fp_detail],
@@ -748,28 +748,28 @@ class TestBuildDisagreements:
                 gt_triplets=None,
                 pred_triplets=[_make_canonical_triplet("a", "b", "c")],
             )],
-            wrongful_abstention=[],
-            correct_abstention=[],
+            unjustified_abstention=[],
+            justified_abstention=[],
         )
         disagreements = ev._build_disagreements(buckets, [])
         assert len(disagreements) == 1
         assert disagreements[0]["error_type"] == "wrongful_answer"
         assert disagreements[0]["false_positives"][0]["verdict"] == "no comparison made."
 
-    def test_wrongful_abstention_in_disagreements(self):
+    def test_unjustified_abstention_in_disagreements(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[],
             wrongful_answer=[],
-            wrongful_abstention=[_make_item(
+            unjustified_abstention=[_make_item(
                 gt_triplets=[_make_canonical_triplet("a", "b", "c"), _make_canonical_triplet("d", "e", "f")],
                 pred_triplets=None,
             )],
-            correct_abstention=[],
+            justified_abstention=[],
         )
         disagreements = ev._build_disagreements(buckets, [])
         assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "wrongful_abstention"
+        assert disagreements[0]["error_type"] == "unjustified_abstention"
         assert disagreements[0]["fn"] == 2
         assert disagreements[0]["false_negatives"][0]["verdict"] == "no comparison made."
 
@@ -803,7 +803,6 @@ class TestEvaluateIntegration:
 
         with patch.object(ev, "_log_data_pre"), \
              patch.object(ev, "_log_eval_config"), \
-             patch.object(ev, "_log_data_post"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
             summary_doc, disagreements_doc = ev.run_sync(data)
@@ -814,8 +813,8 @@ class TestEvaluateIntegration:
         assert summary_doc["_meta"]["report_type"] == "extractor_eval"
         assert disagreements_doc["total_disagreements"] == 0
 
-    def test_wrongful_abstention_from_extraction(self):
-        """Extraction produces empty results → wrongful abstention."""
+    def test_unjustified_abstention_from_extraction(self):
+        """Extraction produces empty results → unjustified abstention."""
         ev = _evaluator()
 
         data = [
@@ -834,19 +833,18 @@ class TestEvaluateIntegration:
 
         with patch.object(ev, "_log_data_pre"), \
              patch.object(ev, "_log_eval_config"), \
-             patch.object(ev, "_log_data_post"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
             summary_doc, disagreements_doc = ev.run_sync(data)
 
         assert summary_doc["recall"] == 0.0  # measured: 0 of 2 GT claims covered
         assert summary_doc["recall_counts"]["covered"] == 0
-        assert summary_doc["recall_counts"]["wrongful_abstention_penalty"] == 2
+        assert summary_doc["recall_counts"]["unjustified_abstention_penalty"] == 2
         assert summary_doc["recall_counts"]["denominator"] == 2
         assert summary_doc["precision"] is None  # no predictions → nothing to judge
-        assert summary_doc["abstention_errors"]["wrongful_abstention"] == 1
+        assert summary_doc["abstentions"]["unjustified"] == 1
         assert disagreements_doc["total_disagreements"] == 1
-        assert disagreements_doc["items"][0]["error_type"] == "wrongful_abstention"
+        assert disagreements_doc["items"][0]["error_type"] == "unjustified_abstention"
 
     def test_wrongful_answer_from_extraction(self):
         """Item has no GT but extraction produces triplets → wrongful answer."""
@@ -875,12 +873,11 @@ class TestEvaluateIntegration:
 
         with patch.object(ev, "_log_data_pre"), \
              patch.object(ev, "_log_eval_config"), \
-             patch.object(ev, "_log_data_post"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
             summary_doc, disagreements_doc = ev.run_sync(data)
 
-        assert summary_doc["abstention_errors"]["wrongful_answer"] == 1
+        assert summary_doc["abstentions"]["wrongful_answer"] == 1
         assert summary_doc["precision_counts"]["wrongful_answer_penalty"] == 1
         assert summary_doc["precision"] == 0.0  # measured: 1 penalty claim, 0 supported
         assert disagreements_doc["total_disagreements"] == 1

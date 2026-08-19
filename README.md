@@ -18,27 +18,28 @@ disagree with.
 | `faithcheck` | Faithfulness checking **without ground truth**: response claims vs the retrieved context. Works on live traffic. |
 | `refcheck` | Classic reference checking: extraction + checking in one pass |
 | `extract` / `check` / `atomize` | The individual building blocks, runnable standalone — walked through in order under [examples/](examples/README.md) |
-| `eval extractor` / `eval checker` | Meta-evaluation: measure the extractor and checker themselves against labeled data |
+| `eval extractor` / `eval checker` | Meta-evaluation: measure the extractor and checker themselves against labeled data. Run `eval checker` first — `eval extractor` uses a checker, so an unqualified one makes its numbers partial |
 
 ## Why this instead of a single judge score
 
 - **Auditable**: every metric decomposes into claim-level verdicts with
   explanations. You can see exactly which fact failed and why.
 - **Variance is first-class**: LLM-based metrics are stochastic. Pass
-  `--runs N` to any pipeline or eval and get `mean +/- std [min, max]`
-  per metric across N full repetitions, plus each run's complete report.
-  A single-run score overstates your certainty.
+  `--runs N` to `ragcheck`, `faithcheck`, `eval extractor` or
+  `eval checker` and get `mean +/- std [min, max]` per metric across N
+  full repetitions, plus each run's complete report. A single-run score
+  overstates your certainty.
 - **The evaluator is itself evaluated**: `eval extractor` and
   `eval checker` measure the measurement tool against ground-truth
   labels, so you know how much to trust the numbers before you compare
   systems with them.
 - **Honest failure handling**: per-item errors (context too long, content
   policy, parse failure) are recorded as values next to the affected claim,
-  never silently zeroed. Abstentions ("I don't know") are detected and
-  excluded from hallucination counts instead of being punished.
-- **Crash cache**: on a fatal error (auth, connection, budget), in-flight
-  LLM responses are saved to a local sqlite file; the next run resumes
-  without re-paying for completed calls.
+  never silently zeroed. A claim the checker failed to judge leaves both
+  sides of the ratio rather than counting against the system under test,
+  and a metric with an empty denominator is `null`, never `0.0`.
+  Abstentions ("I don't know") are detected and excluded from
+  hallucination counts instead of being punished.
 - **Any OpenAI-compatible endpoint**: point the extractor and checker at
   different models, providers, or local servers independently.
 

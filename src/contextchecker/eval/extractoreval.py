@@ -51,11 +51,15 @@ _INTERNAL_EXT_MODEL = "_exteval"
 
 @dataclass
 class _ItemBucket:
-    """Post-extraction classification into five buckets."""
-    to_compare: list[dict]          # has GT + has predictions → normal matching
-    wrongful_answer: list[dict]     # no GT but model predicted → FP-like
-    wrongful_abstention: list[dict] # has GT but no predictions → FN penalty
-    correct_abstention: list[dict]  # no GT, no predictions → ignored
+    """Post-extraction classification into five buckets.
+
+    Abstention naming follows the ragcheck pipeline: an abstention is
+    justified when there was nothing to find, unjustified when there was.
+    """
+    to_compare: list[dict]              # has GT + has predictions → normal matching
+    wrongful_answer: list[dict]         # no GT but model predicted → precision penalty
+    unjustified_abstention: list[dict]  # has GT but no predictions → recall penalty
+    justified_abstention: list[dict]    # no GT, no predictions → correct silence
     # extraction failed (tooling) → excluded from ALL metrics, counted in
     # the error rate
     extraction_error: list[dict] = field(default_factory=list)
@@ -103,14 +107,12 @@ class ExtractorEvaluator:
         gt_key: str = "claude2_response_kg",
         # Extraction config
         extractor_base_url: str | None = None,
-        extractor_max_retries: int | None = None,
         # LLM matching config
         checker_model: str | None = None,
         checker_base_url: str | None = None,
         concurrency: int = 10,
         joint_num: int = settings.DEFAULT_JOINT_NUM,
         max_words: int | None = None,
-        max_retries: int | None = None,
         # Atomicity axis (optional, orthogonal to coverage)
         atomizer_model: str | None = None,
         atomizer_base_url: str | None = None,
@@ -148,7 +150,6 @@ class ExtractorEvaluator:
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
-            max_retries=extractor_max_retries,
             verbosity="compact",
             dedup=False,
         )
@@ -159,7 +160,6 @@ class ExtractorEvaluator:
         self._concurrency = concurrency
         self._joint_num = joint_num
         self._max_words = max_words
-        self._max_retries = max_retries
 
         # Atomicity axis — OPTIONAL. Built only if an atomizer model is given AND
         # the key is configured (AtomizationService.__init__ would otherwise raise
@@ -277,15 +277,12 @@ class ExtractorEvaluator:
         # Step 3: Classify into buckets (now that pred exists)
         buckets = self._classify(valid)
 
-        # Post-extraction logging
-        self._log_data_post(buckets)
-
         # Step 4: Guard — need at least one to_compare item to match
         if not buckets.to_compare:
             logger.warning(
                 "No items with both GT and predictions after extraction. "
-                "All %d items were wrongful abstentions.",
-                len(buckets.wrongful_abstention),
+                "All %d items were unjustified abstentions.",
+                len(buckets.unjustified_abstention),
             )
 
         # Step 5: Match to_compare items (LLM)
@@ -498,12 +495,16 @@ class ExtractorEvaluator:
     # ── Classification (post-extraction) ─────────────────────────
 
     def _classify(self, data: list[dict]) -> _ItemBucket:
-        """Post-extraction classification into four buckets.
+        """Post-extraction classification into five buckets.
 
         Called AFTER ExtractionService.run() — pred_key may or may not
-        be populated per item depending on extraction results.
+        be populated per item depending on extraction results. Tooling
+        failures get their own bucket before any abstention judgement:
+        an empty prediction list after a crashed extraction says nothing
+        about the extractor's willingness to answer.
         """
-        to_compare, wrongful_answer, wrongful_abstention, correct_abstention = [], [], [], []
+        to_compare, wrongful_answer = [], []
+        unjustified_abstention, justified_abstention = [], []
         extraction_error = []
 
         for item in data:
@@ -521,15 +522,15 @@ class ExtractorEvaluator:
             elif not has_gt and has_pred:
                 wrongful_answer.append(item)
             elif has_gt and not has_pred:
-                wrongful_abstention.append(item)
+                unjustified_abstention.append(item)
             else:
-                correct_abstention.append(item)
+                justified_abstention.append(item)
 
         return _ItemBucket(
             to_compare=to_compare,
             wrongful_answer=wrongful_answer,
-            wrongful_abstention=wrongful_abstention,
-            correct_abstention=correct_abstention,
+            unjustified_abstention=unjustified_abstention,
+            justified_abstention=justified_abstention,
             extraction_error=extraction_error,
         )
 
@@ -562,9 +563,9 @@ class ExtractorEvaluator:
         unjudged_gt = sum(len(ir.unjudged_gt) for ir in item_results)
         unjudged_pred = sum(len(ir.unjudged_pred) for ir in item_results)
 
-        # Wrongful abstention: every GT triplet is an uncovered GT claim (FN)
+        # Unjustified abstention: every GT triplet is an uncovered GT claim (FN)
         abstention_fn_penalty = sum(
-            len(item[self._gt_key]) for item in buckets.wrongful_abstention
+            len(item[self._gt_key]) for item in buckets.unjustified_abstention
         )
 
         # Wrongful answer: every predicted triplet is an unsupported prediction (FP)
@@ -589,7 +590,7 @@ class ExtractorEvaluator:
             "total_gt_claims": recall_den + unjudged_gt,
             "covered": covered,
             "missed": missed,
-            "wrongful_abstention_penalty": abstention_fn_penalty,
+            "unjustified_abstention_penalty": abstention_fn_penalty,
             "unjudged": unjudged_gt,
             "denominator": recall_den,
         }
@@ -622,7 +623,7 @@ class ExtractorEvaluator:
         # Extraction stats
         gt_triplets = sum(
             len(item[self._gt_key])
-            for item in buckets.to_compare + buckets.wrongful_abstention
+            for item in buckets.to_compare + buckets.unjustified_abstention
         )
         pred_triplets = sum(
             len(item[self._pred_key])
@@ -638,7 +639,7 @@ class ExtractorEvaluator:
         error_items = buckets.extraction_error
         attempted = (
             to_compare_count + len(buckets.wrongful_answer)
-            + len(buckets.wrongful_abstention) + len(buckets.correct_abstention)
+            + len(buckets.unjustified_abstention) + len(buckets.justified_abstention)
             + len(error_items)
         )
         by_cause: dict[str, int] = {}
@@ -667,11 +668,11 @@ class ExtractorEvaluator:
                 "total_triplets": pred_triplets,
                 "avg_per_item": round(pred_avg, 2),
             },
-            abstention_errors={
+            abstentions={
+                "justified": len(buckets.justified_abstention),
+                "unjustified": len(buckets.unjustified_abstention),
                 "wrongful_answer": len(buckets.wrongful_answer),
-                "wrongful_abstention": len(buckets.wrongful_abstention),
             },
-            correct_abstention=len(buckets.correct_abstention),
             checker_failures=checker_failures,
             atomicity=atomicity,
             duplicates=duplicates,
@@ -703,7 +704,6 @@ class ExtractorEvaluator:
             joint=True,
             joint_num=self._joint_num,
             max_words=self._max_words,
-            max_retries=self._max_retries,
             verbosity="compact",
             joint_prompt_key="checker_prompt_EVAL_JOINT",
         )
@@ -733,7 +733,6 @@ class ExtractorEvaluator:
             joint=True,
             joint_num=self._joint_num,
             max_words=self._max_words,
-            max_retries=self._max_retries,
             verbosity="compact",
             joint_prompt_key="checker_prompt_EVAL_JOINT",
         )
@@ -974,14 +973,14 @@ class ExtractorEvaluator:
                 "false_negatives": [],
             })
 
-        # Wrongful abstentions — model missed everything
-        for i, item in enumerate(buckets.wrongful_abstention):
+        # Unjustified abstentions — model missed everything
+        for i, item in enumerate(buckets.unjustified_abstention):
             gt_count = len(item[self._gt_key])
             disagreements.append({
-                "id": item.get("id", f"wrongful-abstention-{i}"),
+                "id": item.get("id", f"unjustified-abstention-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "error_type": "wrongful_abstention",
+                "error_type": "unjustified_abstention",
                 "tp": 0,
                 "fp": 0,
                 "fn": gt_count,
@@ -994,7 +993,7 @@ class ExtractorEvaluator:
                     {
                         "gt_triplet": self._triplet_to_str(t),
                         "verdict": "no comparison made.",
-                        "reason": "Wrongful abstention — all GT lost",
+                        "reason": "Unjustified abstention — all GT lost",
                     }
                     for t in item[self._gt_key]
                 ],
@@ -1018,35 +1017,6 @@ class ExtractorEvaluator:
             logger.info("       ├─ with GT key: %d", valid - missing_gt)
             logger.info("       └─ no GT key:   %d  (⚠️ wrongful-answer traps)",
                         missing_gt)
-        logger.info("")
-
-    def _log_data_post(self, buckets: _ItemBucket) -> None:
-        """Print post-extraction classification summary."""
-        to_compare = len(buckets.to_compare)
-        wa = len(buckets.wrongful_answer)
-        wab = len(buckets.wrongful_abstention)
-        ca = len(buckets.correct_abstention)
-        err = len(buckets.extraction_error)
-
-        logger.info("")
-        logger.info(" 📂 Post-Extraction Classification")
-        if err > 0:
-            logger.info("    ├─ extraction error:    %d items  (tooling failure → excluded from metrics)", err)
-        if wa > 0:
-            logger.info("    ├─ wrongful answer:     %d items  (predicted but no GT)", wa)
-        if wab > 0:
-            fn_penalty = sum(
-                len(item[self._gt_key]) for item in buckets.wrongful_abstention
-            )
-            logger.info(
-                "    ├─ wrongful abstention: %d items  (GT present, 0 predictions → %d FN)",
-                wab, fn_penalty,
-            )
-        if ca > 0:
-            logger.info("    ├─ correct abstention:   %d items  (no GT and no predictions)", ca)
-        logger.info(
-            "    └─ to_compare:    %d items  (GT + predictions present)", to_compare
-        )
         logger.info("")
 
     def _log_eval_config(self) -> None:
@@ -1083,20 +1053,20 @@ class ExtractorEvaluator:
         # 💥 branch is explicitly outside it.
         rc = result.recall_counts
         pc = result.precision_counts
-        ae = result.abstention_errors
+        ab = result.abstentions
 
         logger.info(" 🔎 Matching Quality  (LLM 2-pass)")
         logger.info("    Recall — %d total GT claims", rc["total_gt_claims"])
         logger.info("     ├─ ✅ %d covered by predictions  (judged)", rc["covered"])
         logger.info("     ├─ ❌ %d missed  (judged)", rc["missed"])
-        if rc["wrongful_abstention_penalty"]:
+        if rc["unjustified_abstention_penalty"]:
             logger.info(
-                "     ├─ ⚪ %d wrongful-abstention penalty  (%d items, 0 predictions for %d claims)",
-                rc["wrongful_abstention_penalty"], ae["wrongful_abstention"],
-                rc["wrongful_abstention_penalty"],
+                "     ├─ ⚪ %d unjustified-abstention penalty  (%d items, 0 predictions for %d claims)",
+                rc["unjustified_abstention_penalty"], ab["unjustified"],
+                rc["unjustified_abstention_penalty"],
             )
         else:
-            logger.info("     ├─ ⚪ 0 wrongful-abstention penalty")
+            logger.info("     ├─ ⚪ 0 unjustified-abstention penalty")
         if rc["unjudged"]:
             logger.info(
                 "     ├─ 💥 %d unjudged by checker  (excluded from evaluation — no verdict returned)",
@@ -1112,7 +1082,7 @@ class ExtractorEvaluator:
         if pc["wrongful_answer_penalty"]:
             logger.info(
                 "     ├─ ⚪ %d wrongful-answer penalty  (%d items, no GT for %d claims)",
-                pc["wrongful_answer_penalty"], ae["wrongful_answer"],
+                pc["wrongful_answer_penalty"], ab["wrongful_answer"],
                 pc["wrongful_answer_penalty"],
             )
         else:
@@ -1179,6 +1149,33 @@ class ExtractorEvaluator:
                     cf["issued_verdicts"],
                 )
 
+        # ── Abstention behavior (orthogonal axis, ragcheck vocabulary).
+        # Silence with nothing to find is correct; silence with GT present is
+        # not. Neither is a tooling failure — those live in the section above.
+        if ab["justified"] or ab["unjustified"] or ab["wrongful_answer"]:
+            logger.info("")
+            logger.info(
+                " ⚪ Abstention Behavior  (not tooling — extraction parsed fine"
+                " and returned nothing)"
+            )
+            logger.info(
+                "     ├─ ✅ %d justified abstention%s     (GT empty, 0 predictions"
+                " — correct silence)",
+                ab["justified"], "" if ab["justified"] == 1 else "s",
+            )
+            logger.info(
+                "     ├─ ❌ %d unjustified abstention%s  (GT present, 0 predictions"
+                " — %d claims → recall penalty)",
+                ab["unjustified"], "" if ab["unjustified"] == 1 else "s",
+                rc["unjustified_abstention_penalty"],
+            )
+            logger.info(
+                "     └─ ❌ %d wrongful answer%s          (GT empty, %d predictions"
+                " — %d claims → precision penalty)",
+                ab["wrongful_answer"], "" if ab["wrongful_answer"] == 1 else "s",
+                pc["wrongful_answer_penalty"], pc["wrongful_answer_penalty"],
+            )
+
         # ── Atomicity (orthogonal to coverage; only if measured)
         a = result.atomicity
         if a:
@@ -1223,7 +1220,7 @@ class ExtractorEvaluator:
             "%s",
             result.to_compare_items,
             rc["covered"], rc["denominator"],
-            rc["missed"], rc["wrongful_abstention_penalty"],
+            rc["missed"], rc["unjustified_abstention_penalty"],
             pc["supported"], pc["denominator"],
             pc["unsupported"], pc["wrongful_answer_penalty"],
             (f" · 💥 {result.checker_failures['count']} unjudged excluded"

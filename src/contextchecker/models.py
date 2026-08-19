@@ -118,7 +118,7 @@ class ExtractorEvalResult:
     recall: float | None
     f1: float | None
     recall_counts: dict                    # {"total_gt_claims", "covered", "missed",
-                                           #  "wrongful_abstention_penalty", "unjudged",
+                                           #  "unjustified_abstention_penalty", "unjudged",
                                            #  "denominator"}
     precision_counts: dict                 # {"total_pred_claims", "supported", "unsupported",
                                            #  "wrongful_answer_penalty", "unjudged",
@@ -127,10 +127,11 @@ class ExtractorEvalResult:
     to_compare_items: int                  # items with GT + predictions to compare
     gt_stats: dict                         # {"total_triplets": N, "avg_per_item": float}
     pred_stats: dict                       # {"total_triplets": N, "avg_per_item": float}
-    abstention_errors: dict                # item counts: {"wrongful_answer": N,
-                                           #  "wrongful_abstention": N} — the claim-level
-                                           #  penalties live in the counts dicts
-    correct_abstention: int                # items with neither GT nor predictions
+    abstentions: dict                      # item counts: {"justified": N,
+                                           #  "unjustified": N, "wrongful_answer": N}
+                                           #  — the claim-level penalties live in the
+                                           #  counts dicts. Naming follows ragcheck:
+                                           #  justified = nothing was there to find.
     checker_failures: dict                 # {"count": N, "issued_verdicts": N, "rate": float,
                                            #  "items_affected": N, "unjudged_gt": N,
                                            #  "unjudged_pred": N} — matching verdicts the

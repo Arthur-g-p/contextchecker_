@@ -215,11 +215,6 @@ def log_api_parsing(
             else:
                 logger.info("          ├─ ♻️  Round %d: %d recovered | %d failed",
                             i + 1, round_result.recovered, round_result.still_failed)
-
-        # Edge case: parse errors but no retry rounds ran (max_retries=0)
-        if not stats.rounds:
-            logger.info("          └─ ❌ %d exhausted (retries disabled)", stats.parse_error)
-
     logger.info("")
 
 
@@ -251,9 +246,21 @@ def log_variance_block(
     for i, key in enumerate(keys):
         prefix = "└─" if i == len(keys) - 1 else "├─"
         v = variance[key]
+        if means[key] is None:
+            # Null in every run: the metric exists but was never computable.
+            logger.info(
+                "    %s %-24s n/a  (not computable in any of %d runs)",
+                prefix, key + ":", runs,
+            )
+            continue
+        partial = ""
+        if v.get("n", runs) < runs:
+            # Mean over fewer runs than executed — say so, or the mean
+            # overstates its support.
+            partial = f"  ({v['n']}/{runs} runs)"
         logger.info(
-            "    %s %-24s %.3f ± %.3f   [%.3f, %.3f]",
-            prefix, key + ":", means[key], v["std"], v["min"], v["max"],
+            "    %s %-24s %.3f ± %.3f   [%.3f, %.3f]%s",
+            prefix, key + ":", means[key], v["std"], v["min"], v["max"], partial,
         )
     if durations:
         logger.info("")
@@ -262,7 +269,8 @@ def log_variance_block(
         for i, d in enumerate(durations, 1):
             prefix = "└─" if i == len(durations) else "├─"
             logger.info("    %s %-10s %6.1fs", prefix, f"run {i}:", d)
-    if variance and all(v["std"] == 0 for v in variance.values()):
+    stds = [v["std"] for v in variance.values() if v["std"] is not None]
+    if stds and all(std == 0 for std in stds):
         logger.info("")
         logger.info(" ⚠️  Zero variance on every metric — all %d runs returned"
                     " identical results. A caching backend/proxy is the usual"
