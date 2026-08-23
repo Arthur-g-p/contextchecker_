@@ -109,7 +109,7 @@ about the extractor's willingness to answer.
 ## Step 4: Matching (`_match_all_llm`)
 
 For `to_compare` items, two independent passes through `CheckingService` in
-`joint` mode with the `checker_prompt_EVAL_JOINT` prompt:
+`joint` mode with the `checker_prompt_eval_joint` prompt:
 
 1. **Pass 1 — GT → Pred (recall).** GT triplets are the claims, predictions are
    the reference. Entailment = the extractor found this fact.

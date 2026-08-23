@@ -136,13 +136,12 @@ class Checker:
             concurrency=concurrency,
         )
         self._prompt_template = settings.PROMPTS["checker_prompt"]
-        self._joint_prompt_template = (
-            settings.PROMPTS[joint_prompt_key]
-            if joint_prompt_key
-            else settings.PROMPTS["checker_prompt_joint"]
-        )
+        joint_key = joint_prompt_key or "checker_prompt_joint"
+        self._joint_prompt_template = settings.PROMPTS[joint_key]
         self._vanilla_prompt = settings.PROMPTS.get("checker_prompt_vanilla", None)
-        self._joint_vanilla_prompt = settings.PROMPTS.get("checker_prompt_joint_vanilla", None)
+        # Derived from the key in use — a hardcoded one would swap the task when
+        # joint_prompt_key is not the default.
+        self._joint_vanilla_prompt = settings.PROMPTS.get(f"{joint_key}_vanilla", None)
         self.last_stats: PhaseStats | None = None
 
         self._retry_rounds = DEFAULT_RETRY_ROUNDS
@@ -465,7 +464,10 @@ class Checker:
                 filtered_numbered = [(cid, text) for cid, text in numbered if cid in failed_ids]
 
                 retry_tasks.append({
-                    "messages": self._build_joint_messages(filtered_numbered, ref, round_config.prompt),
+                    "messages": self._build_joint_messages(
+                        filtered_numbered, ref, round_config.prompt,
+                        extra_vars=extra_vars_list[idx] if extra_vars_list else None,
+                    ),
                     "schema": JointCheckResult,
                     "temperature": round_config.temperature,
                 })

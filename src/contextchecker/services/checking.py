@@ -92,10 +92,12 @@ class _JointChunk:
     Maps a chunk of numbered claims back to its source item and
     claim indices so we can write verdicts to the correct triplets.
     """
-    numbered_claims: list[tuple[int, str]]
+    numbered_claims: list[tuple[int, str]]   # (local id 1..n, claim text)
     reference: list[str]
     item_index: int
-    chunk_start: int   # 0-based index into the item's claims
+    # Item-level index per local id. Not derivable by offset: already-checked
+    # claims are skipped, so the indices are not contiguous.
+    orig_indices: list[int]
     extra_vars: dict | None = None  # additional template variables (e.g. {{response}})
 
 
@@ -211,6 +213,7 @@ class CheckingService(BaseService):
         self._canonicalize_keys(data)
 
         valid = self._validate(data)
+
         pending, skip_stats = self._filter(valid)
 
         if self.verbosity == "full":
@@ -453,21 +456,21 @@ class CheckingService(BaseService):
 
             for chunk_start in range(0, len(unchecked), effective_num):
                 chunk_end = min(chunk_start + effective_num, len(unchecked))
-                # For the prompt, we use claim_id = orig_idx + 1 so it remains a unique reference ID.
-                # Since the worker treats this ID as a black box (expects integer), this works perfectly.
+                slice_ = unchecked[chunk_start:chunk_end]
                 numbered = [
-                    (orig_idx + 1, text)
-                    for orig_idx, text in unchecked[chunk_start:chunk_end]
+                    (local_id, text)
+                    for local_id, (_, text) in enumerate(slice_, start=1)
                 ]
-                # Collect extra template vars from the item (e.g. response)
-                ev = {}
-                if item.get("response"):
-                    ev["response"] = item["response"]
+                orig_indices = [orig_idx for orig_idx, _ in slice_]
+                # Only the eval matching prompt declares {{response}}.
+                # Only the eval matching prompt declares {{response}}; templates
+                # without it ignore the key.
+                ev = {"response": item.get("response") or "No response text available"}
                 chunks.append(_JointChunk(
                     numbered_claims=numbered,
                     reference=reference,
                     item_index=item_idx,
-                    chunk_start=0,  # Not used since claim_id is absolute map to orig_idx + 1
+                    orig_indices=orig_indices,
                     extra_vars=ev or None,
                 ))
 
@@ -490,11 +493,9 @@ class CheckingService(BaseService):
             if item_idx not in all_verdicts:
                 all_verdicts[item_idx] = {}
 
-            # Map the returned claim_ids directly to their original indices (claim_id - 1)
-            for claim_id, _ in chunk_meta.numbered_claims:
-                orig_idx = claim_id - 1
+            for local_id, orig_idx in enumerate(chunk_meta.orig_indices, start=1):
                 all_verdicts[item_idx][orig_idx] = id_verdicts.get(
-                    claim_id, ClaimVerdict(verdict=None)
+                    local_id, ClaimVerdict(verdict=None)
                 )
 
         return all_verdicts

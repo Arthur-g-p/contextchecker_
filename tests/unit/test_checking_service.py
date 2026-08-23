@@ -628,20 +628,20 @@ class TestClaimLevelResumption:
         from unittest.mock import AsyncMock
         from contextchecker.workers.checker import ClaimVerdict, Verdict
         mock_results = [{
-            2: ClaimVerdict(verdict=Verdict.CONTRADICTION, explanation="Explanation 1"),
-            3: ClaimVerdict(verdict=Verdict.NEUTRAL, explanation="Explanation 2")
+            1: ClaimVerdict(verdict=Verdict.CONTRADICTION, explanation="Explanation 1"),
+            2: ClaimVerdict(verdict=Verdict.NEUTRAL, explanation="Explanation 2")
         }]
 
         mock_check = AsyncMock(return_value=mock_results)
         with patch.object(service._checker, "check_joint_batch", mock_check):
             verdicts_map = await service._execute_joint(pending)
-            
-            # Verify mock call parameters: expected claim_ids are 2 and 3 (1-based from orig_idx + 1)
+
+            # Claim ids are local: the chunk starts at [1] always
             mock_check.assert_called_once()
             called_chunks = mock_check.call_args[0][0]
             assert len(called_chunks) == 1
             numbered_claims = called_chunks[0][0]
-            assert numbered_claims == [(2, "C has D"), (3, "E near F")]
+            assert numbered_claims == [(1, "C has D"), (2, "E near F")]
 
             # Verify returned verdicts map back to original indices 1 and 2
             assert verdicts_map == {
@@ -650,6 +650,44 @@ class TestClaimLevelResumption:
                     2: ClaimVerdict(verdict=Verdict.NEUTRAL, explanation="Explanation 2")
                 }
             }
+
+    @pytest.mark.asyncio
+    async def test_every_chunk_restarts_claim_ids_at_one(self, service):
+        """Chunk 2 must not open at [11] — each prompt sees a dense 1..n list,
+        and orig_indices carries the translation back."""
+        service.joint_num = 10
+        pending = [{
+            "reference": ["r1"],
+            KG_KEY: [
+                {"subject": f"S{i}", "predicate": "p", "object": "o"}
+                for i in range(14)
+            ],
+        }]
+
+        from unittest.mock import AsyncMock
+        from contextchecker.workers.checker import ClaimVerdict, Verdict
+
+        captured = []
+
+        async def fake_batch(chunks, extra_vars_list=None, description=None):
+            captured.extend(chunks)
+            # Answer every chunk using its own local ids
+            return [
+                {cid: ClaimVerdict(verdict=Verdict.ENTAILMENT, explanation="e")
+                 for cid, _ in numbered}
+                for numbered, _ in chunks
+            ]
+
+        with patch.object(service._checker, "check_joint_batch",
+                          AsyncMock(side_effect=fake_batch)):
+            verdicts_map = await service._execute_joint(pending)
+
+        assert len(captured) == 2
+        assert [cid for cid, _ in captured[0][0]] == list(range(1, 11))
+        assert [cid for cid, _ in captured[1][0]] == [1, 2, 3, 4]
+        # The second chunk still lands on item-level indices 10..13
+        assert sorted(verdicts_map[0]) == list(range(14))
+        assert verdicts_map[0][13].verdict == Verdict.ENTAILMENT
 
     def test_serialize_merges_and_preserves_verdicts(self, service):
         """_serialize updates new verdicts, preserves existing ones, and fills legacy root list."""

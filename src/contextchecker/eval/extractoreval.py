@@ -691,7 +691,7 @@ class ExtractorEvaluator:
         Pass 2 (Pred → GT): Pred triplets as claims, GT triplets as reference.
             Non-Entailment = hallucinated/wrong prediction (contributes to FP).
 
-        Uses checker_prompt_EVAL_JOINT with {{response}} context.
+        Uses checker_prompt_eval_joint with {{response}} context.
         """
         logger.info(settings.section_rule("Matching (LLM 2-pass)"))
 
@@ -705,7 +705,7 @@ class ExtractorEvaluator:
             joint_num=self._joint_num,
             max_words=self._max_words,
             verbosity="compact",
-            joint_prompt_key="checker_prompt_EVAL_JOINT",
+            joint_prompt_key="checker_prompt_eval_joint",
         )
 
         # ── Pass 1: GT → Pred (recall / FN detection) ──────────
@@ -734,7 +734,7 @@ class ExtractorEvaluator:
             joint_num=self._joint_num,
             max_words=self._max_words,
             verbosity="compact",
-            joint_prompt_key="checker_prompt_EVAL_JOINT",
+            joint_prompt_key="checker_prompt_eval_joint",
         )
 
         await service2.run(pass2_items)
@@ -850,9 +850,10 @@ class ExtractorEvaluator:
             claim_triplets = item[claims_key]
             ref_triplets = item[ref_key]
 
-            # Format ref triplets as numbered text passages
+            # R prefix, not [n]: claims carry [n], and a bare number on both
+            # sides reads as a cross-reference the model then tries to honour.
             ref_text = "\n".join(
-                f"[{i+1}] {self._triplet_to_str(t)}"
+                f"(R{i+1}) {self._triplet_to_str(t)}"
                 for i, t in enumerate(ref_triplets)
             )
 
