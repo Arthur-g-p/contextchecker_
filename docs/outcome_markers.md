@@ -17,7 +17,7 @@ The rule set that fixes it:
 | On disk | Meaning |
 | --- | --- |
 | `kg: [...claims...]` | Normal extraction |
-| `kg: []` + `{model}_extraction_error: <cause>` | **Tooling failure. Never an abstention.** Causes: `parse_failure` (no valid response after all retry rounds — the most common), `context_too_long`, `content_policy`. |
+| `kg: []` + `{model}_extraction_error: <cause>` | **Tooling failure. Never an abstention.** Causes: `parse_failure` (no valid response after all retry rounds — the most common), `context_too_long`, `finish_reason_length` (the answer was cut off by an output-token limit), `content_policy`, `timeout`. |
 | `kg: []` + `is_abstention: true` + `abstention_source: "heuristic"\|"llm"` | Abstention. `heuristic` = the English refusal-phrase pre-filter caught it before any LLM call (a cheap fast-path; ~impossible false positives at its 85% coverage threshold). `llm` = the extractor returned an empty claims array. |
 | `kg: []` bare (older files) | Treated as abstention (empty-without-error). By project semantics, a response that asserts nothing IS an abstention — whether it was *justified* is a separate question answered by ragcheck's retrieval evidence. |
 

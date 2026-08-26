@@ -17,7 +17,10 @@ from pydantic import BaseModel, Field
 
 from contextchecker.llmclient import LLMClient
 from contextchecker.models import CheckingPayload
-from contextchecker.exceptions import ParsingError, ContextTooLongError, ContentPolicyError, LLMTimeoutError
+from contextchecker.exceptions import (
+    ParsingError, ContextTooLongError, ContentPolicyError, LLMTimeoutError,
+    FinishReasonLengthError,
+)
 from contextchecker.stats import PhaseStats, RoundResult
 from contextchecker.utils import format_prompt
 from contextchecker import settings
@@ -64,7 +67,8 @@ class ClaimVerdict:
 
     This is the typed contract between the worker and the service.
     ``error`` carries WHY the verdict is None ("context_too_long" |
-    "content_policy" | "timeout" | "parse_failure") so a null verdict is never
+    "finish_reason_length" | "content_policy" | "timeout" | "parse_failure")
+    so a null verdict is never
     left open to interpretation downstream.
     """
     verdict: Verdict | None
@@ -224,6 +228,10 @@ class Checker:
             if isinstance(raw, ContentPolicyError):
                 stats.content_policy += 1
                 results[i] = ClaimVerdict(verdict=None, error="content_policy")
+                continue
+            if isinstance(raw, FinishReasonLengthError):
+                stats.finish_reason_length += 1
+                results[i] = ClaimVerdict(verdict=None, error="finish_reason_length")
                 continue
             if isinstance(raw, LLMTimeoutError):
                 stats.timeout += 1
@@ -407,6 +415,11 @@ class Checker:
                 for cid in expected_ids:
                     results[i][cid] = ClaimVerdict(verdict=None, error="content_policy")
                 continue
+            if isinstance(raw, FinishReasonLengthError):
+                stats.finish_reason_length += 1
+                for cid in expected_ids:
+                    results[i][cid] = ClaimVerdict(verdict=None, error="finish_reason_length")
+                continue
             if isinstance(raw, LLMTimeoutError):
                 stats.timeout += 1
                 for cid in expected_ids:
@@ -454,7 +467,8 @@ class Checker:
                 stats.failed_indices.append(i)
 
         stats.first_pass_ok = (stats.first_pass_count - stats.context_too_long
-                               - stats.content_policy - stats.timeout - stats.parse_error)
+                               - stats.content_policy - stats.timeout
+                               - stats.finish_reason_length - stats.parse_error)
 
         # ── Retry loop ───────────────────────────────────────
         for round_num, round_config in enumerate(self._retry_rounds):

@@ -28,6 +28,7 @@ class PhaseStats:
     empty: int = 0                # parsed successfully but 0 items (e.g. empty triplets)
     context_too_long: int = 0     # ContextTooLongError — permanent
     content_policy: int = 0       # ContentPolicyError — permanent
+    finish_reason_length: int = 0 # FinishReasonLengthError — permanent
     timeout: int = 0              # LLMTimeoutError — permanent
     parse_error: int = 0          # initial retryable failure count (set in _classify)
     total_items: int = 0          # domain-specific count (e.g. triplets, verdicts)
@@ -45,7 +46,8 @@ class PhaseStats:
     failed_indices: list[int] = field(default_factory=list)
 
     # Per-item permanent failure causes: batch index → cause.
-    # Causes: "context_too_long" | "content_policy" | "timeout" | "parse_failure".
+    # Causes: "context_too_long" | "finish_reason_length" | "content_policy"
+    #       | "timeout" | "parse_failure".
     # Filled by the worker so services can persist WHY an item failed
     # instead of leaving an uninterpretable empty result.
     error_causes: dict[int, str] = field(default_factory=dict)
@@ -61,7 +63,7 @@ class PhaseStats:
     def total_permanent(self) -> int:
         """All permanently failed items (context + content + exhausted retries)."""
         return (self.context_too_long + self.content_policy + self.timeout
-                + self.permanently_failed)
+                + self.finish_reason_length + self.permanently_failed)
 
     @property
     def total_errors(self) -> int:
@@ -190,7 +192,8 @@ def log_api_parsing(
     logger.info("    %d tasks sent to LLM [%d HTTP requests]", pending, stats.http_requests)
 
     # ── Success on first attempt
-    permanent = stats.context_too_long + stats.content_policy + stats.timeout
+    permanent = (stats.context_too_long + stats.content_policy + stats.timeout
+                 + stats.finish_reason_length)
     has_permanent = permanent > 0
     has_retryable = stats.parse_error > 0
 
@@ -207,6 +210,7 @@ def log_api_parsing(
         stem = "     │    " if has_retryable else "          "
         causes = [
             ("📏", "context too long", stats.context_too_long),
+            ("✂️ ", "finish reason length", stats.finish_reason_length),
             ("🛡️ ", "content policy", stats.content_policy),
             ("⏱️ ", "timed out", stats.timeout),
         ]

@@ -25,7 +25,7 @@ from contextchecker.stats import GLOBAL_STATS
 from contextchecker import settings as default_config
 from contextchecker.exceptions import (
     LLMClientError, WorkerError, ContextTooLongError, ContentPolicyError,
-    LLMParseError, LLMTimeoutError,
+    LLMParseError, LLMTimeoutError, FinishReasonLengthError,
 )
 from contextchecker.utils import build_compact_schema_example
 
@@ -128,6 +128,7 @@ class LLMClient:
         self.concurrency = concurrency
         
         self.timeout = getattr(default_config, 'LLM_TIMEOUT', 120.0)
+        self.max_tokens = getattr(default_config, 'LLM_MAX_TOKENS', None)
 
         # OpenAI SDK client — only created if base_url is set (direct endpoint mode)
         if self.base_url:
@@ -366,7 +367,8 @@ class LLMClient:
             logger.warning("   Details: %s", str(e)[:300])
             return ErrorAction.SKIP
 
-        if e.__class__.__name__ == 'ContentPolicyViolationError':
+        if (e.__class__.__name__ == 'ContentPolicyViolationError'
+                or isinstance(e, ContentFilterFinishReasonError)):
             logger.warning("⚠️  CONTENT POLICY VIOLATION (%s): Safety filter triggered.", self.model)
             logger.warning("   Details: %s", str(e)[:300])
             return ErrorAction.SKIP
@@ -500,6 +502,11 @@ class LLMClient:
             logger.warning("🔄 API ERROR (%s) — %s: %s", self.model, retry_label, str(e)[:300])
             return ErrorAction.SERVER_ERROR
 
+        if isinstance(e, LengthFinishReasonError):
+            logger.warning("⚠️  OUTPUT LIMIT REACHED (%s): response was cut off.", self.model)
+            logger.warning("   Details: %s", str(e)[:300])
+            return ErrorAction.SKIP
+
         if isinstance(e, ValidationError):
             return ErrorAction.RESAMPLE
         # ── UNKNOWN ───────────────────────────────────────────────
@@ -582,6 +589,8 @@ class LLMClient:
                                 "temperature": strategy.temperature,
                                 **kwargs,
                             }
+                            if self.max_tokens is not None:
+                                call_kwargs.setdefault("max_tokens", self.max_tokens)
 
                             # Strategy controls reasoning — always overwrites
                             if strategy.reasoning_effort:
@@ -668,6 +677,8 @@ class LLMClient:
                                 "num_retries": 0,
                                 **kwargs
                             }
+                            if self.max_tokens is not None:
+                                call_kwargs.setdefault("max_tokens", self.max_tokens)
                             if schema:
                                 call_kwargs["response_format"] = schema
 
@@ -792,7 +803,10 @@ class LLMClient:
                             # Raise typed exception instead of returning ""
                             if e.__class__.__name__ == 'ContextWindowExceededError':
                                 raise ContextTooLongError(str(e)) from e
-                            elif e.__class__.__name__ == 'ContentPolicyViolationError':
+                            elif isinstance(e, LengthFinishReasonError):
+                                raise FinishReasonLengthError(str(e)) from e
+                            elif (e.__class__.__name__ == 'ContentPolicyViolationError'
+                                    or isinstance(e, ContentFilterFinishReasonError)):
                                 raise ContentPolicyError(str(e)) from e
                             else:
                                 raise LLMParseError(str(e)) from e
@@ -884,7 +898,8 @@ class LLMClient:
         """
         try:
             return await self.generate(**task_args)
-        except (ContextTooLongError, ContentPolicyError, LLMParseError, LLMTimeoutError) as e:
+        except (ContextTooLongError, ContentPolicyError, LLMParseError,
+                LLMTimeoutError, FinishReasonLengthError) as e:
             return e
         # LLMClientError and anything else propagates → kills batch
 
@@ -972,7 +987,10 @@ class LLMClient:
 
         # Scan for fatal LLMClientError that leaked through as a value (just in case)
         for r in results:
-            if isinstance(r, LLMClientError) and not isinstance(r, (ContextTooLongError, ContentPolicyError, LLMTimeoutError)):
+            if isinstance(r, LLMClientError) and not isinstance(
+                r, (ContextTooLongError, ContentPolicyError, LLMTimeoutError,
+                    FinishReasonLengthError)
+            ):
                 raise r
 
         return results

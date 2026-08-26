@@ -15,6 +15,7 @@ ContextCheckerError          ← catch-all for any package error
     ├── LLMClientError       ← network / API errors from LLM calls
     │   ├── ContextTooLongError  ← input exceeded model context window
     │   ├── ContentPolicyError   ← safety filter rejected content
+    │   ├── FinishReasonLengthError ← answer cut off by an output-token limit
     │   └── LLMTimeoutError      ← request exceeded its time budget
     └── ParsingError         ← LLM returned unparseable output
 
@@ -64,6 +65,10 @@ class ContextTooLongError(LLMClientError):
 
 class ContentPolicyError(LLMClientError):
     """Raised when the model's safety filter rejects the content."""
+
+
+class FinishReasonLengthError(LLMClientError):
+    """Raised when the answer was cut off by an output-token limit."""
 
 
 class LLMTimeoutError(LLMClientError):

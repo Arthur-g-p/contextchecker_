@@ -64,6 +64,7 @@ async def servers():
 def _client(port: int) -> LLMClient:
     with patch("contextchecker.llmclient.default_config") as cfg:
         cfg.LLM_TIMEOUT = DEADLINE
+        cfg.LLM_MAX_TOKENS = None
         cfg.PROMPTS = {}
         c = LLMClient(api_key="k", model="m", base_url=f"http://127.0.0.1:{port}/v1")
     c._connection_verified = True

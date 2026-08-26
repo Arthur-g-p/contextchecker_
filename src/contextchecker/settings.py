@@ -86,6 +86,11 @@ ATOMIZER_API_KEY: str | None = os.getenv("ATOMIZER_API_KEY")
 
 LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "120.0"))
 
+_max_tokens = os.getenv("LLM_MAX_TOKENS")
+LLM_MAX_TOKENS: int | None = int(_max_tokens) if _max_tokens else None
+"""Output-token cap sent with every request. Unset = no cap, the model's own
+limit applies — throws finish_reason_length path."""
+
 
 # ── Checker defaults ────────────────────────────────────────────────────────
 # Joint mode groups multiple claims per LLM call. These control chunking.
