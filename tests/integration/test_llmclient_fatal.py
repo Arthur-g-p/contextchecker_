@@ -102,7 +102,7 @@ def client(tmp_path):
     c._strategy_discovered = True
     c._discovery_succeeded = True
     # Replace the auto-generated mock with a proper AsyncMock
-    c.client.chat.completions.parse = AsyncMock()
+    c.client.chat.completions.create = AsyncMock()
     return c
 
 
@@ -120,8 +120,8 @@ def client_and_mock(request, tmp_path):
         c._connection_verified = True
         c._strategy_discovered = True
         c._discovery_succeeded = True
-        c.client.chat.completions.parse = AsyncMock()
-        yield c, c.client.chat.completions.parse
+        c.client.chat.completions.create = AsyncMock()
+        yield c, c.client.chat.completions.create
     elif mode == "litellm":
         c = LLMClient(
             api_key="test-key-abc123",
@@ -346,7 +346,7 @@ class TestPreflightFatalErrors:
             await client.generate_batch(_make_tasks(3))
 
         # Verify no actual LLM calls were made — died before the batch
-        client.client.chat.completions.parse.assert_not_called()
+        client.client.chat.completions.create.assert_not_called()
 
     async def test_timeout_during_preflight(self, client):
         """APITimeoutError during check_connection → LLMClientError."""
@@ -358,7 +358,7 @@ class TestPreflightFatalErrors:
         with pytest.raises(LLMClientError, match="Timeout"):
             await client.generate_batch(_make_tasks(3))
 
-        client.client.chat.completions.parse.assert_not_called()
+        client.client.chat.completions.create.assert_not_called()
 
     async def test_auth_error_during_preflight(self, client):
         """AuthenticationError during check_connection → LLMClientError."""
@@ -374,7 +374,7 @@ class TestPreflightFatalErrors:
         with pytest.raises(LLMClientError, match="Authentication failed"):
             await client.generate_batch(_make_tasks(3))
 
-        client.client.chat.completions.parse.assert_not_called()
+        client.client.chat.completions.create.assert_not_called()
 
     async def test_404_preflight_is_not_fatal(self, client):
         """NotFoundError on /models endpoint → graceful skip, batch proceeds.
@@ -390,7 +390,7 @@ class TestPreflightFatalErrors:
                 body=None,
             )
         )
-        client.client.chat.completions.parse.return_value = _fake_response()
+        client.client.chat.completions.create.return_value = _fake_response()
 
         # Should NOT raise — batch proceeds normally after skipping preflight
         results = await client.generate_batch(_make_tasks(2))

@@ -37,7 +37,7 @@ def _make_client(tmp_path, base_url=BASE_URL, model=MODEL) -> LLMClient:
     with patch("contextchecker.llmclient.AsyncOpenAI"):
         c = LLMClient(api_key="k", model=model, base_url=base_url)
     c._connection_verified = True  # skip preflight
-    c.client.chat.completions.parse = AsyncMock(return_value=_fake_response())
+    c.client.chat.completions.create = AsyncMock(return_value=_fake_response())
     return c
 
 
@@ -102,7 +102,7 @@ class TestStrategyCacheAdoption:
         # Adopted the cached index — did NOT re-discover from the top (index 0).
         assert client._strategy_discovered is True
         assert client._strategy_index == non_default
-        client.client.chat.completions.parse.assert_called_once()
+        client.client.chat.completions.create.assert_called_once()
 
     def test_constructed_after_discovery_adopts_in_init(self, tmp_path):
         """A warm cache at construction time is adopted in __init__."""

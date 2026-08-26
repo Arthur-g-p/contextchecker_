@@ -122,13 +122,15 @@ class TokenStats:
                 p["requests"] += 1
 
     def log_error(self):
+        """Record one permanently failed ITEM.
+
+        Does not touch the request counters — those count HTTP calls, and one
+        failed item is not one request.
+        """
         with self._lock:
             self.total_errors += 1
-            self.total_requests += 1
             if self._current_phase in self._phases:
-                p = self._phases[self._current_phase]
-                p["errors"] += 1
-                p["requests"] += 1
+                self._phases[self._current_phase]["errors"] += 1
 
     def to_dict(self) -> dict:
         """Crash-safe dict for _meta output. Never raises."""

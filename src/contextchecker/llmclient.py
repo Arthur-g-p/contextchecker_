@@ -14,7 +14,9 @@ from openai import (
     AuthenticationError, PermissionDeniedError, BadRequestError,
     NotFoundError, ConflictError, UnprocessableEntityError,
     RateLimitError, InternalServerError,
+    LengthFinishReasonError, ContentFilterFinishReasonError,
 )
+from openai.lib._parsing import type_to_response_format_param
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from pydantic import ValidationError
@@ -583,7 +585,7 @@ class LLMClient:
                             # Strategy controls output format — always overwrites
                             if schema:
                                 if strategy.use_schema:
-                                    call_kwargs["response_format"] = schema
+                                    call_kwargs["response_format"] = type_to_response_format_param(schema)
                                 elif strategy.use_json_object:
                                     call_kwargs["response_format"] = {"type": "json_object"}
                                 else:
@@ -596,6 +598,10 @@ class LLMClient:
                                     prompts = getattr(default_config, 'PROMPTS', {})
                                     if vanilla_key and vanilla_key in prompts:
                                         # Use human-written vanilla prompt (no schema dump)
+                                        logger.debug(
+                                            "   📝 Vanilla rung: using hand-written prompt '%s'",
+                                            vanilla_key,
+                                        )
                                         patched_messages[-1] = {
                                             **patched_messages[-1],
                                             "content": patched_messages[-1]["content"]
@@ -603,6 +609,11 @@ class LLMClient:
                                         }
                                     else:
                                         # Fallback: compact schema example (no $defs vomit)
+                                        logger.debug(
+                                            "   📝 Vanilla rung: no '%s' in prompt_map — "
+                                            "using generated schema example (fallback)",
+                                            vanilla_key or "<no task>",
+                                        )
                                         example = build_compact_schema_example(schema)
                                         patched_messages[-1] = {
                                             **patched_messages[-1],
@@ -612,7 +623,9 @@ class LLMClient:
                                     call_kwargs["messages"] = patched_messages
 
                             with self._inflight_request():
-                                response = await self.client.chat.completions.parse(**call_kwargs)
+                                response = await self.client.chat.completions.create(
+                                    stream=False, **call_kwargs
+                                )
 
                         else:
                             # ── LiteLLM Path (no matrix, passthrough) ─────
@@ -651,6 +664,16 @@ class LLMClient:
 
                         if hasattr(response, 'usage') and response.usage:
                             GLOBAL_STATS.update(response.usage.model_dump())
+
+                        # Validated here, not by .parse(), so a structurally broken
+                        # response is still counted above before it raises.
+                        if self.base_url and schema and self.strategy.use_schema:
+                            choice = response.choices[0]
+                            if choice.finish_reason == "length":
+                                raise LengthFinishReasonError(completion=response)
+                            if choice.finish_reason == "content_filter":
+                                raise ContentFilterFinishReasonError()
+                            schema.model_validate_json(choice.message.content)
 
                         # Lock strategy on first success
                         if discovering and not self._strategy_discovered:

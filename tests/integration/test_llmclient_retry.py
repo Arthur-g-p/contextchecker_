@@ -98,7 +98,7 @@ def _make_client(tmp_path, *, discovered: bool) -> LLMClient:
         c._strategy_discovered = True
         c._discovery_succeeded = True
         c._strategy_index = 0  # 'Reasoning + Schema' — carries reasoning_effort
-    c.client.chat.completions.parse = AsyncMock()
+    c.client.chat.completions.create = AsyncMock()
     return c
 
 
@@ -122,7 +122,7 @@ class TestRateLimit:
     async def test_honors_server_retry_after(self, tmp_path):
         """A Retry-After header is used verbatim as the back-off."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _rate_limit_error(retry_after=5),
             _fake_response(),
         ]
@@ -130,14 +130,14 @@ class TestRateLimit:
             out = await c.generate([{"role": "user", "content": "hi"}])
 
         assert out == '{"ok": true}'
-        assert c.client.chat.completions.parse.call_count == 2
+        assert c.client.chat.completions.create.call_count == 2
         assert mock_sleep.call_args.args[0] == 5.0
         assert c._rate_limit_wait == 5.0
 
     async def test_fallback_wait_is_jittered(self, tmp_path):
         """No Retry-After → jittered fallback within ±10% of RATE_LIMIT_WAIT (60)."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _rate_limit_error(retry_after=None),
             _fake_response(),
         ]
@@ -150,19 +150,19 @@ class TestRateLimit:
     async def test_retry_after_over_cap_aborts(self, tmp_path):
         """Retry-After beyond RATE_LIMIT_MAX_WAIT (300) is fatal, not an infinite wait."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = _rate_limit_error(retry_after=9999)
+        c.client.chat.completions.create.side_effect = _rate_limit_error(retry_after=9999)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(LLMClientError):
                 await c.generate([{"role": "user", "content": "hi"}])
 
         # Aborted on the first 429 — no retry.
-        assert c.client.chat.completions.parse.call_count == 1
+        assert c.client.chat.completions.create.call_count == 1
 
     async def test_rate_limit_never_drops_item(self, tmp_path):
         """429s don't count toward max_retries — the item is retried until it clears."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _rate_limit_error(retry_after=1),
             _rate_limit_error(retry_after=1),
             _rate_limit_error(retry_after=1),
@@ -174,12 +174,12 @@ class TestRateLimit:
             out = await c.generate([{"role": "user", "content": "hi"}], max_retries=2)
 
         assert out == '{"ok": true}'
-        assert c.client.chat.completions.parse.call_count == 6  # 5 × 429 + 1 success
+        assert c.client.chat.completions.create.call_count == 6  # 5 × 429 + 1 success
 
     async def test_console_message_once_per_window_no_attempt_label(self, tmp_path, caplog):
         """One clear message per episode; the misleading 'Attempt X/N' label is gone."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _rate_limit_error(retry_after=1),
             _rate_limit_error(retry_after=1),
             _rate_limit_error(retry_after=1),
@@ -204,7 +204,7 @@ class TestParseRetryNoBackoff:
     async def test_parse_failure_retries_without_sleeping(self, tmp_path):
         """Unparseable output is resampled immediately — no back-off."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _validation_error(),
             _validation_error(),
             _fake_response(),
@@ -213,14 +213,14 @@ class TestParseRetryNoBackoff:
             out = await c.generate([{"role": "user", "content": "hi"}])
 
         assert out == '{"ok": true}'
-        assert c.client.chat.completions.parse.call_count == 3
+        assert c.client.chat.completions.create.call_count == 3
         mock_sleep.assert_not_called()
 
     async def test_transient_error_still_backs_off(self, tmp_path):
         """Regression guard for the RETRY/RESAMPLE split: a real transient
         error (409) keeps the back-off that parse failures lost."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _conflict_error(),
             _fake_response(),
         ]
@@ -233,18 +233,18 @@ class TestParseRetryNoBackoff:
     async def test_attempt_accounting_is_unchanged(self, tmp_path):
         """Dropping the sleep must not change how many attempts an item gets."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [_validation_error()] * 3
+        c.client.chat.completions.create.side_effect = [_validation_error()] * 3
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(LLMParseError, match="Exhausted 3 retries"):
                 await c.generate([{"role": "user", "content": "hi"}])
 
-        assert c.client.chat.completions.parse.call_count == 3
+        assert c.client.chat.completions.create.call_count == 3
 
     async def test_exhausted_parse_failure_is_silent(self, tmp_path, caplog):
         """The expected case is counted on the bar and in stats — not printed."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [_validation_error()] * 3
+        c.client.chat.completions.create.side_effect = [_validation_error()] * 3
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with caplog.at_level(logging.ERROR, logger="contextchecker"):
@@ -257,7 +257,7 @@ class TestParseRetryNoBackoff:
         """Gating on the last error alone would silence this — a transient error
         occurred, so the item is not the expected all-parse-failure case."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _conflict_error(),
             _validation_error(),
             _validation_error(),
@@ -273,7 +273,7 @@ class TestParseRetryNoBackoff:
     async def test_exhausted_transient_error_still_reports(self, tmp_path, caplog):
         """A non-parse exhaustion is unusual — it keeps its line."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [_conflict_error()] * 3
+        c.client.chat.completions.create.side_effect = [_conflict_error()] * 3
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with caplog.at_level(logging.ERROR, logger="contextchecker"):
@@ -292,19 +292,19 @@ class TestDropParamsProbe:
     async def test_proxy_keeps_drop_params(self, tmp_path):
         """drop_params accepted → learned as a proxy; the field is sent and kept."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.return_value = _fake_response()
+        c.client.chat.completions.create.return_value = _fake_response()
 
         await c.generate([{"role": "user", "content": "hi"}])
 
         assert c._drop_params_supported is True
-        kwargs = c.client.chat.completions.parse.call_args.kwargs
+        kwargs = c.client.chat.completions.create.call_args.kwargs
         assert kwargs["extra_body"]["drop_params"] is True
         assert kwargs["reasoning_effort"] == "low"
 
     async def test_direct_endpoint_drops_param_but_keeps_reasoning(self, tmp_path):
         """drop_params rejected → retried WITHOUT it on the same strategy, reasoning intact."""
         c = _make_client(tmp_path, discovered=True)
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _bad_request("Validation: Unsupported parameter(s): `drop_params`"),
             _fake_response(),
         ]
@@ -313,10 +313,10 @@ class TestDropParamsProbe:
 
         assert out == '{"ok": true}'
         assert c._drop_params_supported is False
-        assert c.client.chat.completions.parse.call_count == 2
+        assert c.client.chat.completions.create.call_count == 2
         assert c._strategy_index == 0  # did NOT advance/lose reasoning
 
-        first, second = c.client.chat.completions.parse.call_args_list
+        first, second = c.client.chat.completions.create.call_args_list
         assert first.kwargs["extra_body"]["drop_params"] is True
         assert "drop_params" not in second.kwargs.get("extra_body", {})
         assert second.kwargs["reasoning_effort"] == "low"  # reasoning retained
@@ -326,7 +326,7 @@ class TestDropParamsProbe:
         state — no per-client re-learn / concurrent stampede on a cache hit."""
         # Client 1 learns it's a direct endpoint (drop_params rejected).
         c1 = _make_client(tmp_path, discovered=True)
-        c1.client.chat.completions.parse.side_effect = [
+        c1.client.chat.completions.create.side_effect = [
             _bad_request("Unsupported parameter(s): `drop_params`"),
             _fake_response(),
         ]
@@ -338,17 +338,17 @@ class TestDropParamsProbe:
         # sends WITHOUT drop_params on the very first request (no rejected wave).
         c2 = _make_client(tmp_path, discovered=True)
         assert c2._drop_params_supported is False
-        c2.client.chat.completions.parse.return_value = _fake_response()
+        c2.client.chat.completions.create.return_value = _fake_response()
         await c2.generate([{"role": "user", "content": "hi"}])
 
-        assert c2.client.chat.completions.parse.call_count == 1
-        kwargs = c2.client.chat.completions.parse.call_args.kwargs
+        assert c2.client.chat.completions.create.call_count == 1
+        kwargs = c2.client.chat.completions.create.call_args.kwargs
         assert "drop_params" not in kwargs.get("extra_body", {})
 
     async def test_fails_at_both_advances_matrix(self, tmp_path):
         """drop_params off AND still 400 → real capability gap → advance the matrix."""
         c = _make_client(tmp_path, discovered=False)  # let discovery walk
-        c.client.chat.completions.parse.side_effect = [
+        c.client.chat.completions.create.side_effect = [
             _bad_request("Unsupported parameter(s): `drop_params`"),  # strat 0 + drop_params
             _bad_request("reasoning_effort not supported"),            # strat 0 no drop_params
             _fake_response(),                                          # strat 1 (Schema Only)
@@ -358,6 +358,6 @@ class TestDropParamsProbe:
 
         assert out == '{"ok": true}'
         assert c._drop_params_supported is False
-        assert c.client.chat.completions.parse.call_count == 3
+        assert c.client.chat.completions.create.call_count == 3
         assert c._strategy_index == 1               # advanced past reasoning
         assert RETRY_MATRIX[1].reasoning_effort is None
