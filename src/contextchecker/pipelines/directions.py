@@ -79,6 +79,8 @@ def phase_failure_lines(stats) -> list[str]:
         permanent.append(f"{stats.context_too_long} context too long")
     if stats.content_policy:
         permanent.append(f"{stats.content_policy} content policy")
+    if stats.timeout:
+        permanent.append(f"{stats.timeout} timeout")
     if stats.permanently_failed:
         permanent.append(f"{stats.permanently_failed} exhausted retries")
     if permanent:

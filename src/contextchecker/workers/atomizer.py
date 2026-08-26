@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from contextchecker.llmclient import LLMClient
 from contextchecker.models import AtomizationPayload
-from contextchecker.exceptions import ContextTooLongError, ContentPolicyError
+from contextchecker.exceptions import ContextTooLongError, ContentPolicyError, LLMTimeoutError
 from contextchecker.stats import PhaseStats, RoundResult
 from contextchecker.utils import format_prompt
 from contextchecker import settings
@@ -255,6 +255,9 @@ class Atomizer:
             # Permanent per-item failures — keep original, no retry
             if isinstance(raw, ContextTooLongError):
                 stats.context_too_long += 1
+                continue
+            if isinstance(raw, LLMTimeoutError):
+                stats.timeout += 1
                 continue
             if isinstance(raw, ContentPolicyError):
                 stats.content_policy += 1

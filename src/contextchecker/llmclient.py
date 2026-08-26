@@ -23,7 +23,10 @@ from pydantic import ValidationError
 
 from contextchecker.stats import GLOBAL_STATS
 from contextchecker import settings as default_config
-from contextchecker.exceptions import LLMClientError, WorkerError, ContextTooLongError, ContentPolicyError, LLMParseError
+from contextchecker.exceptions import (
+    LLMClientError, WorkerError, ContextTooLongError, ContentPolicyError,
+    LLMParseError, LLMTimeoutError,
+)
 from contextchecker.utils import build_compact_schema_example
 
 logger = default_config.get_logger(__name__)
@@ -61,6 +64,14 @@ RETRY_MATRIX = [
 # Seconds a request must be outstanding before the bar shows its age.
 HEARTBEAT_MIN_WAIT = 3.0
 
+# Retries a timed-out request gets before the item is skipped. Retry rounds
+# resend the same payload, so more attempts only re-buy the same timeout.
+TIMEOUT_RETRIES = 1
+
+# How much longer the transport may wait than the wall-clock deadline. Keeping
+# them apart means one deadline wins deterministically instead of racing.
+TIMEOUT_BACKSTOP_FACTOR = 1.5
+
 # Wall-clock timer for the progress bar, bound at import. Tests patch
 # asyncio.sleep to skip back-offs, which would turn the heartbeat into a
 # spin loop; the bar's repaint interval is not a back-off.
@@ -93,6 +104,7 @@ class ErrorAction(Enum):
     RESAMPLE = "resample" # Immediate retry, no backoff — response arrived but didn't parse
     RATE_LIMIT = "rate_limit" # Long backoff, no attempt increment
     SERVER_ERROR = "server_error" # Independent attempts backoff for infrastructure
+    TIMEOUT = "timeout" # TIMEOUT_RETRIES, then the item is skipped — never aborts the batch
 
 
 class LLMClient:
@@ -120,7 +132,11 @@ class LLMClient:
         # OpenAI SDK client — only created if base_url is set (direct endpoint mode)
         if self.base_url:
             self.client = AsyncOpenAI(
-                base_url=self.base_url, api_key=self.api_key, timeout=self.timeout,
+                base_url=self.base_url, api_key=self.api_key,
+                # Backstop only. httpx measures the gap between two chunks, never
+                # total duration, so a trickling server never trips it — the
+                # asyncio deadline around each call is the real limit.
+                timeout=self.timeout * TIMEOUT_BACKSTOP_FACTOR,
                 # Retrying is this class's job. The SDK's own retries are invisible
                 # here: they multiply the request count and hide timeouts.
                 max_retries=0,
@@ -182,6 +198,7 @@ class LLMClient:
         """Mark a request as awaiting a response for the duration of the block."""
         self._call_n += 1
         key = self._call_n
+        GLOBAL_STATS.log_request()
         self._inflight[key] = time.monotonic()
         try:
             yield
@@ -435,9 +452,10 @@ class LLMClient:
             self._log_rate_limit(wait, from_header)
             return ErrorAction.RATE_LIMIT
 
-        if isinstance(e, APITimeoutError):
-            logger.warning("🔄 TIMEOUT (%s) — %s", self.model, retry_label)
-            return ErrorAction.SERVER_ERROR
+        # asyncio.TimeoutError is the wall-clock deadline; APITimeoutError the
+        # transport backstop. Same condition, same handling.
+        if isinstance(e, (APITimeoutError, asyncio.TimeoutError)):
+            return ErrorAction.TIMEOUT
 
         if isinstance(e, APIConnectionError):
             logger.warning("🔄 CONNECTION ERROR (%s) — %s", self.model, retry_label)
@@ -544,6 +562,7 @@ class LLMClient:
                 attempt = 0
                 schema_retries = 0
                 server_err_count = 0
+                timeout_count = 0
                 only_parse_failures = True
 
                 while attempt <= max_retries:
@@ -623,8 +642,11 @@ class LLMClient:
                                     call_kwargs["messages"] = patched_messages
 
                             with self._inflight_request():
-                                response = await self.client.chat.completions.create(
-                                    stream=False, **call_kwargs
+                                response = await asyncio.wait_for(
+                                    self.client.chat.completions.create(
+                                        stream=False, **call_kwargs
+                                    ),
+                                    timeout=self.timeout,
                                 )
 
                         else:
@@ -639,7 +661,7 @@ class LLMClient:
                                 "messages": messages,
                                 "api_key": self.api_key,
                                 "drop_params": True, # Does NOT try out capability matrix. Trust in Litellm. If you want to do capabilitytesting set base_url even when using a provider.
-                                "timeout": self.timeout,
+                                "timeout": self.timeout * TIMEOUT_BACKSTOP_FACTOR,
                                 # See max_retries=0 above. num_retries is LiteLLM's own
                                 # layer, max_retries the openai client it builds underneath.
                                 "max_retries": 0,
@@ -650,7 +672,9 @@ class LLMClient:
                                 call_kwargs["response_format"] = schema
 
                             with self._inflight_request():
-                                response = await acompletion(**call_kwargs)
+                                response = await asyncio.wait_for(
+                                    acompletion(**call_kwargs), timeout=self.timeout
+                                )
 
                         # ── Success ────────────────────────────────────
                         # A 429 episode (if any) has cleared — reset so a later one
@@ -780,6 +804,13 @@ class LLMClient:
                             await asyncio.sleep(self._rate_limit_wait)
                             continue
 
+                        elif action == ErrorAction.TIMEOUT:
+                            timeout_count += 1
+                            if timeout_count > TIMEOUT_RETRIES:
+                                GLOBAL_STATS.log_error()
+                                raise LLMTimeoutError(str(e)) from e
+                            continue
+
                         elif action == ErrorAction.SERVER_ERROR:
                             server_err_count += 1
                             if server_err_count > 3:
@@ -853,7 +884,7 @@ class LLMClient:
         """
         try:
             return await self.generate(**task_args)
-        except (ContextTooLongError, ContentPolicyError, LLMParseError) as e:
+        except (ContextTooLongError, ContentPolicyError, LLMParseError, LLMTimeoutError) as e:
             return e
         # LLMClientError and anything else propagates → kills batch
 
@@ -882,6 +913,7 @@ class LLMClient:
         pbar = tqdm(total=len(tasks_data), desc="  " + description)
 
         failed = 0
+        timed_out = 0
 
         def _set_postfix():
             bits = []
@@ -891,16 +923,20 @@ class LLMClient:
                 bits.append(f"waiting {waiting:.0f}s/{self.timeout:.0f}s")
             if failed:
                 bits.append(f"{failed} failed")
+            if timed_out:
+                bits.append(f"{timed_out} timed out")
             pbar.set_postfix_str(" · ".join(bits), refresh=False)
 
         async def _run_and_update(args):
-            nonlocal failed
+            nonlocal failed, timed_out
             completed = False
             try:
                 res = await _run_safe(args)
                 completed = True
-                # ParsingError is not an LLMError
-                if isinstance(res, Exception):
+                # A timeout is the line, not the model — counted apart.
+                if isinstance(res, LLMTimeoutError):
+                    timed_out += 1
+                elif isinstance(res, Exception):
                     failed += 1
                 return res
             finally:
@@ -936,7 +972,7 @@ class LLMClient:
 
         # Scan for fatal LLMClientError that leaked through as a value (just in case)
         for r in results:
-            if isinstance(r, LLMClientError) and not isinstance(r, (ContextTooLongError, ContentPolicyError)):
+            if isinstance(r, LLMClientError) and not isinstance(r, (ContextTooLongError, ContentPolicyError, LLMTimeoutError)):
                 raise r
 
         return results

@@ -28,6 +28,7 @@ class PhaseStats:
     empty: int = 0                # parsed successfully but 0 items (e.g. empty triplets)
     context_too_long: int = 0     # ContextTooLongError — permanent
     content_policy: int = 0       # ContentPolicyError — permanent
+    timeout: int = 0              # LLMTimeoutError — permanent
     parse_error: int = 0          # initial retryable failure count (set in _classify)
     total_items: int = 0          # domain-specific count (e.g. triplets, verdicts)
     http_requests: int = 0        # total HTTP requests across all rounds
@@ -44,7 +45,7 @@ class PhaseStats:
     failed_indices: list[int] = field(default_factory=list)
 
     # Per-item permanent failure causes: batch index → cause.
-    # Causes: "context_too_long" | "content_policy" | "parse_failure".
+    # Causes: "context_too_long" | "content_policy" | "timeout" | "parse_failure".
     # Filled by the worker so services can persist WHY an item failed
     # instead of leaving an uninterpretable empty result.
     error_causes: dict[int, str] = field(default_factory=dict)
@@ -59,7 +60,8 @@ class PhaseStats:
     @property
     def total_permanent(self) -> int:
         """All permanently failed items (context + content + exhausted retries)."""
-        return self.context_too_long + self.content_policy + self.permanently_failed
+        return (self.context_too_long + self.content_policy + self.timeout
+                + self.permanently_failed)
 
     @property
     def total_errors(self) -> int:
@@ -111,7 +113,6 @@ class TokenStats:
             self.input_tokens += inp
             self.output_tokens += out
             self.reasoning_tokens += reasoning
-            self.total_requests += 1
 
             # Update phase stats
             if self._current_phase in self._phases:
@@ -119,7 +120,17 @@ class TokenStats:
                 p["input_tokens"] += inp
                 p["output_tokens"] += out
                 p["reasoning_tokens"] += reasoning
-                p["requests"] += 1
+
+    def log_request(self):
+        """Count one HTTP call, whatever it returns.
+
+        Timeouts and rejected requests carry no usage, so counting on the
+        response would report fewer requests than were actually sent.
+        """
+        with self._lock:
+            self.total_requests += 1
+            if self._current_phase in self._phases:
+                self._phases[self._current_phase]["requests"] += 1
 
     def log_error(self):
         """Record one permanently failed ITEM.
@@ -179,7 +190,7 @@ def log_api_parsing(
     logger.info("    %d tasks sent to LLM [%d HTTP requests]", pending, stats.http_requests)
 
     # ── Success on first attempt
-    permanent = stats.context_too_long + stats.content_policy
+    permanent = stats.context_too_long + stats.content_policy + stats.timeout
     has_permanent = permanent > 0
     has_retryable = stats.parse_error > 0
 
@@ -190,13 +201,19 @@ def log_api_parsing(
 
     # ── Permanent failures (context too long / content policy)
     if has_permanent:
-        parts = []
-        if stats.context_too_long > 0:
-            parts.append(f"{stats.context_too_long} context too long")
-        if stats.content_policy > 0:
-            parts.append(f"{stats.content_policy} content policy")
         prefix = "├─" if has_retryable else "└─"
-        logger.info("     %s 🚫 %d permanent failures (%s)", prefix, permanent, ", ".join(parts))
+        logger.info("     %s 🚫 %d permanent failures", prefix, permanent)
+        # A sibling below needs the continuation bar; the last node does not.
+        stem = "     │    " if has_retryable else "          "
+        causes = [
+            ("📏", "context too long", stats.context_too_long),
+            ("🛡️ ", "content policy", stats.content_policy),
+            ("⏱️ ", "timed out", stats.timeout),
+        ]
+        shown = [(icon, label, n) for icon, label, n in causes if n > 0]
+        for i, (icon, label, n) in enumerate(shown):
+            branch = "└─" if i == len(shown) - 1 else "├─"
+            logger.info("%s%s %s %d %s", stem, branch, icon, n, label)
 
     # ── Retryable failures with per-round breakdown
     if has_retryable:

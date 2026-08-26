@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from contextchecker.llmclient import LLMClient
 from contextchecker.models import ExtractionPayload
-from contextchecker.exceptions import ContextTooLongError, ContentPolicyError
+from contextchecker.exceptions import ContextTooLongError, ContentPolicyError, LLMTimeoutError
 from contextchecker.stats import PhaseStats, RoundResult
 from contextchecker.utils import format_prompt
 from contextchecker import settings
@@ -238,6 +238,10 @@ class Extractor:
             if isinstance(raw, ContentPolicyError):
                 stats.content_policy += 1
                 stats.error_causes[i] = "content_policy"
+                continue
+            if isinstance(raw, LLMTimeoutError):
+                stats.timeout += 1
+                stats.error_causes[i] = "timeout"
                 continue
 
             # Any other error type — retryable
