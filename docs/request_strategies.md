@@ -19,134 +19,85 @@ are this document.
 
 ## Two paths to the model
 
-The path a request takes determines whether Layer 1 can exist at all.
-
-### OpenAI-compatible path — recommended
-
-Selected when `--extractor-base-api` or `--checker-base-api` is set. ContextChecker
-uses the [OpenAI Python SDK][openai-sdk] and sends the request directly to the
-configured endpoint over the OpenAI-compatible protocol. vLLM, Ollama, OpenRouter,
-Azure OpenAI, LiteLLM Proxy and many other services expose some form of it.
+**Set a base URL** — `--extractor-base-api` or `--checker-base-api` — and the
+request goes out over the [OpenAI SDK][openai-sdk], directly to that endpoint.
+**Leave it unset** and the provider is read from a prefix on the model name, and
+LiteLLM resolves the endpoint, credentials and request transformation.
 
 ```bash
+# base URL set → OpenAI SDK, straight to the endpoint
 contextchecker extract data.json \
   --extractor-base-api https://openrouter.ai/api/v1 \
   --extractor-model openai/gpt-5.6-luna
-```
 
-`openai/gpt-5.6-luna` is OpenRouter's own model identifier, sent as-is. It must
-**not** carry LiteLLM's outer provider prefix: `openrouter/` belongs to LiteLLM's
-provider-selection convention, not to OpenRouter's model ID ([prefix
-handling][prefix]).
-
-When the base URL points at the provider or model server being measured, that
-endpoint decides which parameters and values it accepts. A supported parameter
-reaches the service; an unsupported one produces the service's real rejection.
-Those responses are the evidence Layer 1 needs.
-
-Passing `api_base` to LiteLLM does **not** bypass its validation: LiteLLM resolves
-the provider and base URL first, then still calls `get_optional_params()` before
-dispatch ([resolution][resolve] · [dispatch][optional-params]). The bypass comes
-from ContextChecker switching away from LiteLLM to the OpenAI SDK.
-
-### LiteLLM path — convenient and compatible
-
-Selected when no base URL is set. The provider is encoded in the model name, and
-LiteLLM resolves the endpoint, credentials and request transformation:
-
-```bash
+# no base URL → LiteLLM routes it
 contextchecker extract data.json \
   --extractor-model openrouter/openai/gpt-5.6-luna
 ```
 
-The first segment selects LiteLLM's OpenRouter adapter; the remainder is the
-model identifier sent upstream ([prefix handling][prefix] ·
-[adapter][openrouter-adapter]).
+The model names differ on purpose. `openai/gpt-5.6-luna` is OpenRouter's own
+identifier and is sent as-is; the extra `openrouter/` in the second is
+[LiteLLM's provider prefix][prefix], not part of any model ID.
 
-**This applies to LiteLLM Proxy too, and the Proxy cannot opt out.** Its
-OpenAI-compatible chat endpoint routes ordinary requests into LiteLLM's router
-and completion machinery, through the same adapters, capability checks and
-parameter mappings ([endpoint][proxy-endpoint] · [dispatch][proxy-dispatch] ·
-[router][router]). The Proxy *is* LiteLLM, so it cannot take the direct SDK route
-the way ContextChecker can. Pointing `--extractor-base-api` at a Proxy therefore
-still lands you in the capability layer below — it moves it from your machine to
-the server, nothing more.
-
-### Why the OpenAI-compatible path is recommended
-
-LiteLLM does more than route. Before a completion reaches the network it resolves
-the provider, obtains a supported-parameter list, compares it against the request,
-and maps accepted fields into a provider-specific format.
-
-Those checks are spread across provider allowlists, model-name rules,
-transformation code and a per-model capability record — a **provider- and
-model-specific capability layer**, not a single registry — and every one of them
-is only as current as your installed version:
-
-| What decides | Where |
-| --- | --- |
-| supported-parameter list | [`get_supported_openai_params()`][supported-params] |
-| allowlist comparison, drop-or-raise | [`utils.py` L4005–4053][filtering] |
-| per-model capability record | [`model_prices_and_context_window.json` L25089–25149][capability-record] |
-| reasoning gate for OpenRouter | [transformation L36–50][reasoning-gate] · [`supports_reasoning()`][supports-reasoning] |
-
-So the layer helps when its knowledge matches the provider, and lags when it does
-not. LiteLLM's OpenRouter adapter adds reasoning parameters only when its checks
-call the model reasoning-capable — a newly released model can already accept
-`reasoning_effort` upstream while the installed version still considers it
-unsupported.
-
-What happens then depends on configuration ([source][filtering]):
+The first path is the recommended one, because the second validates before
+anything reaches the network. LiteLLM resolves the provider, builds a
+[supported-parameter list][supported-params], compares the request against it,
+and maps what survives into a provider-specific shape. Whatever does not survive
+is [dropped or raised][filtering]:
 
 | Setting | Behaviour |
 | --- | --- |
 | `drop_params=False` | raises `UnsupportedParamsError` before sending |
 | `drop_params=True` | removes the parameter and continues |
-| `allowed_openai_params` | re-adds fields the operator knows the backend accepts |
+| `allowed_openai_params` | re-adds fields you know the backend accepts |
 
-The second is the hard one to diagnose: the request succeeds, the feature is gone,
-the provider never received the field, and nothing in the response explains that
-an intermediary altered it. Keep LiteLLM updated — old adapters and old metadata
-make this more likely — but updating cannot close the race between new provider
-capabilities and client-side metadata.
+That verdict is assembled from provider allowlists, model-name rules,
+transformation code and a [per-model capability record][capability-record] — a
+capability layer rather than one registry — and all of it is only as current as
+the installed version. Reasoning is the usual casualty: the OpenRouter adapter
+[adds reasoning parameters only][reasoning-gate] for models its checks call
+reasoning-capable, so a model released last week can accept `reasoning_effort`
+upstream while LiteLLM refuses to send it.
 
-**For Layer 1 this is decisive.** Probing through LiteLLM measures the installed
-version's understanding of the backend rather than the backend itself, and "the
-backend does not support this" becomes indistinguishable from "the intermediary
-does not know that it does."
+`drop_params=True` is the case that hurts. The request succeeds, the feature is
+gone, the provider never received the field, and nothing in the response says an
+intermediary removed it. Updating LiteLLM narrows the window; it cannot close the
+race between a provider's new capability and client-side metadata.
 
-### When to keep the LiteLLM path
+For Layer 1 that is disqualifying. A probe answered by LiteLLM measures the
+installed version's beliefs about the backend rather than the backend, and
+"unsupported" becomes indistinguishable from "unrecognised". Setting a base URL
+is not what avoids this.
 
-It reaches many providers by name, resolves credentials and endpoints, and
-translates one request shape into provider-specific formats. For established
-models covered by your installed version, that convenience is often the right
-trade.
+**LiteLLM Proxy is affected too.** Its OpenAI-compatible endpoint hands ordinary
+requests via lite-llm-sdk as well, so a base URL pointing
+at a Proxy escapes none of the above — it moves it from your machine to the
+server.
+
+None of which makes the LiteLLM path bad. It reaches many providers by name,
+resolves credentials and endpoints, and translates one request shape into
+provider-specific formats. For established models covered by your installed
+version that is often the right trade.
 
 | Scenario | Path | Why |
 | --- | --- | --- |
-| Self-hosted vLLM / Ollama | OpenAI-compatible | discovery needs the real backend |
-| Provider endpoint directly | OpenAI-compatible | rejections come from the service itself |
-| A model newer than your LiteLLM release | OpenAI-compatible | capability metadata lags the provider |
+| Self-hosted vLLM / Ollama / SGlang | OpenAI SDK | discovery needs the real backend |
+| Provider endpoint directly | OpenAI SDK | rejections come from the service itself |
+| A model newer than your LiteLLM release | OpenAI SDK | capability metadata lags the provider |
 | Behind LiteLLM Proxy | either | the capability layer applies server-side regardless |
 | Portability across many providers | LiteLLM | switch models by name alone |
 
 > **About the source links:** pinned to LiteLLM `v1.98.0`, the most recent release
-> at the time of writing, so the line numbers stay valid. Later versions move
-> them; the mechanisms are what to look for.
+> at the time of writing, so the line numbers stay valid.
 
 [openai-sdk]: https://github.com/openai/openai-python
 [prefix]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/litellm_core_utils/get_llm_provider_logic.py#L184-L220
-[resolve]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/main.py#L5228-L5237
-[optional-params]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/main.py#L5327-L5373
-[openrouter-adapter]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/llms/openrouter/chat/transformation.py#L36-L77
-[proxy-endpoint]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/proxy/proxy_server.py#L9803-L9892
-[proxy-dispatch]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/proxy/route_llm_request.py#L419-L490
-[router]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/router.py#L2130-L2157
 [supported-params]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/litellm_core_utils/get_supported_openai_params.py#L8-L59
 [filtering]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/utils.py#L4005-L4053
 [capability-record]: https://github.com/BerriAI/litellm/blob/v1.98.0/model_prices_and_context_window.json#L25089-L25149
 [reasoning-gate]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/llms/openrouter/chat/transformation.py#L36-L50
-[supports-reasoning]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/utils.py#L2601-L2605
+[still-validates]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/main.py#L5327-L5373
+[proxy]: https://github.com/BerriAI/litellm/blob/v1.98.0/litellm/proxy/route_llm_request.py#L419-L490
 
 ---
 
@@ -189,16 +140,6 @@ Two behaviours worth knowing:
   (`plain_messages`). Reaching level 5 without one is fatal: sending a
   schema-shaped prompt into an unconstrained decode produces unparseable text
   for every item. The workers warn at startup if their plain prompt is missing.
-
-> **Why not just check the model name and pick the right level?**
->
-> Because a capable model is not the same as a capable backend. The production
-> case is a model behind a LiteLLM proxy, and a model released last week is not
-> in the installed LiteLLM's registry yet — so the proxy rejects `reasoning_effort`
-> for a model that supports it perfectly well, purely because it has never heard
-> of it. Model names tell you nothing about what the path in front of them will
-> accept. Probing does.
-
 ---
 
 ## Layer 2 — Request handling
