@@ -19,12 +19,16 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from contextchecker.llmclient import LLMClient
-from contextchecker.models import AtomizationPayload
+from contextchecker.models import (
+    DEFAULT_RETRY_ROUNDS,
+    AtomizationPayload,
+    RetryRoundConfig,
+)
 from contextchecker.exceptions import (
     ContextTooLongError, ContentPolicyError, LLMTimeoutError, FinishReasonLengthError,
 )
 from contextchecker.stats import PhaseStats, RoundResult
-from contextchecker.utils import format_prompt
+from contextchecker.utils import format_prompt, prepare_plain_prompt
 from contextchecker import settings
 
 logger = settings.get_logger(__name__)
@@ -52,22 +56,6 @@ class AtomizationDecision(BaseModel):
     split: list[AtomicTriplet] = Field(default_factory=list)
 
 
-# ── Retry configuration ─────────────────────────────────────────────────────
-
-@dataclass
-class RetryRoundConfig:
-    """Config for one retry round. Prompt can be 'standard' or 'vanilla'."""
-    temperature: float = 0.3
-    prompt: str = "standard"
-
-
-# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 vanilla.
-DEFAULT_RETRY_ROUNDS = [
-    RetryRoundConfig(temperature=0.3, prompt="standard"),
-    RetryRoundConfig(temperature=0.5, prompt="vanilla"),
-]
-
-
 # ── Worker ───────────────────────────────────────────────────────────────────
 
 class Atomizer:
@@ -84,6 +72,7 @@ class Atomizer:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
+        retry_rounds: list[RetryRoundConfig] | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -95,11 +84,11 @@ class Atomizer:
         self._prompt_template = settings.PROMPTS["atomizer_prompt"]
         self.last_stats: PhaseStats | None = None
 
-        # Vanilla prompt for retry — falls back to the standard template if
-        # "atomizer_prompt_vanilla" is not in prompt_map.json
-        self._vanilla_prompt = settings.PROMPTS.get("atomizer_prompt_vanilla", None)
+        key = "atomizer_prompt_plain"
+        self._plain_prompt = prepare_plain_prompt(
+            settings.PROMPTS.get(key), key, AtomizationDecision, logger)
 
-        self._retry_rounds = DEFAULT_RETRY_ROUNDS
+        self._retry_rounds = retry_rounds or DEFAULT_RETRY_ROUNDS
 
     # ── Message builders ─────────────────────────────────────────
 
@@ -112,19 +101,25 @@ class Atomizer:
         so the LLM sees labeled roles, never an ambiguous joined string.
         """
         template = self._prompt_template
-        if prompt_type == "vanilla" and self._vanilla_prompt:
-            template = self._vanilla_prompt
+        if prompt_type == "plain" and self._plain_prompt:
+            template = self._plain_prompt
 
         prompt = format_prompt(template, {
             "subject": payload.subject,
             "predicate": payload.predicate,
             "object": payload.object,
-            "response": "No context available",
+            "response": "No context available", # TODO: Temporarily hardcoded because unkown if response is more harmful than helpful. Eval follows
         })
         return [
             {"role": "system", "content": "Split compound triplets into atomic facts. Preserve subject/predicate/object roles exactly."},
             {"role": "user", "content": prompt},
         ]
+
+    def _plain_messages(self, payload: AtomizationPayload) -> list[dict] | None:
+        """None when no plain prompt exists and it is needed — the client WILL fail!"""
+        if not self._plain_prompt:
+            return None
+        return self._build_messages(payload, "plain")
 
     def _build_task(
         self, payload: AtomizationPayload, round_config: RetryRoundConfig | None = None,
@@ -143,6 +138,7 @@ class Atomizer:
 
         return {
             "messages": messages,
+            "plain_messages": self._plain_messages(payload),
             "schema": AtomizationDecision,
             "temperature": temperature,
         }

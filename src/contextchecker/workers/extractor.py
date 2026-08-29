@@ -18,12 +18,16 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from contextchecker.llmclient import LLMClient
-from contextchecker.models import ExtractionPayload
+from contextchecker.models import (
+    DEFAULT_RETRY_ROUNDS,
+    ExtractionPayload,
+    RetryRoundConfig,
+)
 from contextchecker.exceptions import (
     ContextTooLongError, ContentPolicyError, LLMTimeoutError, FinishReasonLengthError,
 )
 from contextchecker.stats import PhaseStats, RoundResult
-from contextchecker.utils import format_prompt
+from contextchecker.utils import format_prompt, prepare_plain_prompt
 from contextchecker import settings
 
 logger = settings.get_logger(__name__)
@@ -43,22 +47,6 @@ class ExtractionResult(BaseModel):
     triplets: list[Triplet]
 
 
-# ── Retry configuration ─────────────────────────────────────────────────────
-
-@dataclass
-class RetryRoundConfig:
-    """Config for one retry round. Prompt can be 'standard' or 'vanilla'."""
-    temperature: float = 0.3
-    prompt: str = "standard"   # "standard" → _build_messages, "vanilla" → _build_retry_messages
-
-
-# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 vanilla.
-DEFAULT_RETRY_ROUNDS = [
-    RetryRoundConfig(temperature=0.3, prompt="standard"),
-    RetryRoundConfig(temperature=0.5, prompt="vanilla"),
-]
-
-
 # ── Worker ───────────────────────────────────────────────────────────────────
 
 class Extractor:
@@ -75,6 +63,7 @@ class Extractor:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
+        retry_rounds: list[RetryRoundConfig] | None = None,
     ):
         self.model = model
         self.client = LLMClient(
@@ -86,35 +75,30 @@ class Extractor:
         self._prompt_template = settings.PROMPTS["extractor_prompt"]
         self.last_stats: PhaseStats | None = None
 
-        # Vanilla prompt for retry — falls back to auto-generated schema example
-        # if "extractor_prompt_vanilla" is not in prompt_map.json
-        self._vanilla_prompt = settings.PROMPTS.get("extractor_prompt_vanilla", None)
+        key = "extractor_prompt_plain"
+        self._plain_prompt = prepare_plain_prompt(
+            settings.PROMPTS.get(key), key, ExtractionResult, logger)
 
-        self._retry_rounds = DEFAULT_RETRY_ROUNDS
+        self._retry_rounds = retry_rounds or DEFAULT_RETRY_ROUNDS
 
     # ── Message builders ─────────────────────────────────────────
 
-    def _build_messages(self, text: str) -> list[dict]:
+    def _build_messages(self, text: str, prompt_type: str = "standard") -> list[dict]:
         """Build chat messages for a single extraction call."""
-        prompt = format_prompt(self._prompt_template, {"text": text})
-        return [
-            {"role": "system", "content": "Extract knowledge triplets."},
-            {"role": "user", "content": prompt},
-        ]
-
-    def _build_retry_messages(self, text: str) -> list[dict]:
-        """Build chat messages for the vanilla retry pass.
-
-        Uses a dedicated vanilla prompt if available in prompt_map.json,
-        otherwise reuses the standard prompt — the LLMClient will auto-append
-        a compact schema example when no response_format is supported.
-        """
-        template = self._vanilla_prompt or self._prompt_template
+        template = self._prompt_template
+        if prompt_type == "plain" and self._plain_prompt:
+            template = self._plain_prompt
         prompt = format_prompt(template, {"text": text})
         return [
             {"role": "system", "content": "Extract knowledge triplets."},
             {"role": "user", "content": prompt},
         ]
+
+    def _plain_messages(self, text: str) -> list[dict] | None:
+        """None when no plain prompt exists and it is needed — the client WILL fail!"""
+        if not self._plain_prompt:
+            return None
+        return self._build_messages(text, "plain")
 
     def _build_task(self, payload: ExtractionPayload, round_config: RetryRoundConfig | None = None) -> dict:
         """Build a generate_batch task dict for one item.
@@ -123,18 +107,15 @@ class Extractor:
         None means first pass (standard prompt, temp 0.0).
         """
         if round_config is None:
-            # First pass — structured, low temperature
             messages = self._build_messages(payload.text)
             temperature = 0.0
-        elif round_config.prompt == "vanilla":
-            messages = self._build_retry_messages(payload.text)
-            temperature = round_config.temperature
         else:
-            messages = self._build_messages(payload.text)
+            messages = self._build_messages(payload.text, round_config.prompt)
             temperature = round_config.temperature
 
         return {
             "messages": messages,
+            "plain_messages": self._plain_messages(payload.text),
             "schema": ExtractionResult,
             "temperature": temperature,
         }

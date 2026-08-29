@@ -88,6 +88,28 @@ class TestBuildTask:
         assert task["temperature"] == 0.5
 
 
+class TestRetryRounds:
+    def test_defaults_when_unset(self):
+        a = _atomizer()
+        assert [r.prompt for r in a._retry_rounds] == ["standard", "plain"]
+
+    def test_custom_rounds_are_honoured(self):
+        rounds = [RetryRoundConfig(temperature=0.9, prompt="plain")]
+        a = _atomizer(retry_rounds=rounds)
+        assert a._retry_rounds == rounds
+
+    @pytest.mark.asyncio
+    async def test_custom_rounds_drive_the_retry_loop(self):
+        """One round configured, so one retry batch — not the default two."""
+        a = _atomizer(retry_rounds=[RetryRoundConfig(temperature=0.9)])
+        a.client.generate_batch = AsyncMock(return_value=[ParsingError("nope")])
+        a.client.last_batch_requests = 1
+
+        await a.atomize_batch([_payload()])
+
+        assert a.client.generate_batch.await_count == 2  # first pass + one round
+
+
 # ── Test _build_fallbacks ────────────────────────────────────────────────────
 
 class TestBuildFallbacks:

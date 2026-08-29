@@ -79,6 +79,27 @@ class AtomizationPayload:
     triplet_index: int      # which triplet within that item
 
 
+# ── Retry rounds ─────────────────────────────────────────────────────────────
+
+@dataclass
+class RetryRoundConfig:
+    """Contract: worker → its own retry loop.
+
+    One round of re-sending whatever the first pass could not parse.
+    The prompt is 'standard' or 'plain'.
+    """
+
+    temperature: float = 0.3
+    prompt: str = "standard"
+
+
+# Round 1 re-sends the same prompt hotter, round 2 switches to plain.
+DEFAULT_RETRY_ROUNDS = [
+    RetryRoundConfig(temperature=0.3, prompt="standard"),
+    RetryRoundConfig(temperature=0.5, prompt="plain"),
+]
+
+
 # ── Evaluation ───────────────────────────────────────────────────────────────
 
 @dataclass

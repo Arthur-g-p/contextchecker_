@@ -24,7 +24,7 @@ class PhaseStats:
     Reusable across extractor, checker, or any batch caller."""
     # First pass results
     success: int = 0              # parsed with content on ANY pass (cumulative)
-    first_pass_ok: int = 0        # parsed on first attempt (set once, never modified)
+    first_pass_ok: int = 0        # OK before any retry round (set once, never modified)
     empty: int = 0                # parsed successfully but 0 items (e.g. empty triplets)
     context_too_long: int = 0     # ContextTooLongError — permanent
     content_policy: int = 0       # ContentPolicyError — permanent
@@ -198,9 +198,9 @@ def log_api_parsing(
     has_retryable = stats.parse_error > 0
 
     if has_permanent or has_retryable:
-        logger.info("     ├─ ✅ %d parsed on first attempt", stats.first_pass_ok)
+        logger.info("     ├─ ✅ %d parsed before any retry round", stats.first_pass_ok)
     else:
-        logger.info("     └─ ✅ %d parsed on first attempt", stats.first_pass_ok)
+        logger.info("     └─ ✅ %d parsed before any retry round", stats.first_pass_ok)
 
     # ── Permanent failures (context too long / content policy)
     if has_permanent:

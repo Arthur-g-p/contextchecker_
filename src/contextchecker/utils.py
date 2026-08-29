@@ -1,9 +1,10 @@
 """
-Shared utility functions — pure helpers with no side effects.
+Shared utility functions — pure helpers.
 
 This file is a leaf dependency — it imports nothing from contextchecker.
 """
 import json
+import logging
 import statistics
 
 
@@ -67,20 +68,84 @@ def build_variance(metric_dicts: list[dict]) -> tuple[dict, dict]:
             variance[key] = agg
     return means, variance
 
-def build_compact_schema_example(schema) -> str:
-    """Build a compact JSON example from a Pydantic model for vanilla LLM prompts.
+# ── Prompt building ──────────────────────────────────────────────────────────
 
-    Used as a fallback when the model doesn't support structured output
-    and no hand-written vanilla prompt exists in prompt_map.json.
-    """
+_SCHEMA_SHAPE_MAX_DEPTH = 6
+
+
+def build_schema_shape(schema) -> str:
+    """Render a Pydantic model as the JSON shape a prompt should ask for."""
+    def render(node: dict, defs: dict, depth: int, seen: frozenset):
+        if depth > _SCHEMA_SHAPE_MAX_DEPTH:
+            return "<...>"
+
+        ref = node.get("$ref")
+        if ref:
+            name = ref.rsplit("/", 1)[-1]
+            if name in seen:
+                return "<recursive>"
+            return render(defs.get(name, {}), defs, depth, seen | {name})
+
+        for union_key in ("anyOf", "oneOf"):
+            if union_key in node:
+                branches = [b for b in node[union_key] if b.get("type") != "null"]
+                return render(branches[0], defs, depth, seen) if branches else None
+
+        # A one-value Literal arrives as const, not enum.
+        if "const" in node:
+            return str(node["const"])
+        if "enum" in node:
+            return " | ".join(str(v) for v in node["enum"])
+
+        node_type = node.get("type")
+        if node_type == "object" or "properties" in node:
+            if "properties" in node:
+                return {
+                    key: render(sub, defs, depth + 1, seen)
+                    for key, sub in node["properties"].items()
+                }
+            # A mapping carries its value type in additionalProperties instead.
+            values = node.get("additionalProperties")
+            return {"<key>": render(values, defs, depth + 1, seen)
+                    if isinstance(values, dict) else "<any>"}
+        if node_type == "array":
+            # Fixed-length tuples enumerate their members instead of one item type.
+            if "prefixItems" in node:
+                return [render(i, defs, depth + 1, seen) for i in node["prefixItems"]]
+            return [render(node.get("items", {}), defs, depth + 1, seen)]
+
+        return f"<{node_type or 'string'}>"
+
     try:
         json_schema = schema.model_json_schema()
-        props = json_schema.get("properties", {})
-        example = {k: f"<{v.get('type', 'string')}>" for k, v in props.items()}
-
-        return json.dumps(example, indent=2)
+        shape = render(json_schema, json_schema.get("$defs", {}), 0, frozenset())
+        return json.dumps(shape, indent=2)
     except Exception:
         return '{"result": "<see prompt for format>"}'
+
+
+def prepare_plain_prompt(
+    template: str | None, key: str, schema, logger: logging.Logger,
+) -> str | None:
+    """Substitute {{schema}} into a plain prompt.
+
+    A missing prompt or a missing placeholder only matters if the endpoint
+    needs unguided decoding, so both warn here and fail there. Logs through
+    *logger* so the warning names the caller, not this module.
+    """
+    if template is None:
+        logger.warning(
+            "   ⚠️  No plain prompt '%s' in prompt_map — a model that cannot take "
+            "a schema will abort the run.", key,
+        )
+        return None
+    if "{{schema}}" not in template:
+        logger.warning(
+            "   ⚠️  Plain prompt '%s' has no {{schema}} placeholder — the model "
+            "will get no output shape.", key,
+        )
+        return template
+    return format_prompt(template, {"schema": build_schema_shape(schema)})
 
 
 def format_prompt(template: str, variables: dict) -> str:

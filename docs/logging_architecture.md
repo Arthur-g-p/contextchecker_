@@ -11,6 +11,7 @@ contextchecker                         ← NullHandler (silent) + CLI attaches S
 ├── contextchecker.cli                 ← box header, output path
 ├── contextchecker.services.extraction ← validation, skip, config, results, done line
 ├── contextchecker.workers.extractor   ← extraction progress, retries
+├── contextchecker.utils               ← no logger of its own; uses the caller's
 └── contextchecker.llmclient           ← connection test, strategy discovery (future migration)
 ```
 
@@ -153,3 +154,23 @@ logger.info("── Extraction ────────────────�
 ```
 
 These mark transitions between phases (e.g. filtering → extraction → results).
+
+### 8. Leaf modules take the caller's logger
+
+`utils.py` imports nothing from contextchecker, so it has no `get_logger` and no
+module logger. A helper there that needs to warn takes one as a parameter:
+
+```python
+def prepare_plain_prompt(template, key, schema, logger: logging.Logger) -> str | None:
+    if template is None:
+        logger.warning("   ⚠️  No plain prompt '%s' in prompt_map — ...", key)
+```
+
+This keeps the leaf intact and attributes the line to the layer that owns the
+subject — a worker's prompt gap reports as `contextchecker.workers.extractor`,
+not `contextchecker.utils`.
+
+Never call `logging.getLogger()` directly instead. A name outside the
+`contextchecker.*` hierarchy finds no handler, falls through to Python's
+`lastResort`, and prints to stderr for every library consumer regardless of what
+they configured.

@@ -16,13 +16,17 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from contextchecker.llmclient import LLMClient
-from contextchecker.models import CheckingPayload
+from contextchecker.models import (
+    DEFAULT_RETRY_ROUNDS,
+    CheckingPayload,
+    RetryRoundConfig,
+)
 from contextchecker.exceptions import (
     ParsingError, ContextTooLongError, ContentPolicyError, LLMTimeoutError,
     FinishReasonLengthError,
 )
 from contextchecker.stats import PhaseStats, RoundResult
-from contextchecker.utils import format_prompt
+from contextchecker.utils import format_prompt, prepare_plain_prompt
 from contextchecker import settings
 
 logger = settings.get_logger(__name__)
@@ -76,22 +80,6 @@ class ClaimVerdict:
     error: str | None = None
 
 
-# ── Retry configuration ─────────────────────────────────────────────────────
-
-@dataclass
-class RetryRoundConfig:
-    """Config for one retry round. Prompt can be 'standard' or 'vanilla'."""
-    temperature: float = 0.3
-    prompt: str = "standard"   # "standard" or "vanilla"
-
-
-# Default: 2 retry rounds. Round 1 same prompt with higher temp, Round 2 vanilla.
-DEFAULT_RETRY_ROUNDS = [
-    RetryRoundConfig(temperature=0.3, prompt="standard"),
-    RetryRoundConfig(temperature=0.5, prompt="vanilla"),
-]
-
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _format_reference(reference: list[str]) -> str:
@@ -130,6 +118,7 @@ class Checker:
         model: str,
         base_url: str | None = None,
         concurrency: int = 10,
+        retry_rounds: list[RetryRoundConfig] | None = None,
         joint_prompt_key: str | None = None,
     ):
         self.model = model
@@ -142,13 +131,17 @@ class Checker:
         self._prompt_template = settings.PROMPTS["checker_prompt"]
         joint_key = joint_prompt_key or "checker_prompt_joint"
         self._joint_prompt_template = settings.PROMPTS[joint_key]
-        self._vanilla_prompt = settings.PROMPTS.get("checker_prompt_vanilla", None)
+        key = "checker_prompt_plain"
+        self._plain_prompt = prepare_plain_prompt(
+            settings.PROMPTS.get(key), key, CheckResult, logger)
         # Derived from the key in use — a hardcoded one would swap the task when
         # joint_prompt_key is not the default.
-        self._joint_vanilla_prompt = settings.PROMPTS.get(f"{joint_key}_vanilla", None)
+        joint_plain_key = f"{joint_key}_plain"
+        self._joint_plain_prompt = prepare_plain_prompt(
+            settings.PROMPTS.get(joint_plain_key), joint_plain_key, JointCheckResult, logger)
         self.last_stats: PhaseStats | None = None
 
-        self._retry_rounds = DEFAULT_RETRY_ROUNDS
+        self._retry_rounds = retry_rounds or DEFAULT_RETRY_ROUNDS
 
     # ── Single mode ──────────────────────────────────────────────
 
@@ -157,8 +150,8 @@ class Checker:
     ) -> list[dict]:
         """Build chat messages for a single check call."""
         template = self._prompt_template
-        if prompt_type == "vanilla" and self._vanilla_prompt:
-            template = self._vanilla_prompt
+        if prompt_type == "plain" and self._plain_prompt:
+            template = self._plain_prompt
 
         prompt = format_prompt(template, {
             "claim": claim,
@@ -168,6 +161,21 @@ class Checker:
             {"role": "system", "content": "You are a factual entailment judge."},
             {"role": "user", "content": prompt},
         ]
+
+    def _plain_messages(self, claim: str, reference: list[str]) -> list[dict] | None:
+        """None when no plain prompt exists and it is needed — the client WILL fail!"""
+        if not self._plain_prompt:
+            return None
+        return self._build_messages(claim, reference, "plain")
+
+    def _plain_joint_messages(
+        self, numbered_claims: list[tuple[int, str]], reference: list[str],
+        extra_vars: dict | None = None,
+    ) -> list[dict] | None:
+        """None when no plain joint prompt exists — see _plain_messages."""
+        if not self._joint_plain_prompt:
+            return None
+        return self._build_joint_messages(numbered_claims, reference, "plain", extra_vars)
 
     async def check(self, payload: CheckingPayload) -> ClaimVerdict:
         """Check a single claim against its reference.
@@ -209,6 +217,7 @@ class Checker:
         for p in payloads:
             tasks.append({
                 "messages": self._build_messages(p.claim, p.reference),
+                "plain_messages": self._plain_messages(p.claim, p.reference),
                 "schema": CheckResult,
                 "temperature": 0.0,
             })
@@ -273,6 +282,7 @@ class Checker:
                 p = payloads[i]
                 retry_tasks.append({
                     "messages": self._build_messages(p.claim, p.reference, round_config.prompt),
+                    "plain_messages": self._plain_messages(p.claim, p.reference),
                     "schema": CheckResult,
                     "temperature": round_config.temperature,
                 })
@@ -325,13 +335,13 @@ class Checker:
         Args:
             numbered_claims: list of (claim_id, claim_text) tuples.
             reference: list of reference passages.
-            prompt_type: standard or vanilla prompt template.
+            prompt_type: standard or plain prompt template.
             extra_vars: additional template variables merged with
                         {claims, reference} before formatting.
         """
         template = self._joint_prompt_template
-        if prompt_type == "vanilla" and self._joint_vanilla_prompt:
-            template = self._joint_vanilla_prompt
+        if prompt_type == "plain" and self._joint_plain_prompt:
+            template = self._joint_plain_prompt
 
         claims_block = "\n".join(
             f"[{cid}] {text}" for cid, text in numbered_claims
@@ -389,6 +399,7 @@ class Checker:
             ev = extra_vars_list[i] if extra_vars_list else None
             tasks.append({
                 "messages": self._build_joint_messages(numbered, ref, extra_vars=ev),
+                "plain_messages": self._plain_joint_messages(numbered, ref, extra_vars=ev),
                 "schema": JointCheckResult,
                 "temperature": 0.0,
             })
@@ -490,6 +501,10 @@ class Checker:
                 retry_tasks.append({
                     "messages": self._build_joint_messages(
                         filtered_numbered, ref, round_config.prompt,
+                        extra_vars=extra_vars_list[idx] if extra_vars_list else None,
+                    ),
+                    "plain_messages": self._plain_joint_messages(
+                        filtered_numbered, ref,
                         extra_vars=extra_vars_list[idx] if extra_vars_list else None,
                     ),
                     "schema": JointCheckResult,

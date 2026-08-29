@@ -27,7 +27,6 @@ from contextchecker.exceptions import (
     LLMClientError, WorkerError, ContextTooLongError, ContentPolicyError,
     LLMParseError, LLMTimeoutError, FinishReasonLengthError,
 )
-from contextchecker.utils import build_compact_schema_example
 
 logger = default_config.get_logger(__name__)
 
@@ -50,14 +49,14 @@ class RetryStrategy:
     temperature: float = 0.0
 
 
-# Best case at top, vanilla at bottom.
+# Best case at top, unguided decoding at bottom.
 # On capability errors (BadRequest, UnsupportedParams), we walk down.
 RETRY_MATRIX = [
     RetryStrategy("Reasoning + Schema",  reasoning_effort="low",  use_schema=True, use_json_object=False),
     RetryStrategy("Schema Only",                                  use_schema=True, use_json_object=False),
     RetryStrategy("Reasoning + JSON",    reasoning_effort="low",  use_json_object=True, use_schema=False),
     RetryStrategy("JSON Only",                                    use_json_object=True, use_schema=False),
-    RetryStrategy("Vanilla", use_schema=False, reasoning_effort=None, use_json_object=False)
+    RetryStrategy("Unguided Decoding", use_schema=False, reasoning_effort=None, use_json_object=False)
 ]
 
 
@@ -519,7 +518,9 @@ class LLMClient:
     #  GENERATE
     # ───────────────────────────────────────────────────────────────
 
-    async def generate(self, messages: list[dict], schema: Any = None, max_retries=2, task: str = None, **kwargs) -> str:
+    async def generate(self, messages: list[dict], schema: Any = None, max_retries=2,
+                       task: str = None, plain_messages: list[dict] | None = None,
+                       **kwargs) -> str:
         """
         Runs one LLM request.
         - base_url set     → OpenAI SDK (direct endpoint, no provider prefix needed)
@@ -527,6 +528,9 @@ class LLMClient:
         - First request discovers the best strategy (serialized via lock).
         - All subsequent requests use the locked strategy concurrently.
         """
+        if task:
+            GLOBAL_STATS.set_phase(task)
+
         if not self._connection_verified:
             await self.check_connection()
 
@@ -617,38 +621,20 @@ class LLMClient:
                                 elif strategy.use_json_object:
                                     call_kwargs["response_format"] = {"type": "json_object"}
                                 else:
-                                    # Vanilla mode — no response_format
                                     call_kwargs.pop("response_format", None)
-                                    patched_messages = list(messages)
-
-                                    # Try task-specific vanilla prompt from prompt_map
-                                    vanilla_key = f"{task}_vanilla" if task else None
-                                    prompts = getattr(default_config, 'PROMPTS', {})
-                                    if vanilla_key and vanilla_key in prompts:
-                                        # Use human-written vanilla prompt (no schema dump)
-                                        logger.debug(
-                                            "   📝 Vanilla rung: using hand-written prompt '%s'",
-                                            vanilla_key,
+                                    if not plain_messages:
+                                        # Nothing constrains the output here, so the
+                                        # standard prompt would return nothing of value; end it.
+                                        self._save_and_raise(
+                                            f"'{self.model}' accepts no response_format, leaving "
+                                            f"'{self.strategy.name}' as the only strategy — but the "
+                                            f"caller supplied no plain prompt for it."
                                         )
-                                        patched_messages[-1] = {
-                                            **patched_messages[-1],
-                                            "content": patched_messages[-1]["content"]
-                                                + f"\n\n{prompts[vanilla_key]}"
-                                        }
-                                    else:
-                                        # Fallback: compact schema example (no $defs vomit)
-                                        logger.debug(
-                                            "   📝 Vanilla rung: no '%s' in prompt_map — "
-                                            "using generated schema example (fallback)",
-                                            vanilla_key or "<no task>",
-                                        )
-                                        example = build_compact_schema_example(schema)
-                                        patched_messages[-1] = {
-                                            **patched_messages[-1],
-                                            "content": patched_messages[-1]["content"]
-                                                + f"\n\nRespond ONLY with valid JSON matching this structure:\n{example}"
-                                        }
-                                    call_kwargs["messages"] = patched_messages
+                                    logger.debug(
+                                        "   📝 %s: sending the caller's plain prompt",
+                                        strategy.name,
+                                    )
+                                    call_kwargs["messages"] = plain_messages
 
                             with self._inflight_request():
                                 response = await asyncio.wait_for(
@@ -912,7 +898,7 @@ class LLMClient:
         Args:
             tasks_data: List of dicts with messages, schema, temperature, etc.
             description: tqdm progress bar label
-            task: "extract" or "check" — sets GLOBAL_STATS phase and routes vanilla prompts
+            task: "extract" or "check" — sets the GLOBAL_STATS phase
         """
         if not self._connection_verified:
             await self.check_connection()

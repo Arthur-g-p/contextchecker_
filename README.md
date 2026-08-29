@@ -213,6 +213,9 @@ lookup entirely. Either way the key comes from `EXTRACTOR_API_KEY` /
   and cannot measure
 - [architecture.md](architecture.md) — the full design document (layer
   model, data contract, error propagation)
+- [docs/request_strategies.md](docs/request_strategies.md) — how requests
+  reach the model: capability discovery, retry behaviour, timeouts, and the
+  settings you can tune
 - [docs/ragchecker.md](docs/ragchecker.md) — the RAG evaluation pipeline
 - [docs/faithfulness.md](docs/faithfulness.md) — ground-truth-free
   faithfulness checking

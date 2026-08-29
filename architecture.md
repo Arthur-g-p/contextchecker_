@@ -41,7 +41,7 @@ CLI (controllers)  →  Pipelines / Services (orchestration)  →  Workers (exec
   caching, and drop-params handling. Per-item errors (ContextTooLong,
   ContentPolicy, parse) are returned as *values* in the batch result list;
   fatal errors (auth, connection, budget) propagate.
-  **[UNVERIFIED: internals beyond this contract]**
+  See docs/request_strategies.md.
 - `stats.py` — `PhaseStats` (per-batch outcomes incl. per-index
   `error_causes`), `RoundResult`, global `TokenStats`, shared log helpers.
 
