@@ -400,9 +400,12 @@ class TestOverallMetrics:
             (0.2273 + 0.0) / 2, abs=1e-3)
 
     def test_abstention_rates(self):
+        """No-results leave the denominator: the errored item is excluded,
+        so rates are over the 2 items the model actually got to answer
+        (the tooling failure is charged once, in extraction_error_rate)."""
         overall = compute_overall_metrics(self._results())
-        assert overall["abstention_rate"] == pytest.approx(1 / 3, abs=1e-3)
-        assert overall["justified_abstention_rate"] == pytest.approx(1 / 3, abs=1e-3)
+        assert overall["abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
+        assert overall["justified_abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
         assert overall["unjustified_abstention_rate"] == 0.0
 
     def test_unjustified_abstention_detected(self):

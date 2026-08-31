@@ -250,6 +250,124 @@ def log_multi_run_hint(runs: int) -> None:
                 " cache responses, or every run will be identical.", runs)
 
 
+def log_run_line(
+    run: int,
+    runs: int,
+    duration_seconds: float,
+    metrics: dict,
+    keys: tuple[str, ...],
+) -> None:
+    """Print the ✅ run line closing one run in variance mode.
+
+    One format for all four --runs commands. Presence-filtered: only *keys*
+    that exist in *metrics* as numbers are shown, so each command passes its
+    own headline keys and missing/null metrics drop out silently.
+    """
+    parts = [
+        f"{key} {metrics[key]:.3f}"
+        for key in keys
+        if isinstance(metrics.get(key), (int, float))
+    ]
+    logger.info(" ✅ Run %d/%d done in %.1fs · %s",
+                run, runs, duration_seconds, " · ".join(parts) or "done")
+
+
+def log_mece_tree(
+    header: str,
+    total: int,
+    total_label: str,
+    branches: list[tuple],
+    footer: list[tuple] | None = None,
+    header_note: str | None = None,
+) -> None:
+    """Render one MECE tree per docs/holy_data.md rule set 1.
+
+    *branches* are (icon, count, plain-English label, note-or-None); their
+    counts must partition *total* — a mismatch logs a warning (holy-data
+    enforcement, never a crash). *footer* rates are (name, numerator,
+    denominator), rendered as the single terminal `→` line with visible
+    fractions; only footer rates may be aggregated by the variance block,
+    under the same names.
+    """
+    top = f" {header} — {total} {total_label}"
+    if header_note:
+        top += f"  ({header_note})"
+    logger.info(top)
+
+    branch_sum = sum(count for _, count, _, _ in branches)
+    if branch_sum != total:
+        logger.warning(
+            "⚠️  MECE violation in '%s': branches sum to %d, header says %d",
+            header, branch_sum, total,
+        )
+
+    texts = [f"{count} {label}" for _, count, label, _ in branches]
+    width = max(len(t) for t in texts) if texts else 0
+    for i, (icon, _, _, note) in enumerate(branches):
+        prefix = "├─" if footer or i < len(branches) - 1 else "└─"
+        line = f"     {prefix} {icon} {texts[i]:<{width}}"
+        if note:
+            line = f"{line}  ({note})"
+        logger.info(line.rstrip())
+
+    if footer:
+        parts = []
+        for entry in footer:
+            name, num, den = entry[0], entry[1], entry[2]
+            # optional 4th element: a fraction suffix, e.g. "judged" when
+            # the footer denominator is a subset of the header total.
+            suffix = f" {entry[3]}" if len(entry) > 3 and entry[3] else ""
+            parts.append(f"{name} n/a" if not den
+                         else f"{name} {num / den:.3f} ({num} / {den}{suffix})")
+        logger.info("     └─ → %s", " · ".join(parts))
+
+
+def log_rate_rows(
+    header: str,
+    rows: list[tuple],
+    header_note: str | None = None,
+) -> None:
+    """Render one rate-rows block (docs/holy_data.md rule set 2).
+
+    Each row is (icon, label, count, denominator, phrase, rate_key,
+    causes) and is its own derivation: ``2 of 8 items failed →
+    extraction_error_rate 0.250``. Rates are 0-1 decimals (percent is
+    banned); *rate_key* names the exact variance/JSON key the number
+    becomes (None for rows whose rate is not exported yet). count None
+    renders a "not measured" row with *phrase* as the reason. Rows never
+    sum and never pretend to; zero rows always print — a hidden row is
+    indistinguishable from an unmeasured one. *causes* ({cause: n})
+    render as sub-branches, cause names in plain English.
+    """
+    top = f" {header}"
+    if header_note:
+        top += f"  ({header_note})"
+    logger.info(top)
+
+    labels = [f"{label}:" for _, label, *_ in rows]
+    width = max(len(l) for l in labels) if labels else 0
+    for i, (icon, label, count, den, phrase, rate_key, causes) in enumerate(rows):
+        last = i == len(rows) - 1
+        prefix = "└─" if last else "├─"
+        name = f"{label}:".ljust(width)
+        if count is None:
+            logger.info("     %s %s %s  not measured  (%s)",
+                        prefix, icon, name, phrase)
+            continue
+        line = f"     {prefix} {icon} {name}  {count} of {den} {phrase}"
+        if rate_key:
+            rate = "n/a" if not den else f"{count / den:.3f}"
+            line += f"  → {rate_key} {rate}"
+        logger.info(line)
+        if causes:
+            stem = "          " if last else "     │    "
+            items = sorted(causes.items(), key=lambda kv: -kv[1])
+            for j, (cause, num) in enumerate(items):
+                sub = "└─" if j == len(items) - 1 else "├─"
+                logger.info("%s%s %s: %d", stem, sub,
+                            str(cause).replace("_", " "), num)
+
+
 def log_variance_block(
     runs: int,
     means: dict,

@@ -29,13 +29,14 @@ from contextchecker.services.base import BaseService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
 from contextchecker.pipelines.directions import (
+    abstention_counts,
     normalize_chunks,
     phase_failure_lines,
     run_direction,
     unwrap_items,
 )
 from contextchecker.pipelines.ragchecker import _ENTAILMENT, _ratio, _row_entailed
-from contextchecker.stats import log_token_stats
+from contextchecker.stats import log_mece_tree, log_rate_rows, log_token_stats
 from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
@@ -284,20 +285,15 @@ class FaithfulnessPipeline(BaseService):
         if evaluated == 0:
             return overall
 
-        errored = [e for e in results if e.get("extraction_errors")]
-        abstained = [e for e in results
-                     if e.get("is_abstention") and not e.get("extraction_errors")]
-        overall["abstention_rate"] = _ratio(len(abstained), evaluated)
-        overall["extraction_error_rate"] = _ratio(len(errored), evaluated)
+        ab = abstention_counts(results)
+        # No-results leave the denominator: the abstention rate is over items
+        # the model actually got to answer. A tooling failure is charged
+        # exactly once, in extraction_error_rate.
+        behavioral = evaluated - ab["errored"]
+        overall["abstention_rate"] = _ratio(ab["abstained"], behavioral)
+        overall["extraction_error_rate"] = _ratio(ab["errored"], evaluated)
 
-        total_cells = none_cells = 0
-        for e in results:
-            if e.get("extraction_errors"):
-                continue
-            for row in e["retrieved2response"]:
-                for cell in row:
-                    total_cells += 1
-                    none_cells += cell.get("verdict") is None
+        total_cells, none_cells = _verdict_cell_counts(results)
         overall["checker_failure_rate"] = _ratio(none_cells, total_cells)
         return overall
 
@@ -334,17 +330,32 @@ class FaithfulnessPipeline(BaseService):
 
     def _log_results(self) -> None:
         self._log_bl_results()
+        self._log_done()
         if self.verbosity == "full":
             log_token_stats()
-        self._log_done()
 
     def _log_bl_results(self) -> None:
         """Print ── FAITHFULNESS RESULTS ──: pipeline tree + the score."""
+        self._log_pipeline_tree()
+        self._log_metrics()
+        self._log_abstention()
+        self._log_reliability()
+
+    def _log_run_findings(self) -> None:
+        """Per-run findings in variance mode: metrics + abstention +
+        reliability — the pipeline tree (request plumbing) prints at
+        --runs 1 but not per run."""
+        logger.info("")
+        self._log_metrics()
+        self._log_abstention()
+        self._log_reliability()
+
+    def _log_pipeline_tree(self) -> None:
+        """══ RESULTS ══ rule + 🔀 Pipeline: where the requests went."""
         if self.verbosity != "full":
             return
         report = self.last_report
         results = report["results"]
-        om = report["overall_metrics"]
 
         logger.info("")
         logger.info(settings.section_rule("FAITHFULNESS RESULTS", char="═"))
@@ -389,26 +400,71 @@ class FaithfulnessPipeline(BaseService):
                 logger.info("    %s      %s %s", continuation, sub_prefix, sub)
         logger.info("")
 
-        # ── 📊 Metrics
+    def _log_metrics(self) -> None:
+        """📊 Metrics: the faithfulness score + reliability."""
+        if self.verbosity != "full":
+            return
+        report = self.last_report
+        om = report["overall_metrics"]
+
         n = report["_meta"]["evaluated_items"]
         support = om.get("support", {})
         faithfulness = om.get("faithfulness")
-        text = "n/a" if faithfulness is None else f"{faithfulness:.3f}"
+        value = "n/a" if faithfulness is None else f"{faithfulness:.3f}"
+        note = "response claims supported by the retrieved context"
         if support.get("faithfulness") is not None and support["faithfulness"] != n:
-            text += f"  (n={support['faithfulness']})"
-        abstention = om.get("abstention_rate")
-        errors = om.get("extraction_error_rate")
-        checker_fail = om.get("checker_failure_rate")
-
+            note = f"{support['faithfulness']} of {n} items · {note}"
         logger.info(" 📊 Metrics  (macro over %d items)", n)
-        logger.info("    ├─ faithfulness:      %s", text)
-        logger.info("    Reliability")
-        logger.info("    ├─ abstentions:       %s",
-                    "n/a" if abstention is None else f"{abstention * 100:.1f}%")
-        logger.info("    ├─ extraction errors: %s",
-                    "n/a" if errors is None else f"{errors * 100:.1f}%")
-        logger.info("    └─ checker failures:  %s",
-                    "n/a" if checker_fail is None else f"{checker_fail * 100:.1f}%")
+        logger.info("    └─ faithfulness:  %s  (%s)", value, note)
+        logger.info("")
+
+    def _log_abstention(self) -> None:
+        """⚪ Abstention Behavior tree — no ground truth, so abstentions
+        cannot be judged justified vs not; the tree says so explicitly.
+
+        Extraction failures branch in only when present — they sit inside
+        the rate denominator (docs/holy_data.md rule set 1)."""
+        if self.verbosity != "full":
+            return
+        ab = abstention_counts(self.last_report["results"])
+        # Behavior only: extraction-failed items are out of the tree AND
+        # out of the rate denominator (charged once, in 💥 Reliability).
+        top = ab["evaluated"] - ab["errored"]
+        note = None
+        if ab["errored"]:
+            note = (f"{ab['errored']} extraction-failed excluded"
+                    " — see 💥 Reliability")
+        log_mece_tree(
+            "⚪ Abstention Behavior", top, "evaluated items",
+            [
+                ("🔬", ab["answered"], "answered",
+                 "claims extracted and scored"),
+                ("⚪", ab["abstained"], "abstained",
+                 "no ground truth — cannot judge justified vs not"),
+            ],
+            footer=[("abstained", ab["abstained"], top)],
+            header_note=note,
+        )
+        logger.info("")
+
+    def _log_reliability(self) -> None:
+        """💥 Reliability rate rows — harness health, always printed
+        (docs/holy_data.md rule set 2: hidden ≠ zero)."""
+        if self.verbosity != "full":
+            return
+        report = self.last_report
+        ab = abstention_counts(report["results"])
+        total_cells, none_cells = _verdict_cell_counts(report["results"])
+        causes = {"response": ab["errored"]} if ab["errored"] else None
+        log_rate_rows(
+            "💥 Reliability",
+            [("📝", "Extraction", ab["errored"], ab["evaluated"],
+              "items failed", "extraction_error_rate", causes),
+             ("🔎", "Checking", none_cells, total_cells,
+              "verdicts missing", "checker_failure_rate", None)],
+            header_note="tooling — excluded from all metrics,"
+                        " counted once here",
+        )
         logger.info("")
 
     def _log_done(self) -> None:
@@ -421,6 +477,20 @@ class FaithfulnessPipeline(BaseService):
 
 
 # ── Library facade (real-time, single item) ──────────────────────────────────
+
+def _verdict_cell_counts(results: list[dict]) -> tuple[int, int]:
+    """(total, none) verdict cells across the retrieved2response matrix,
+    skipping extraction-errored items — shared by compute and display."""
+    total = none = 0
+    for e in results:
+        if e.get("extraction_errors"):
+            continue
+        for row in e["retrieved2response"]:
+            for cell in row:
+                total += 1
+                none += cell.get("verdict") is None
+    return total, none
+
 
 def check_faithfulness(
     response: str,

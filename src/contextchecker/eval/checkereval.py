@@ -27,6 +27,9 @@ from contextchecker.eval.metrics import (
 from contextchecker.models import CheckerEvalResult
 from contextchecker.stats import (
     log_multi_run_hint,
+    log_mece_tree,
+    log_rate_rows,
+    log_run_line,
     log_token_stats,
     log_variance_block,
 )
@@ -59,6 +62,8 @@ class CheckerEvaluator:
         6. Computes and logs eval metrics (CHECKER EVAL section)
     """
 
+    _RUN_SUMMARY_KEYS = ("accuracy", "macro_f1")
+
     def __init__(
         self,
         checker_model: str,
@@ -81,7 +86,9 @@ class CheckerEvaluator:
 
         # The service owns all checking logic. compact verbosity keeps its
         # per-phase API/BL blocks but leaves the pre-exec sections and the
-        # token table to the evaluator (printed once at the end).
+        # token table to the evaluator. In variance mode the service runs
+        # silent: per-run plumbing is cut, the eval blocks + VARIANCE
+        # report instead (progress bars are not logging and remain).
         self._service = CheckingService(
             model=checker_model,
             extractor_model=_INTERNAL_EXT_MODEL,
@@ -90,7 +97,7 @@ class CheckerEvaluator:
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            verbosity="compact",
+            verbosity="silent" if self._runs > 1 else "compact",
         )
 
     # ── Public API ───────────────────────────────────────────────
@@ -105,9 +112,10 @@ class CheckerEvaluator:
         if self._runs <= 1:
             return await self._evaluate_once(data)
 
-        # Variance mode. Evaluators narrate their full sections every run
-        # (evaluator verbosity levels are a later cleanup); the VARIANCE
-        # block still lands once at the end.
+        # Variance mode. Evaluators narrate their result sections every run
+        # (evaluator verbosity levels are a later cleanup); Data/Config are
+        # announced once, and the VARIANCE block + token table land once at
+        # the end.
         log_multi_run_hint(self._runs)
         docs: list[dict] = []
         total_start = time.perf_counter()
@@ -115,17 +123,22 @@ class CheckerEvaluator:
             logger.info("")
             logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
             started = time.perf_counter()
-            doc = await self._evaluate_once(copy.deepcopy(data))
+            doc = await self._evaluate_once(
+                copy.deepcopy(data), announce=(run == 1))
             doc["_meta"]["run"] = run
             doc["_meta"]["duration_seconds"] = round(
                 time.perf_counter() - started, 1)
             docs.append(doc)
+            logger.info("")
+            log_run_line(run, self._runs, doc["_meta"]["duration_seconds"],
+                         doc, self._RUN_SUMMARY_KEYS)
 
         means, variance = build_variance(
             [{k: v for k, v in d.items() if k != "_meta"} for d in docs])
         durations = [d["_meta"]["duration_seconds"] for d in docs]
         total_seconds = round(time.perf_counter() - total_start, 1)
         log_variance_block(self._runs, means, variance, durations, total_seconds)
+        log_token_stats()
 
         outer_meta = {k: v for k, v in docs[0]["_meta"].items()
                       if k not in ("run", "duration_seconds")}
@@ -133,11 +146,13 @@ class CheckerEvaluator:
         outer_meta["duration_seconds"] = total_seconds
         return {"_meta": outer_meta, **means, "variance": variance, "runs": docs}
 
-    async def _evaluate_once(self, data: list[dict]) -> dict:
+    async def _evaluate_once(self, data: list[dict], announce: bool = True) -> dict:
         """Run the full checker evaluation pipeline once.
 
         Args:
             data: Pre-loaded list of items (eval dataset with GT triplets).
+            announce: Print the Data/Config sections (False for runs 2..N
+                in variance mode — they repeat run 1 verbatim).
 
         Returns:
             Ready-to-write JSON document incl. _meta — accuracy, per-label
@@ -160,8 +175,9 @@ class CheckerEvaluator:
         )
 
         # Pre-execution logging
-        self._log_data(len(data), skip_info, len(evaluable), total_claims)
-        self._log_eval_config()
+        if announce:
+            self._log_data(len(data), skip_info, len(evaluable), total_claims)
+            self._log_eval_config()
 
         # Step 3: Alias GT key → service key, filter to labeled only,
         #         strip existing verdicts, remap indices
@@ -181,10 +197,13 @@ class CheckerEvaluator:
             gt_flat, pred_flat, parse_errors, len(evaluable), skip_info
         )
 
-        # Step 7: Log eval-specific results; the evaluator owns the token table
+        # Step 7: Log eval-specific results; the evaluator owns the token
+        # table, printed once per invocation — in variance mode it is the
+        # cumulative total and belongs after the VARIANCE block.
         self._log_eval_results(result, gt_flat, pred_flat)
-        log_token_stats()
-        self._log_done(result)
+        if self._runs <= 1:
+            self._log_done(result)
+            log_token_stats()
 
         # Step 8: Assemble the ready-to-write document. The CLI only
         # resolves paths and dumps JSON - it never composes content.
@@ -393,6 +412,7 @@ class CheckerEvaluator:
 
         cm = confusion_matrix(gt_flat, pred_flat, labels=LABELS)
 
+        issued = len(gt_flat) + parse_errors
         return CheckerEvalResult(
             accuracy=round(acc, 4),
             total_claims=len(gt_flat),
@@ -401,6 +421,10 @@ class CheckerEvaluator:
             report=report,
             confusion_matrix={"labels": LABELS, "matrix": cm},
             skipped=skip_info,
+            macro_f1=round(report["macro avg"]["f1-score"], 4),
+            checker_failure_rate=(
+                round(parse_errors / issued, 4) if issued else None
+            ),
         )
 
     # ── Logging (evaluator-owned sections) ───────────────────────
@@ -478,57 +502,101 @@ class CheckerEvaluator:
         logger.info(settings.section_rule("CHECKER EVAL"))
         logger.info("")
 
-        # ── Accuracy
-        correct = int(result.accuracy * result.total_claims)
-        logger.info(
-            " 🔎 Accuracy: %.1f%%  (%d / %s)",
-            result.accuracy * 100,
-            correct,
-            f"{result.total_claims:,}",
+        # ── Verdicts tree (docs/holy_data.md rule set 1). Unjudged is the
+        # reconciliation branch: excluded from the footer's denominator,
+        # homed in 💥 Reliability below.
+        correct = sum(g == p for g, p in zip(gt_flat, pred_flat))
+        wrong = result.total_claims - correct
+        labeled = result.total_claims + result.parse_errors
+        log_mece_tree(
+            "🔎 Verdicts", labeled, "labeled claims",
+            [
+                ("✅", correct, "correct",
+                 "verdict matches the human label"),
+                ("❌", wrong, "wrong",
+                 "verdict differs — see disagreements file"),
+                ("💥", result.parse_errors, "unjudged",
+                 "no verdict — see 💥 Reliability"),
+            ],
+            footer=[("accuracy", correct, result.total_claims,
+                     "judged" if result.parse_errors else "")],
         )
-
-        if result.parse_errors > 0:
+        # Majority-class baseline: on an imbalanced slice a constant
+        # answer scores this — accuracy below it is worse than a rock.
+        if gt_flat:
+            counts = {label: gt_flat.count(label) for label in LABELS}
+            top_label = max(counts, key=counts.get)
             logger.info(
-                "    ⚠️  %d parse errors excluded from metrics",
-                result.parse_errors,
+                "    ℹ️  majority baseline %.3f  (a constant '%s' checker"
+                " scores this)",
+                counts[top_label] / len(gt_flat), top_label,
             )
 
-        # ── Per-label report (string format for terminal)
+        # ── Per-label report (from the stored sklearn dict; the accuracy
+        # row stays out — it lives in the tree footer, one home)
         logger.info("")
         logger.info(" 📊 Per-Label Report:")
-        report_str = classification_report(
-            gt_flat,
-            pred_flat,
-            labels=LABELS,
-            digits=3,
-            zero_division=0,
-        )
-        for line in report_str.splitlines():
-            if line.strip():
-                logger.info("    %s", line)
+        col_rule = "    " + "─" * 52
+        logger.info("    %-14s%10s%9s%9s%10s",
+                    "label", "precision", "recall", "f1", "total")
+        logger.info(col_rule)
 
-        # ── Confusion matrix
+        def _row(name: str, d: dict) -> None:
+            logger.info("    %-14s%10.3f%9.3f%9.3f%10d",
+                        name, d["precision"], d["recall"],
+                        d["f1-score"], int(d["support"]))
+
+        for label in LABELS:
+            _row(label, result.report[label])
+        logger.info(col_rule)
+        _row("macro avg", result.report["macro avg"])
+        _row("weighted avg", result.report["weighted avg"])
+        zero_support = [l for l in LABELS
+                        if int(result.report[l]["support"]) == 0]
+        if zero_support:
+            logger.info(
+                "    ⚠️  %s: 0 labeled claims — the zeros dilute the"
+                " macro avg", ", ".join(zero_support),
+            )
+
+        # ── Confusion matrix, with marginals. The grand total is the
+        # judged count — it reconciles against the tree's ✅ + ❌.
         logger.info("")
-        logger.info(
-            " 📉 Confusion Matrix (rows = GT, cols = Predicted):"
-        )
+        logger.info(" 📉 Confusion Matrix  (rows = GT, cols = predicted)")
         cm = result.confusion_matrix["matrix"]
-        short_labels = ["Ent", "Con", "Neu"]
-
-        header = "   ".join(f"{sl:>8}" for sl in short_labels)
-        logger.info("    %16s %s", "", header)
+        widths = [max(len(label), 6) + 2 for label in LABELS]
+        header = "".join(f"{label:>{w}}" for label, w in zip(LABELS, widths))
+        logger.info("    %-14s%s%8s", "label", header, "total")
+        mat_rule = "    " + "─" * (14 + sum(widths) + 8)
+        logger.info(mat_rule)
+        col_totals = [0] * len(LABELS)
         for i, label in enumerate(LABELS):
-            short = short_labels[i]
-            row = "   ".join(f"{v:>8}" for v in cm[i])
-            logger.info("    %-16s %s", short, row)
+            cells = "".join(f"{int(v):>{w}}" for v, w in zip(cm[i], widths))
+            logger.info("    %-14s%s%8d", label, cells, int(sum(cm[i])))
+            for j, v in enumerate(cm[i]):
+                col_totals[j] += int(v)
+        logger.info(mat_rule)
+        cells = "".join(f"{v:>{w}}" for v, w in zip(col_totals, widths))
+        logger.info("    %-14s%s%8d", "total", cells, sum(col_totals))
+
+        # ── Reliability — the checker under test failing to produce a
+        # verdict IS a finding about the checker: excluded from accuracy,
+        # charged exactly once, here.
+        issued = result.total_claims + result.parse_errors
+        logger.info("")
+        log_rate_rows(
+            "💥 Reliability",
+            [("🔎", "Checker (subject)", result.parse_errors, issued,
+              "claims unjudged", "checker_failure_rate", None)],
+        )
 
     def _log_done(self, result: CheckerEvalResult) -> None:
         """Print ✅ Done summary line."""
         total_skipped = sum(result.skipped.values())
         logger.info("")
         logger.info(
-            " ✅ Done: %s claims evaluated (%d claims skipped, "
-            "%d parse errors)",
+            " ✅ Done: %s claims evaluated (%d skipped, "
+            "%d unjudged)",
             f"{result.total_claims:,}",
             total_skipped,
             result.parse_errors,

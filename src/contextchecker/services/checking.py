@@ -634,9 +634,9 @@ class CheckingService(BaseService):
             log_api_parsing(phase_stats.first_pass_count, phase_stats)
 
         self._log_bl_results(items_with_output, total_triplets, entailment, contradiction, neutral)
+        self._log_done(total, total_triplets, skipped)
         if self.verbosity == "full":
             log_token_stats()
-        self._log_done(total, total_triplets, skipped)
 
     def _log_bl_results(
         self, items_with_output: int, total_triplets: int, entailment: int, contradiction: int, neutral: int

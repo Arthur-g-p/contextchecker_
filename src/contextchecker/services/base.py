@@ -22,6 +22,7 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.stats import (
     log_multi_run_hint,
+    log_run_line,
     log_token_stats,
     log_variance_block,
 )
@@ -148,6 +149,12 @@ class BaseService(ABC):
     # headline metric is not listed.
     _RUN_SUMMARY_KEYS = ("precision", "recall", "f1", "faithfulness")
 
+    def _log_run_findings(self) -> None:
+        """Hook: called after each run in variance mode, before the run
+        line. Default prints nothing; pipelines override to show their
+        per-run findings (the metrics block) — plumbing, tokens, and the
+        done line stay out of runs-mode."""
+
     async def _run_repeated(self, data: list[dict]) -> list[dict]:
         """Repeat _run_once N times; aggregate the runs into last_report.
 
@@ -179,16 +186,13 @@ class BaseService(ABC):
                 time.perf_counter() - started, 1)
             reports.append(self.last_report)
             if self.verbosity == "full":
-                metrics = self.last_report.get("overall_metrics", {})
-                parts = [
-                    f"{key} {metrics[key]:.3f}"
-                    for key in self._RUN_SUMMARY_KEYS
-                    if isinstance(metrics.get(key), (int, float))
-                ]
-                logger.info(" ✅ Run %d/%d done in %.1fs · %s",
-                            run, self._runs,
-                            self.last_report["_meta"]["duration_seconds"],
-                            " · ".join(parts) or "done")
+                self._log_run_findings()
+                log_run_line(
+                    run, self._runs,
+                    self.last_report["_meta"]["duration_seconds"],
+                    self.last_report.get("overall_metrics", {}),
+                    self._RUN_SUMMARY_KEYS,
+                )
 
         means, variance = build_variance(
             [r.get("overall_metrics", {}) for r in reports])

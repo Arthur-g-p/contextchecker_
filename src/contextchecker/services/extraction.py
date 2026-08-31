@@ -352,9 +352,9 @@ class ExtractionService(BaseService):
             total_output, unique_claims, successful,
             worker_empty + abstained_count, dups_removed,
         )
+        self._log_done(total, unique_claims, abstained_count, skipped, dups_removed)
         if self.verbosity == "full":
             log_token_stats()
-        self._log_done(total, unique_claims, abstained_count, skipped, dups_removed)
 
     def _log_bl_results(
         self, valid_items: int, claims: int, with_claims: int, empty_count: int,

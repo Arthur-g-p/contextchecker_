@@ -31,12 +31,13 @@ from contextchecker.services.base import BaseService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
 from contextchecker.pipelines.directions import (
+    abstention_counts,
     normalize_chunks,
     phase_failure_lines,
     run_direction,
     unwrap_items,
 )
-from contextchecker.stats import log_token_stats
+from contextchecker.stats import log_mece_tree, log_rate_rows, log_token_stats
 from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
@@ -208,6 +209,46 @@ def compute_item_metrics(entry: dict) -> dict:
     return metrics
 
 
+def _abstention_breakdown(results: list[dict]) -> dict:
+    """Behavior partition of evaluated items, judged by retrieval evidence.
+
+    Justified = retrieval gave the generator nothing (no chunk entails any
+    gt claim); unjustified = evidence was retrieved, the generator refused
+    anyway. Unknown claim_recall leaves an abstention uncategorized.
+    """
+    counts = abstention_counts(results)
+    abstained = [e for e in results
+                 if e.get("is_abstention") and not e.get("extraction_errors")]
+    justified = sum(1 for e in abstained
+                    if e["metrics"].get("claim_recall") == 0.0)
+    unjustified = sum(1 for e in abstained
+                      if (cr := e["metrics"].get("claim_recall")) is not None
+                      and cr > 0)
+    counts["justified"] = justified
+    counts["unjustified"] = unjustified
+    counts["uncategorized"] = counts["abstained"] - justified - unjustified
+    return counts
+
+
+def _verdict_cell_counts(results: list[dict]) -> tuple[int, int]:
+    """(total, none) verdict cells across all four direction arrays,
+    skipping extraction-errored items — shared by compute and display."""
+    total = none = 0
+    for e in results:
+        if e.get("extraction_errors"):
+            continue
+        for key in ("answer2response", "response2answer"):
+            for cell in e[key]:
+                total += 1
+                none += cell.get("verdict") is None
+        for key in ("retrieved2response", "retrieved2answer"):
+            for row in e[key]:
+                for cell in row:
+                    total += 1
+                    none += cell.get("verdict") is None
+    return total, none
+
+
 def compute_overall_metrics(results: list[dict]) -> dict:
     """Macro aggregation (per paper): average per-item values, skipping nulls.
 
@@ -230,20 +271,14 @@ def compute_overall_metrics(results: list[dict]) -> dict:
         return overall
 
     errored = [e for e in results if e.get("extraction_errors")]
-    abstained = [e for e in results
-                 if e.get("is_abstention") and not e.get("extraction_errors")]
-
-    # Justified = retrieval gave the generator nothing (no chunk entails any
-    # gt claim); unjustified = evidence was retrieved, the generator refused
-    # anyway. Unknown claim_recall leaves an abstention uncategorized.
-    justified = sum(1 for e in abstained
-                    if e["metrics"].get("claim_recall") == 0.0)
-    unjustified = sum(1 for e in abstained
-                      if (cr := e["metrics"].get("claim_recall")) is not None
-                      and cr > 0)
-    overall["abstention_rate"] = _ratio(len(abstained), evaluated)
-    overall["justified_abstention_rate"] = _ratio(justified, evaluated)
-    overall["unjustified_abstention_rate"] = _ratio(unjustified, evaluated)
+    ab = _abstention_breakdown(results)
+    # No-results leave the denominator: abstention rates are over items the
+    # model actually got to answer. A tooling failure is charged exactly
+    # once, in extraction_error_rate — never by diluting a behavior rate.
+    behavioral = evaluated - ab["errored"]
+    overall["abstention_rate"] = _ratio(ab["abstained"], behavioral)
+    overall["justified_abstention_rate"] = _ratio(ab["justified"], behavioral)
+    overall["unjustified_abstention_rate"] = _ratio(ab["unjustified"], behavioral)
 
     overall["extraction_error_rate"] = _ratio(len(errored), evaluated)
     overall["extraction_errors"] = {
@@ -254,19 +289,7 @@ def compute_overall_metrics(results: list[dict]) -> dict:
     }
 
     # Judge reliability: share of None verdicts across every issued check.
-    total_cells = none_cells = 0
-    for e in results:
-        if e.get("extraction_errors"):
-            continue
-        for key in ("answer2response", "response2answer"):
-            for cell in e[key]:
-                total_cells += 1
-                none_cells += cell.get("verdict") is None
-        for key in ("retrieved2response", "retrieved2answer"):
-            for row in e[key]:
-                for cell in row:
-                    total_cells += 1
-                    none_cells += cell.get("verdict") is None
+    total_cells, none_cells = _verdict_cell_counts(results)
     overall["checker_failure_rate"] = _ratio(none_cells, total_cells)
 
     return overall
@@ -629,9 +652,9 @@ class RagCheckerPipeline(BaseService):
     def _log_results(self) -> None:
         """Step 7: consolidated results — pipeline tree + metrics + tokens once."""
         self._log_bl_results()
+        self._log_done()
         if self.verbosity == "full":
             log_token_stats()
-        self._log_done()
 
     @staticmethod
     def _verdict_counts(results: list[dict], direction_name: str) -> dict:
@@ -656,11 +679,26 @@ class RagCheckerPipeline(BaseService):
 
         This block is the user's first impression of the whole system —
         general, not per item."""
+        self._log_pipeline_tree()
+        self._log_metrics()
+        self._log_abstention()
+        self._log_reliability()
+
+    def _log_run_findings(self) -> None:
+        """Per-run findings in variance mode: metrics + abstention +
+        reliability — the pipeline tree (request plumbing) prints at
+        --runs 1 but not per run."""
+        logger.info("")
+        self._log_metrics()
+        self._log_abstention()
+        self._log_reliability()
+
+    def _log_pipeline_tree(self) -> None:
+        """══ RESULTS ══ rule + 🔀 Pipeline: where the requests went."""
         if self.verbosity != "full":
             return
         report = self.last_report
         results = report["results"]
-        om = report["overall_metrics"]
 
         logger.info("")
         logger.info(settings.section_rule("RAGCHECK RESULTS", char="═"))
@@ -701,7 +739,13 @@ class RagCheckerPipeline(BaseService):
                 logger.info("    %s      %s %s", continuation, sub_prefix, sub)
         logger.info("")
 
-        # ── 📊 Metrics: the first-impression overview (macro, from the report)
+    def _log_metrics(self) -> None:
+        """📊 Metrics: the first-impression overview (macro, from the report)."""
+        if self.verbosity != "full":
+            return
+        report = self.last_report
+        om = report["overall_metrics"]
+
         n = report["_meta"]["evaluated_items"]
         support = om.get("support", {})
 
@@ -709,44 +753,94 @@ class RagCheckerPipeline(BaseService):
             value = om.get(name)
             text = "n/a" if value is None else f"{value:.3f}"
             if support.get(name) is not None and support[name] != n:
-                text += f"  (n={support[name]})"
+                text += f"  ({support[name]} of {n} items)"
             return text
 
         logger.info(" 📊 Metrics  (macro over %d items)", n)
-        logger.info("    Overall")
-        logger.info("    ├─ precision:            %s", fmt("precision"))
-        logger.info("    ├─ recall:               %s", fmt("recall"))
-        logger.info("    └─ f1:                   %s", fmt("f1"))
-        logger.info("    Retriever")
-        logger.info("    ├─ claim_recall:         %s", fmt("claim_recall"))
-        logger.info("    └─ context_precision:    %s", fmt("context_precision"))
-        logger.info("    Generator")
-        logger.info("    ├─ faithfulness:         %s", fmt("faithfulness"))
-        logger.info("    ├─ hallucination:        %s", fmt("hallucination"))
-        logger.info("    ├─ self_knowledge:       %s", fmt("self_knowledge"))
-        logger.info("    ├─ context_utilization:  %s", fmt("context_utilization"))
-        logger.info("    ├─ noise sens. relevant: %s", fmt("noise_sensitivity_in_relevant"))
-        logger.info("    └─ noise sens. irrelev.: %s", fmt("noise_sensitivity_in_irrelevant"))
+        logger.info("    Overall — how well the response matches the"
+                    " ground-truth answer")
+        logger.info("    ├─ %-30s%s", "precision:", fmt("precision"))
+        logger.info("    ├─ %-30s%s", "recall:", fmt("recall"))
+        logger.info("    └─ %-30s%s", "f1:", fmt("f1"))
+        logger.info("    Retriever — did retrieval bring the needed evidence")
+        logger.info("    ├─ %-30s%s", "claim recall:", fmt("claim_recall"))
+        logger.info("    └─ %-30s%s", "context precision:",
+                    fmt("context_precision"))
+        logger.info("    Generator — how the response used, ignored, or"
+                    " invented beyond the context")
+        logger.info("    ├─ %-30s%s", "faithfulness:", fmt("faithfulness"))
+        logger.info("    ├─ %-30s%s", "hallucination:", fmt("hallucination"))
+        logger.info("    ├─ %-30s%s", "self knowledge:", fmt("self_knowledge"))
+        logger.info("    ├─ %-30s%s", "context utilization:",
+                    fmt("context_utilization"))
+        logger.info("    ├─ %-30s%s", "noise sensitivity relevant:",
+                    fmt("noise_sensitivity_in_relevant"))
+        logger.info("    └─ %-30s%s", "noise sensitivity irrelevant:",
+                    fmt("noise_sensitivity_in_irrelevant"))
 
-        abstained = sum(1 for e in results
-                        if e.get("is_abstention") and not e.get("extraction_errors"))
-        justified = round((om.get("justified_abstention_rate") or 0) * n)
-        unjustified = round((om.get("unjustified_abstention_rate") or 0) * n)
-        errors = om.get("extraction_errors", {})
-        checker_fail = om.get("checker_failure_rate")
-        logger.info("    Reliability")
-        logger.info("    ├─ abstentions:          %d  (justified %d / unjustified %d)",
-                    abstained, justified, unjustified)
-        logger.info("    ├─ extraction errors:    %d response · %d gt_answer",
-                    errors.get("response", 0), errors.get("gt_answer", 0))
-        logger.info("    └─ checker failures:    %s",
-                    "n/a" if checker_fail is None else f"{checker_fail * 100:.1f}%")
+        logger.info("")
+
+    def _log_abstention(self) -> None:
+        """⚪ Abstention Behavior tree — judge: retrieval evidence.
+
+        Extraction failures branch in only when present: they sit inside
+        the rate denominator (evaluated items), so the tree owes the
+        reconciliation (docs/holy_data.md rule set 1)."""
+        if self.verbosity != "full":
+            return
+        ab = _abstention_breakdown(self.last_report["results"])
+        # Behavior only: extraction-failed items are out of the tree AND
+        # out of the rate denominators (charged once, in 💥 Reliability).
+        top = ab["evaluated"] - ab["errored"]
+        note = None
+        if ab["errored"]:
+            note = (f"{ab['errored']} extraction-failed excluded"
+                    " — see 💥 Reliability")
+        log_mece_tree(
+            "⚪ Abstention Behavior", top, "evaluated items",
+            [
+                ("🔬", ab["answered"], "answered",
+                 "claims extracted and scored"),
+                ("✅", ab["justified"],
+                 f"justified abstention{'' if ab['justified'] == 1 else 's'}",
+                 "no evidence retrieved — refusal was right"),
+                ("❌", ab["unjustified"],
+                 f"unjustified abstention{'' if ab['unjustified'] == 1 else 's'}",
+                 "evidence retrieved, refused anyway"),
+                ("❓", ab["uncategorized"], "uncategorized",
+                 "abstained, evidence unknown"),
+            ],
+            footer=[("justified", ab["justified"], top),
+                    ("unjustified", ab["unjustified"], top)],
+            header_note=note,
+        )
+        logger.info("")
+
+    def _log_reliability(self) -> None:
+        """💥 Reliability rate rows — harness health, always printed
+        (docs/holy_data.md rule set 2: hidden ≠ zero)."""
+        if self.verbosity != "full":
+            return
+        report = self.last_report
+        ab = _abstention_breakdown(report["results"])
+        total_cells, none_cells = _verdict_cell_counts(report["results"])
+        sources = report["overall_metrics"].get("extraction_errors", {})
+        causes = {k: v for k, v in sources.items() if v} or None
+        log_rate_rows(
+            "💥 Reliability",
+            [("📝", "Extraction", ab["errored"], ab["evaluated"],
+              "items failed", "extraction_error_rate", causes),
+             ("🔎", "Checking", none_cells, total_cells,
+              "verdicts missing", "checker_failure_rate", None)],
+            header_note="tooling — excluded from all metrics,"
+                        " counted once here",
+        )
         logger.info("")
 
     def _log_done(self) -> None:
         if self.verbosity != "full":
             return
         report = self.last_report
-        logger.info(" ✅ Done: ragchecked %d/%d items → report with %d metrics",
+        logger.info(" ✅ Done: ragchecked %d/%d items",
                     report["_meta"]["evaluated_items"],
-                    report["_meta"]["total_items"], len(METRIC_NAMES))
+                    report["_meta"]["total_items"])

@@ -379,9 +379,9 @@ class AtomizationService(BaseService):
             logger.info("")
         log_api_parsing(total_triplets, phase_stats)
         self._log_bl_results(stats)
+        self._log_done(total, stats, skipped)
         if self.verbosity == "full":
             log_token_stats()
-        self._log_done(total, stats, skipped)
 
     def _log_bl_results(self, stats: dict) -> None:
         """Print 📝 Atomization summary — input→output with the keep/split/failed

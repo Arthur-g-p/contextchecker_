@@ -65,6 +65,24 @@ def normalize_chunks(chunks: list) -> list[dict]:
     return normalized
 
 
+def abstention_counts(entries: list[dict]) -> dict:
+    """Item-level behavior counts over report entries.
+
+    Single source for both the metric rates and the ⚪ Abstention Behavior
+    tree, so footer fractions can never drift from the JSON rates
+    (docs/holy_data.md, one number one home)."""
+    evaluated = len(entries)
+    errored = sum(1 for e in entries if e.get("extraction_errors"))
+    abstained = sum(1 for e in entries
+                    if e.get("is_abstention") and not e.get("extraction_errors"))
+    return {
+        "evaluated": evaluated,
+        "errored": errored,
+        "abstained": abstained,
+        "answered": evaluated - errored - abstained,
+    }
+
+
 def phase_failure_lines(stats) -> list[str]:
     """Failure sub-lines for one pipeline phase, only when something went
     wrong. Derived from the worker's PhaseStats."""

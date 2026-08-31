@@ -117,6 +117,8 @@ class CheckerEvalResult:
     report: dict                           # per-label P/R/F1 + macro avg
     confusion_matrix: dict                 # {"labels": [...], "matrix": [[...]]}
     skipped: dict                          # {"missing_gt": N, "missing_context": N, "empty_gt": N}
+    macro_f1: float | None = None          # classes weighted equally — the honest headline on imbalanced slices
+    checker_failure_rate: float | None = None  # unjudged / issued (parse_errors under its future honest name)
 
 
 @dataclass

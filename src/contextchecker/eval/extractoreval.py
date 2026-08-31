@@ -23,7 +23,10 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
 from contextchecker.stats import (
+    log_mece_tree,
     log_multi_run_hint,
+    log_rate_rows,
+    log_run_line,
     log_token_stats,
     log_variance_block,
 )
@@ -101,6 +104,8 @@ class ExtractorEvaluator:
     Returns (summary_doc, disagreements_doc) — CLI writes two files verbatim.
     """
 
+    _RUN_SUMMARY_KEYS = ("precision", "recall", "f1")
+
     def __init__(
         self,
         extractor_model: str,
@@ -143,14 +148,15 @@ class ExtractorEvaluator:
                 f"--gt-key so the two do not overlap."
             )
 
-        # Extraction service — always needed (quiet, evaluator owns logging).
+        # Extraction service — always needed (quiet, evaluator owns logging;
+        # silent in variance mode — per-run plumbing is cut).
         # dedup=False: the eval measures duplicates as an independent dimension,
         # so predictions must stay raw — we never evaluate on deduplicated data.
         self._extraction_service = ExtractionService(
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
-            verbosity="compact",
+            verbosity="silent" if self._runs > 1 else "compact",
             dedup=False,
         )
 
@@ -178,7 +184,7 @@ class ExtractorEvaluator:
                 source_kg_key=self._pred_key,
                 base_url=atomizer_base_url,
                 concurrency=concurrency,
-                verbosity="compact",
+                verbosity="silent" if self._runs > 1 else "compact",
             )
 
     # ── Public API ───────────────────────────────────────────────
@@ -194,9 +200,10 @@ class ExtractorEvaluator:
         if self._runs <= 1:
             return await self._evaluate_once(data)
 
-        # Variance mode. Evaluators narrate their full sections every run
-        # (evaluator verbosity levels are a later cleanup); the VARIANCE
-        # block still lands once at the end.
+        # Variance mode. Evaluators narrate their result sections every run
+        # (evaluator verbosity levels are a later cleanup); Data/Config are
+        # announced once, and the VARIANCE block + token table land once at
+        # the end.
         log_multi_run_hint(self._runs)
         summaries: list[dict] = []
         disagreements: list[dict] = []
@@ -205,19 +212,24 @@ class ExtractorEvaluator:
             logger.info("")
             logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
             started = time.perf_counter()
-            summary, disagreement = await self._evaluate_once(copy.deepcopy(data))
+            summary, disagreement = await self._evaluate_once(
+                copy.deepcopy(data), announce=(run == 1))
             duration = round(time.perf_counter() - started, 1)
             for doc in (summary, disagreement):
                 doc["_meta"]["run"] = run
                 doc["_meta"]["duration_seconds"] = duration
             summaries.append(summary)
             disagreements.append(disagreement)
+            logger.info("")
+            log_run_line(run, self._runs, duration,
+                         summary, self._RUN_SUMMARY_KEYS)
 
         means, variance = build_variance(
             [{k: v for k, v in d.items() if k != "_meta"} for d in summaries])
         durations = [d["_meta"]["duration_seconds"] for d in summaries]
         total = round(time.perf_counter() - total_start, 1)
         log_variance_block(self._runs, means, variance, durations, total)
+        log_token_stats()
 
         def _outer_meta(doc: dict) -> dict:
             meta = {k: v for k, v in doc["_meta"].items()
@@ -232,11 +244,15 @@ class ExtractorEvaluator:
                              "runs": disagreements}
         return summary_doc, disagreements_doc
 
-    async def _evaluate_once(self, data: list[dict]) -> tuple[dict, dict]:
+    async def _evaluate_once(
+        self, data: list[dict], announce: bool = True,
+    ) -> tuple[dict, dict]:
         """Run the full extractor evaluation pipeline once.
 
         Args:
             data: Pre-loaded list of items (GT-annotated dataset with response text).
+            announce: Print the Data/Config sections (False for runs 2..N
+                in variance mode — they repeat run 1 verbatim).
 
         Returns:
             (summary_doc, disagreements_doc) — two ready-to-write JSON
@@ -256,8 +272,9 @@ class ExtractorEvaluator:
                 canonicalize_triplets(item[self._gt_key])
 
         # Pre-extraction logging
-        self._log_data_pre(len(data), len(data) - len(valid), len(valid))
-        self._log_eval_config()
+        if announce:
+            self._log_data_pre(len(data), len(data) - len(valid), len(valid))
+            self._log_eval_config()
 
         # Step 2: Run extraction (quiet — evaluator owns the logging)
         await self._extraction_service.run(valid)
@@ -297,10 +314,13 @@ class ExtractorEvaluator:
         # Step 7: Build disagreement list
         disagreements = self._build_disagreements(buckets, item_results)
 
-        # Step 8: Log eval results; the evaluator owns the token table
+        # Step 8: Log eval results; the evaluator owns the token table,
+        # printed once per invocation — in variance mode it is the
+        # cumulative total and belongs after the VARIANCE block.
         self._log_eval_results(result)
-        log_token_stats()
-        self._log_done(result)
+        if self._runs <= 1:
+            self._log_done(result)
+            log_token_stats()
 
         # Step 9: Assemble the two ready-to-write documents. The CLI only
         # resolves paths and dumps JSON - it never composes content.
@@ -704,7 +724,7 @@ class ExtractorEvaluator:
             joint=True,
             joint_num=self._joint_num,
             max_words=self._max_words,
-            verbosity="compact",
+            verbosity="silent" if self._runs > 1 else "compact",
             joint_prompt_key="checker_prompt_eval_joint",
         )
 
@@ -733,7 +753,7 @@ class ExtractorEvaluator:
             joint=True,
             joint_num=self._joint_num,
             max_words=self._max_words,
-            verbosity="compact",
+            verbosity="silent" if self._runs > 1 else "compact",
             joint_prompt_key="checker_prompt_eval_joint",
         )
 
@@ -889,11 +909,18 @@ class ExtractorEvaluator:
         return f"{triplet['subject']} {triplet['predicate']} {triplet['object']}"
 
     @staticmethod
-    def _fmt_ratio(value: float | None, numerator: int, denominator: int) -> str:
-        """Format a metric with its fraction; None = empty denominator."""
+    def _fmt_ratio(
+        value: float | None, numerator: int, denominator: int,
+        judged: bool = False,
+    ) -> str:
+        """Format a metric with its fraction; None = empty denominator.
+
+        *judged* marks a denominator smaller than the tree header total
+        (unjudged claims left both sides of the ratio)."""
         if value is None:
             return f"n/a  ({numerator} / {denominator} — nothing judged)"
-        return f"{value:.3f}  ({numerator} / {denominator})"
+        suffix = " judged" if judged else ""
+        return f"{value:.3f}  ({numerator} / {denominator}{suffix})"
 
     # ── Disagreement collection ──────────────────────────────────
 
@@ -1075,7 +1102,9 @@ class ExtractorEvaluator:
             )
         else:
             logger.info("     ├─ 💥 0 unjudged by checker")
-        logger.info("     └─ → Recall %s", self._fmt_ratio(result.recall, rc["covered"], rc["denominator"]))
+        logger.info("     └─ → Recall %s", self._fmt_ratio(
+            result.recall, rc["covered"], rc["denominator"],
+            judged=bool(rc["unjudged"])))
 
         logger.info("    Precision — %d total predicted claims", pc["total_pred_claims"])
         logger.info("     ├─ ✅ %d supported by GT  (judged)", pc["supported"])
@@ -1095,9 +1124,12 @@ class ExtractorEvaluator:
             )
         else:
             logger.info("     ├─ 💥 0 unjudged by checker")
-        logger.info("     └─ → Precision %s", self._fmt_ratio(result.precision, pc["supported"], pc["denominator"]))
+        logger.info("     └─ → Precision %s", self._fmt_ratio(
+            result.precision, pc["supported"], pc["denominator"],
+            judged=bool(pc["unjudged"])))
 
-        logger.info("    F1: %s", "n/a" if result.f1 is None else f"{result.f1:.3f}")
+        logger.info("    F1: %s  (harmonic mean of recall · precision)",
+                    "n/a" if result.f1 is None else f"{result.f1:.3f}")
 
         # ── Extraction stats
         logger.info("")
@@ -1119,62 +1151,65 @@ class ExtractorEvaluator:
             direction = "over-extraction" if delta > 0 else "under-extraction"
             logger.info("    Delta: %+.1f/item  (%s)", delta, direction)
 
-        # ── Eval tooling failures — the eval's own reliability, co-equal
-        # headline with P/R/F1 but never mixed into it. Extraction and
-        # checker failures speak the same language: excluded, counted, rated.
+        # ── Abstention behavior (own dimension: item-level model behavior.
+        # Tooling failures are excluded from this universe by _classify —
+        # one number, one home; docs/holy_data.md).
+        behavioral = (result.to_compare_items + ab["justified"]
+                      + ab["unjustified"] + ab["wrongful_answer"])
+        logger.info("")
+        log_mece_tree(
+            "⚪ Abstention Behavior", behavioral, "valid items",
+            [
+                ("🔬", result.to_compare_items, "compared",
+                 "GT present, predictions present"),
+                ("✅", ab["justified"],
+                 f"justified abstention{'' if ab['justified'] == 1 else 's'}",
+                 "GT empty, 0 predictions — correct silence"),
+                ("❌", ab["unjustified"],
+                 f"unjustified abstention{'' if ab['unjustified'] == 1 else 's'}",
+                 f"GT present, 0 predictions — "
+                 f"{rc['unjustified_abstention_penalty']} claims → recall penalty"),
+                ("❌", ab["wrongful_answer"],
+                 f"wrongful answer{'' if ab['wrongful_answer'] == 1 else 's'}",
+                 f"GT empty, predictions present — "
+                 f"{pc['wrongful_answer_penalty']} claims → precision penalty"),
+            ],
+            footer=[("justified", ab["justified"], behavioral),
+                    ("unjustified", ab["unjustified"], behavioral),
+                    ("wrongful", ab["wrongful_answer"], behavioral)],
+            header_note="not tooling — extraction parsed fine",
+        )
+
+        # ── Reliability — the eval's own tooling, co-equal with P/R/F1 but
+        # never mixed into it. Rate keys are the report's JSON paths; they
+        # unify under the canonical run-document later.
         ee = result.extraction_errors or {"count": 0, "rate": 0.0, "by_cause": {}}
         cf = result.checker_failures
-        if ee["count"] > 0 or cf["count"] > 0:
-            logger.info("")
-            logger.info(" 💥 Eval Tooling Failures  (excluded from all metrics)")
-            causes = ", ".join(
-                f"{cause}: {n}"
-                for cause, n in sorted(ee["by_cause"].items(), key=lambda kv: -kv[1])
-            )
-            logger.info(
-                "     ├─ Extraction:  %d items  (%.1f%%)%s",
-                ee["count"], ee["rate"] * 100, f"  → {causes}" if causes else "",
-            )
-            if cf["count"] > 0:
-                # warning level: the measurement is partial — this must
-                # survive quieter log configurations.
-                logger.warning(
-                    "     └─ Checker:     %d of %d verdicts  (%.1f%%, %d items)"
-                    " — run `eval checker` to qualify '%s'",
-                    cf["count"], cf["issued_verdicts"], cf["rate"] * 100,
-                    cf["items_affected"], self._checker_model,
-                )
-            else:
-                logger.info(
-                    "     └─ Checker:     0 of %d verdicts  (0.0%%)",
-                    cf["issued_verdicts"],
-                )
-
-        # ── Abstention behavior (orthogonal axis, ragcheck vocabulary).
-        # Silence with nothing to find is correct; silence with GT present is
-        # not. Neither is a tooling failure — those live in the section above.
-        if ab["justified"] or ab["unjustified"] or ab["wrongful_answer"]:
-            logger.info("")
-            logger.info(
-                " ⚪ Abstention Behavior  (not tooling — extraction parsed fine"
-                " and returned nothing)"
-            )
-            logger.info(
-                "     ├─ ✅ %d justified abstention%s     (GT empty, 0 predictions"
-                " — correct silence)",
-                ab["justified"], "" if ab["justified"] == 1 else "s",
-            )
-            logger.info(
-                "     ├─ ❌ %d unjustified abstention%s  (GT present, 0 predictions"
-                " — %d claims → recall penalty)",
-                ab["unjustified"], "" if ab["unjustified"] == 1 else "s",
-                rc["unjustified_abstention_penalty"],
-            )
-            logger.info(
-                "     └─ ❌ %d wrongful answer%s          (GT empty, %d predictions"
-                " — %d claims → precision penalty)",
-                ab["wrongful_answer"], "" if ab["wrongful_answer"] == 1 else "s",
-                pc["wrongful_answer_penalty"], pc["wrongful_answer_penalty"],
+        rows = [
+            ("📝", "Extraction (subject)", ee["count"], behavioral + ee["count"],
+             "items failed", "extraction_errors.rate", ee.get("by_cause") or None),
+            ("🔎", "Matching checker", cf["count"], cf["issued_verdicts"],
+             "verdicts unjudged", "checker_failures.rate", None),
+        ]
+        a_dim = result.atomicity
+        if a_dim:
+            rows.append(("🧬", "Atomization", a_dim.get("failed", 0),
+                         a_dim["extracted_claims"], "claims failed", None, None))
+        else:
+            rows.append(("🧬", "Atomization", None, 0,
+                         self._atomizer_skip_reason or "not configured",
+                         None, None))
+        logger.info("")
+        log_rate_rows(
+            "💥 Reliability", rows,
+            header_note="tooling — excluded from all metrics, counted once here",
+        )
+        if cf["count"] > 0:
+            # warning level: the measurement is partial — this must
+            # survive quieter log configurations.
+            logger.warning(
+                "          ⚠️  measurement is partial — run `eval checker`"
+                " to qualify '%s'", self._checker_model,
             )
 
         # ── Atomicity (orthogonal to coverage; only if measured)
