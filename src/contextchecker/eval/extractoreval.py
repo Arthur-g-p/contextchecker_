@@ -23,16 +23,15 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
 from contextchecker.stats import (
+    VarianceTracker,
     log_mece_tree,
     log_multi_run_hint,
     log_rate_rows,
     log_run_line,
     log_token_stats,
-    log_variance_block,
 )
 from contextchecker.utils import (
     build_meta,
-    build_variance,
     canonicalize_triplets,
     find_duplicate_triplets,
 )
@@ -92,6 +91,11 @@ class _ItemMatchResult:
     unjudged_pred: list[dict] = field(default_factory=list)  # pass 2 checker failures
 
 
+def _bucket_rate(count: int, denominator: int) -> float | None:
+    """Rate over the behavioral item universe; None on an empty universe."""
+    return round(count / denominator, 4) if denominator else None
+
+
 class ExtractorEvaluator:
     """Evaluates extraction quality by extracting live then matching against GT.
 
@@ -105,6 +109,18 @@ class ExtractorEvaluator:
     """
 
     _RUN_SUMMARY_KEYS = ("precision", "recall", "f1")
+
+    _VARIANCE_SECTIONS = {
+        "metrics": [
+            ("Matching", ["precision", "recall", "f1"]),
+            ("Quality axes", ["atomicity_rate", "claim_density",
+                              "duplicate_rate"]),
+        ],
+        "behavior": ["justified_abstention_rate",
+                     "unjustified_abstention_rate", "wrongful_answer_rate"],
+        "health": ["extraction_error_rate", "checker_failure_rate",
+                   "atomization_failure_rate"],
+    }
 
     def __init__(
         self,
@@ -207,7 +223,7 @@ class ExtractorEvaluator:
         log_multi_run_hint(self._runs)
         summaries: list[dict] = []
         disagreements: list[dict] = []
-        total_start = time.perf_counter()
+        tracker = VarianceTracker(self._VARIANCE_SECTIONS)
         for run in range(1, self._runs + 1):
             logger.info("")
             logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
@@ -220,16 +236,14 @@ class ExtractorEvaluator:
                 doc["_meta"]["duration_seconds"] = duration
             summaries.append(summary)
             disagreements.append(disagreement)
+            tracker.add({k: v for k, v in summary.items() if k != "_meta"},
+                        duration)
             logger.info("")
             log_run_line(run, self._runs, duration,
                          summary, self._RUN_SUMMARY_KEYS)
 
-        means, variance = build_variance(
-            [{k: v for k, v in d.items() if k != "_meta"} for d in summaries])
-        durations = [d["_meta"]["duration_seconds"] for d in summaries]
-        total = round(time.perf_counter() - total_start, 1)
-        log_variance_block(self._runs, means, variance, durations, total)
-        log_token_stats()
+        means, variance = tracker.finish(self._runs)
+        total = tracker.total_seconds
 
         def _outer_meta(doc: dict) -> dict:
             meta = {k: v for k, v in doc["_meta"].items()
@@ -672,6 +686,8 @@ class ExtractorEvaluator:
             "by_cause": by_cause,
         }
 
+        behavioral = attempted - len(error_items)
+
         return ExtractorEvalResult(
             precision=precision,
             recall=recall,
@@ -697,6 +713,22 @@ class ExtractorEvaluator:
             atomicity=atomicity,
             duplicates=duplicates,
             extraction_errors=extraction_errors,
+            justified_abstention_rate=_bucket_rate(
+                len(buckets.justified_abstention), behavioral),
+            unjustified_abstention_rate=_bucket_rate(
+                len(buckets.unjustified_abstention), behavioral),
+            wrongful_answer_rate=_bucket_rate(
+                len(buckets.wrongful_answer), behavioral),
+            atomicity_rate=atomicity["atomicity_rate"] if atomicity else None,
+            claim_density=(atomicity["information_density"]
+                           if atomicity else None),
+            atomization_failure_rate=(
+                round(atomicity["failed"] / atomicity["extracted_claims"], 4)
+                if atomicity and atomicity["extracted_claims"] else None
+            ),
+            duplicate_rate=duplicates["duplicate_rate"] if duplicates else None,
+            extraction_error_rate=extraction_errors["rate"],
+            checker_failure_rate=checker_failures["rate"],
         )
 
     # ── LLM matching (2-pass) ────────────────────────────────────
@@ -1151,9 +1183,9 @@ class ExtractorEvaluator:
             direction = "over-extraction" if delta > 0 else "under-extraction"
             logger.info("    Delta: %+.1f/item  (%s)", delta, direction)
 
-        # ── Abstention behavior (own dimension: item-level model behavior.
-        # Tooling failures are excluded from this universe by _classify —
-        # one number, one home; docs/holy_data.md).
+        # ── Abstention behavior (own dimension: item-level model
+        # behavior; tooling failures are excluded from this universe
+        # by _classify — one number, one home).
         behavioral = (result.to_compare_items + ab["justified"]
                       + ab["unjustified"] + ab["wrongful_answer"])
         logger.info("")
@@ -1187,14 +1219,17 @@ class ExtractorEvaluator:
         cf = result.checker_failures
         rows = [
             ("📝", "Extraction (subject)", ee["count"], behavioral + ee["count"],
-             "items failed", "extraction_errors.rate", ee.get("by_cause") or None),
+             "items failed", "extraction_error_rate", ee.get("by_cause") or None),
             ("🔎", "Matching checker", cf["count"], cf["issued_verdicts"],
-             "verdicts unjudged", "checker_failures.rate", None),
+             "verdicts unjudged", "checker_failure_rate", None,
+             (f"measurement is partial — run `eval checker` to qualify"
+              f" '{self._checker_model}'") if cf["count"] > 0 else None),
         ]
         a_dim = result.atomicity
         if a_dim:
             rows.append(("🧬", "Atomization", a_dim.get("failed", 0),
-                         a_dim["extracted_claims"], "claims failed", None, None))
+                         a_dim["extracted_claims"], "claims failed",
+                         "atomization_failure_rate", None))
         else:
             rows.append(("🧬", "Atomization", None, 0,
                          self._atomizer_skip_reason or "not configured",
@@ -1204,13 +1239,6 @@ class ExtractorEvaluator:
             "💥 Reliability", rows,
             header_note="tooling — excluded from all metrics, counted once here",
         )
-        if cf["count"] > 0:
-            # warning level: the measurement is partial — this must
-            # survive quieter log configurations.
-            logger.warning(
-                "          ⚠️  measurement is partial — run `eval checker`"
-                " to qualify '%s'", self._checker_model,
-            )
 
         # ── Atomicity (orthogonal to coverage; only if measured)
         a = result.atomicity
@@ -1225,10 +1253,11 @@ class ExtractorEvaluator:
                 a["atomic_units"],
             )
             logger.info(
-                "    Non-atomic:  %d  (atomicity %.1f%%)",
-                a["non_atomic"], a["atomicity_rate"] * 100,
+                "    Non-atomic:  %d  → atomicity_rate %.3f",
+                a["non_atomic"], a["atomicity_rate"],
             )
-            logger.info("    Density:     %.2f facts/claim", a["information_density"])
+            logger.info("    Claim density:  %.2f facts/claim",
+                        a["information_density"])
 
         # ── Duplicates (orthogonal to coverage; read-only, never deduped here)
         d = result.duplicates
@@ -1236,8 +1265,9 @@ class ExtractorEvaluator:
             logger.info("")
             logger.info(" 🔁 Duplicates")
             logger.info(
-                "    Found %d exact duplicates  (%.1f%% of %d predicted)",
-                d["duplicate_claims"], d["duplicate_rate"] * 100, d["predicted_claims"],
+                "    Found %d exact duplicates of %d predicted"
+                "  → duplicate_rate %.3f",
+                d["duplicate_claims"], d["predicted_claims"], d["duplicate_rate"],
             )
             for entry in d["items"]:
                 logger.info("    item %s:", entry["id"])

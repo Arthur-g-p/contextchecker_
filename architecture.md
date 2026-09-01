@@ -75,7 +75,10 @@ privates.
 
 **Pipeline**: a `BaseService` subclass whose `run()` composes *services*
 instead of driving a worker. Same caller-facing contract (data in, mutated
-data out) — there is deliberately no separate pipeline base class. Pipelines
+data out) — there is deliberately no separate pipeline base class.
+Multi-run support (`_run_repeated`, the run line, the variance wiring)
+lives on `BaseService` because pipelines deliberately have no own base;
+bare services never trigger it. Pipelines
 talk to services only, never workers. Three exist:
 
 - `RefCheckerPipeline` — extraction + checking, one document (the classic
@@ -182,9 +185,11 @@ a tooling failure; bare `[]` is an abstention (see docs/outcome_markers.md).
   line — the composing pipeline owns those and prints the token table once.
   `silent` = nothing (progress bars are not logging and remain) — repeated
   runs and library calls. The former `quiet: bool` is gone.
-- Evaluators run their services compact and print the token table once at
-  their own end. (Evaluator-level verbosity is a later cleanup — with
-  `--runs` they currently narrate every run.)
+- Evaluators run their services compact at `--runs 1` and silent in
+  variance mode (per-run plumbing is cut; findings blocks still print
+  every run). Data/Config announce once; the token table prints once at
+  the very end. Evaluators themselves have no verbosity parameter —
+  they always narrate.
 
 ## Coding rules
 

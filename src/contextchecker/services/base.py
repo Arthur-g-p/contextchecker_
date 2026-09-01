@@ -21,12 +21,10 @@ from abc import ABC, abstractmethod
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.stats import (
+    VarianceTracker,
     log_multi_run_hint,
     log_run_line,
-    log_token_stats,
-    log_variance_block,
 )
-from contextchecker.utils import build_variance
 
 logger = settings.get_logger(__name__)
 
@@ -169,7 +167,9 @@ class BaseService(ABC):
         if self.verbosity == "full":
             log_multi_run_hint(self._runs)
         reports: list[dict] = []
-        total_start = time.perf_counter()
+        tracker = VarianceTracker(
+            getattr(self, "_VARIANCE_SECTIONS", None),
+            labels=getattr(self, "_VARIANCE_LABELS", None))
         # Run 1 mutates *data* in place; a copy taken after it would carry
         # its results and the skip logic would no-op runs 2..N.
         pristine = copy.deepcopy(data)
@@ -185,6 +185,8 @@ class BaseService(ABC):
             self.last_report["_meta"]["duration_seconds"] = round(
                 time.perf_counter() - started, 1)
             reports.append(self.last_report)
+            tracker.add(self.last_report.get("overall_metrics", {}),
+                        self.last_report["_meta"]["duration_seconds"])
             if self.verbosity == "full":
                 self._log_run_findings()
                 log_run_line(
@@ -194,14 +196,9 @@ class BaseService(ABC):
                     self._RUN_SUMMARY_KEYS,
                 )
 
-        means, variance = build_variance(
-            [r.get("overall_metrics", {}) for r in reports])
-        durations = [r["_meta"]["duration_seconds"] for r in reports]
-        total_seconds = round(time.perf_counter() - total_start, 1)
-        if self.verbosity == "full":
-            log_variance_block(self._runs, means, variance,
-                               durations, total_seconds)
-            log_token_stats()
+        means, variance = tracker.finish(
+            self._runs, log=self.verbosity == "full")
+        total_seconds = tracker.total_seconds
 
         outer_meta = {k: v for k, v in reports[0]["_meta"].items()
                       if k not in ("run", "duration_seconds")}

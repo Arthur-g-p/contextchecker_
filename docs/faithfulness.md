@@ -65,6 +65,8 @@ plus `overall_metrics`. Additional field:
 - Per item: `faithfulness` = grounded claims / decidable claims. Same
   None-propagation and gating rules as ragcheck (errors and abstentions are
   `null`, unknown matrix rows leave both sides of the ratio).
-- Overall: macro `faithfulness` with `support`, plus `abstention_rate`,
-  `extraction_error_rate`, `checker_failure_rate`. There is no
+- Overall: macro `faithfulness` with `support`, plus `abstention_rate`
+  (denominator: evaluated − extraction-errored — a tooling failure is
+  charged once, in `extraction_error_rate`, never by diluting a behavior
+  rate), `extraction_error_rate`, `checker_failure_rate`. There is no
   justified/unjustified abstention split here — that requires ground truth.

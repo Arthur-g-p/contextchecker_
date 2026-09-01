@@ -47,6 +47,14 @@ REQUIRED_KEYS = ("response", "retrieved_context")
 class FaithfulnessPipeline(BaseService):
     """1 extraction + 1 checking direction: faithfulness without GT."""
 
+    # Behavior carries only the abstention rate — the justified/
+    # unjustified split is unknowable without GT.
+    _VARIANCE_SECTIONS = {
+        "metrics": [(None, ["faithfulness"])],
+        "behavior": ["abstention_rate"],
+        "health": ["extraction_error_rate", "checker_failure_rate"],
+    }
+
     def __init__(
         self,
         extractor_model: str,
@@ -422,8 +430,8 @@ class FaithfulnessPipeline(BaseService):
         """⚪ Abstention Behavior tree — no ground truth, so abstentions
         cannot be judged justified vs not; the tree says so explicitly.
 
-        Extraction failures branch in only when present — they sit inside
-        the rate denominator (docs/holy_data.md rule set 1)."""
+        Extraction failures branch in only when present — they sit
+        inside the rate denominator."""
         if self.verbosity != "full":
             return
         ab = abstention_counts(self.last_report["results"])
@@ -448,8 +456,7 @@ class FaithfulnessPipeline(BaseService):
         logger.info("")
 
     def _log_reliability(self) -> None:
-        """💥 Reliability rate rows — harness health, always printed
-        (docs/holy_data.md rule set 2: hidden ≠ zero)."""
+        """💥 Reliability rate rows — harness health, always printed."""
         if self.verbosity != "full":
             return
         report = self.last_report
@@ -461,7 +468,7 @@ class FaithfulnessPipeline(BaseService):
             [("📝", "Extraction", ab["errored"], ab["evaluated"],
               "items failed", "extraction_error_rate", causes),
              ("🔎", "Checking", none_cells, total_cells,
-              "verdicts missing", "checker_failure_rate", None)],
+              "verdicts unjudged", "checker_failure_rate", None)],
             header_note="tooling — excluded from all metrics,"
                         " counted once here",
         )

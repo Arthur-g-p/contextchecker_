@@ -26,14 +26,14 @@ from contextchecker.eval.metrics import (
 )
 from contextchecker.models import CheckerEvalResult
 from contextchecker.stats import (
-    log_multi_run_hint,
+    VarianceTracker,
     log_mece_tree,
+    log_multi_run_hint,
     log_rate_rows,
     log_run_line,
     log_token_stats,
-    log_variance_block,
 )
-from contextchecker.utils import build_meta, build_variance, canonicalize_triplets
+from contextchecker.utils import build_meta, canonicalize_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 
@@ -63,6 +63,18 @@ class CheckerEvaluator:
     """
 
     _RUN_SUMMARY_KEYS = ("accuracy", "macro_f1")
+
+    # No behavior section: abstention is a foreign concept here
+    # (pre-labeled GT triplets in, verdicts out).
+    _VARIANCE_SECTIONS = {
+        "metrics": [
+            ("Overall", ["accuracy", "macro_f1"]),
+            ("Per label", ["entailment_f1", "contradiction_f1",
+                           "neutral_f1"]),
+        ],
+        "behavior": [],
+        "health": ["checker_failure_rate"],
+    }
 
     def __init__(
         self,
@@ -118,7 +130,7 @@ class CheckerEvaluator:
         # the end.
         log_multi_run_hint(self._runs)
         docs: list[dict] = []
-        total_start = time.perf_counter()
+        tracker = VarianceTracker(self._VARIANCE_SECTIONS)
         for run in range(1, self._runs + 1):
             logger.info("")
             logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
@@ -129,16 +141,14 @@ class CheckerEvaluator:
             doc["_meta"]["duration_seconds"] = round(
                 time.perf_counter() - started, 1)
             docs.append(doc)
+            tracker.add({k: v for k, v in doc.items() if k != "_meta"},
+                        doc["_meta"]["duration_seconds"])
             logger.info("")
             log_run_line(run, self._runs, doc["_meta"]["duration_seconds"],
                          doc, self._RUN_SUMMARY_KEYS)
 
-        means, variance = build_variance(
-            [{k: v for k, v in d.items() if k != "_meta"} for d in docs])
-        durations = [d["_meta"]["duration_seconds"] for d in docs]
-        total_seconds = round(time.perf_counter() - total_start, 1)
-        log_variance_block(self._runs, means, variance, durations, total_seconds)
-        log_token_stats()
+        means, variance = tracker.finish(self._runs)
+        total_seconds = tracker.total_seconds
 
         outer_meta = {k: v for k, v in docs[0]["_meta"].items()
                       if k not in ("run", "duration_seconds")}
@@ -412,6 +422,10 @@ class CheckerEvaluator:
 
         cm = confusion_matrix(gt_flat, pred_flat, labels=LABELS)
 
+        def label_f1(label: str) -> float | None:
+            d = report[label]
+            return round(d["f1-score"], 4) if d["support"] else None
+
         issued = len(gt_flat) + parse_errors
         return CheckerEvalResult(
             accuracy=round(acc, 4),
@@ -425,6 +439,9 @@ class CheckerEvaluator:
             checker_failure_rate=(
                 round(parse_errors / issued, 4) if issued else None
             ),
+            entailment_f1=label_f1("Entailment"),
+            contradiction_f1=label_f1("Contradiction"),
+            neutral_f1=label_f1("Neutral"),
         )
 
     # ── Logging (evaluator-owned sections) ───────────────────────
@@ -501,10 +518,6 @@ class CheckerEvaluator:
         logger.info("")
         logger.info(settings.section_rule("CHECKER EVAL"))
         logger.info("")
-
-        # ── Verdicts tree (docs/holy_data.md rule set 1). Unjudged is the
-        # reconciliation branch: excluded from the footer's denominator,
-        # homed in 💥 Reliability below.
         correct = sum(g == p for g, p in zip(gt_flat, pred_flat))
         wrong = result.total_claims - correct
         labeled = result.total_claims + result.parse_errors
@@ -588,6 +601,8 @@ class CheckerEvaluator:
             "💥 Reliability",
             [("🔎", "Checker (subject)", result.parse_errors, issued,
               "claims unjudged", "checker_failure_rate", None)],
+            header_note="subject tooling — excluded from accuracy,"
+                        " counted once here",
         )
 
     def _log_done(self, result: CheckerEvalResult) -> None:

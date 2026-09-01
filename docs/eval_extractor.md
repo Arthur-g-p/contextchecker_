@@ -41,7 +41,7 @@ Three families of number come out, and they are never mixed:
 | --- | --- | --- |
 | **Coverage** | how well the extractor found the facts | precision, recall, f1 |
 | **Orthogonal axes** | independent properties of the extraction | atomicity, duplicates, abstention behavior |
-| **Eval tooling failures** | how well *this evaluator* worked | extraction errors, checker failures |
+| **Reliability** | how well *this evaluator* worked | extraction errors, checker failures, atomization failures |
 
 Tooling failures are excluded from every quality metric. Our parse failure must
 never be reported as the extractor's mistake.
@@ -434,7 +434,10 @@ Each funnel accounts for every issued claim: the first three branches sum to the
 denominator, and the 💥 branch sits explicitly outside it. The same partition is
 in the JSON, so print and file can never disagree.
 
-Below the funnels, three orthogonal sections appear when they have something to
-report — `💥 Eval Tooling Failures` (extraction + checker, the eval's own
-reliability), `⚪ Abstention Behavior` (justified / unjustified / wrongful
-answer), `🧬 Atomicity` and `🔁 Duplicates`.
+Below the funnels, the orthogonal sections always print (a hidden row is
+indistinguishable from an unmeasured one): `⚪ Abstention Behavior` (the
+item-outcome partition — compared / justified / unjustified / wrongful
+answer, with footer rates), `💥 Reliability` (extraction + matching checker
++ atomization, each row `count of denominator → rate_key rate`; an
+unconfigured axis prints `not measured`), `🧬 Atomicity` and
+`🔁 Duplicates`. See docs/output_conventions.md for the display rules.

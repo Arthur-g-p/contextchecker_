@@ -31,17 +31,10 @@ def aggregate_values(values: list) -> dict | None:
     }
 
 
-def build_variance(metric_dicts: list[dict]) -> tuple[dict, dict]:
+def build_variance(
+    metric_dicts: list[dict], roster: list[str] | None = None,
+) -> tuple[dict, dict]:
     """(means, variance) over the top-level scalar keys of per-run dicts.
-
-    Non-scalar keys (support, extraction_errors, nested reports) are
-    skipped — they live untouched inside each run's own document.
-
-    A nullable metric keeps its key: a metric that was null in every run
-    appears as mean None with n=0 rather than vanishing, so multi-run and
-    single-run documents expose the same metric surface. (Null = the run
-    could not compute it; dropping the key would hide that a metric was
-    supposed to exist.)
     """
     keys: list[str] = []
     for d in metric_dicts:
@@ -54,6 +47,9 @@ def build_variance(metric_dicts: list[dict]) -> tuple[dict, dict]:
     # A key that is non-scalar in ANY run is structural, not a metric.
     keys = [k for k in keys if not any(
         isinstance(d.get(k), (dict, list, str, bool)) for d in metric_dicts)]
+    if roster is not None:
+        keys = [k for k in roster if k in keys or
+                all(d.get(k) is None for d in metric_dicts)]
 
     means: dict = {}
     variance: dict = {}

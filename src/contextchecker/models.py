@@ -119,6 +119,11 @@ class CheckerEvalResult:
     skipped: dict                          # {"missing_gt": N, "missing_context": N, "empty_gt": N}
     macro_f1: float | None = None          # classes weighted equally — the honest headline on imbalanced slices
     checker_failure_rate: float | None = None  # unjudged / issued (parse_errors under its future honest name)
+    # Per-label F1 (None when the label has zero support — unmeasurable,
+    # never 0.0: a data gap must not masquerade as a score).
+    entailment_f1: float | None = None
+    contradiction_f1: float | None = None
+    neutral_f1: float | None = None
 
 
 @dataclass
@@ -170,4 +175,16 @@ class ExtractorEvalResult:
                                            #  "by_cause": {"parse_failure": N, ...}}
                                            # Tooling failures — excluded from ALL
                                            # metrics above, never abstentions.
+    # Surfaced run-outcome rates: top-level scalars so the variance
+    # roster can aggregate them; the nested dicts above keep the counts
+    # and causes.
+    justified_abstention_rate: float | None = None
+    unjustified_abstention_rate: float | None = None
+    wrongful_answer_rate: float | None = None
+    atomicity_rate: float | None = None
+    claim_density: float | None = None
+    duplicate_rate: float | None = None
+    extraction_error_rate: float | None = None
+    checker_failure_rate: float | None = None
+    atomization_failure_rate: float | None = None
 

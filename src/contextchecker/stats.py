@@ -1,8 +1,10 @@
+import time
 from dataclasses import dataclass, field
 from typing import List
 import threading
 
 from contextchecker import settings
+from contextchecker.utils import build_variance
 
 logger = settings.get_logger(__name__)
 
@@ -280,7 +282,7 @@ def log_mece_tree(
     footer: list[tuple] | None = None,
     header_note: str | None = None,
 ) -> None:
-    """Render one MECE tree per docs/holy_data.md rule set 1.
+    """Render one MECE tree per docs/output_conventions.md rule set 1.
 
     *branches* are (icon, count, plain-English label, note-or-None); their
     counts must partition *total* — a mismatch logs a warning (holy-data
@@ -327,17 +329,19 @@ def log_rate_rows(
     rows: list[tuple],
     header_note: str | None = None,
 ) -> None:
-    """Render one rate-rows block (docs/holy_data.md rule set 2).
+    """Render one rate-rows block (docs/output_conventions.md rule set 2).
 
     Each row is (icon, label, count, denominator, phrase, rate_key,
-    causes) and is its own derivation: ``2 of 8 items failed →
+    causes[, warning]) and is its own derivation: ``2 of 8 items failed →
     extraction_error_rate 0.250``. Rates are 0-1 decimals (percent is
     banned); *rate_key* names the exact variance/JSON key the number
     becomes (None for rows whose rate is not exported yet). count None
     renders a "not measured" row with *phrase* as the reason. Rows never
     sum and never pretend to; zero rows always print — a hidden row is
     indistinguishable from an unmeasured one. *causes* ({cause: n})
-    render as sub-branches, cause names in plain English.
+    render as sub-branches, cause names in plain English. An optional
+    8th element is a warning printed under its own row (at warning
+    level, so it survives quieter log configurations).
     """
     top = f" {header}"
     if header_note:
@@ -346,9 +350,12 @@ def log_rate_rows(
 
     labels = [f"{label}:" for _, label, *_ in rows]
     width = max(len(l) for l in labels) if labels else 0
-    for i, (icon, label, count, den, phrase, rate_key, causes) in enumerate(rows):
+    for i, row in enumerate(rows):
+        icon, label, count, den, phrase, rate_key, causes = row[:7]
+        warning = row[7] if len(row) > 7 else None
         last = i == len(rows) - 1
         prefix = "└─" if last else "├─"
+        stem = "          " if last else "     │    "
         name = f"{label}:".ljust(width)
         if count is None:
             logger.info("     %s %s %s  not measured  (%s)",
@@ -360,12 +367,91 @@ def log_rate_rows(
             line += f"  → {rate_key} {rate}"
         logger.info(line)
         if causes:
-            stem = "          " if last else "     │    "
             items = sorted(causes.items(), key=lambda kv: -kv[1])
             for j, (cause, num) in enumerate(items):
                 sub = "└─" if j == len(items) - 1 else "├─"
                 logger.info("%s%s %s: %d", stem, sub,
                             str(cause).replace("_", " "), num)
+        if warning:
+            logger.warning("%s⚠️  %s", stem, warning)
+
+
+def roster_from_sections(sections: dict) -> list[str]:
+    """Flatten a _VARIANCE_SECTIONS spec into the ordered key roster."""
+    keys: list[str] = []
+    for _, group_keys in sections.get("metrics", []):
+        keys.extend(group_keys)
+    keys.extend(sections.get("behavior", []))
+    keys.extend(sections.get("health", []))
+    return keys
+
+
+class VarianceTracker:
+    """Tracks variance across --runs: per-run metrics in, one block out.
+
+    One instance per multi-run invocation. The command's own loop stays
+    untouched — it calls ``add(metrics, duration)`` once per run wherever
+    it likes, then ``finish(runs)`` computes means/variance over the
+    declared roster and prints the VARIANCE block + token table.
+    Calculation and printing are central; choreography, documents, and
+    _meta stay with the command (docs/holy_data.md rule set 4).
+    """
+
+    def __init__(self, sections: dict | None, labels: dict | None = None):
+        self._sections = sections
+        self._labels = labels
+        self._metrics: list[dict] = []
+        self._durations: list[float] = []
+        self._started = time.perf_counter()
+        self.total_seconds: float = 0.0
+
+    def add(self, metrics: dict, duration: float) -> None:
+        """Record one run's metric dict and duration."""
+        self._metrics.append(metrics)
+        self._durations.append(duration)
+
+    def finish(self, runs: int, log: bool = True) -> tuple[dict, dict]:
+        """Aggregate and (unless silenced) print the closing blocks.
+
+        Returns (means, variance) for document assembly;
+        ``total_seconds`` is set for the caller's _meta.
+        """
+        roster = (roster_from_sections(self._sections)
+                  if self._sections else None)
+        means, variance = build_variance(self._metrics, roster=roster)
+        self.total_seconds = round(time.perf_counter() - self._started, 1)
+        if log:
+            log_variance_block(runs, means, variance,
+                               self._durations, self.total_seconds,
+                               sections=self._sections, labels=self._labels)
+            log_token_stats()
+        return means, variance
+
+
+def _log_variance_rows(
+    keys: list[str], means: dict, variance: dict, runs: int,
+    labels: dict | None, indent: str = "    ",
+) -> None:
+    """One mean ± std row per key; plain-English labels, null and
+    partial-support handling."""
+    present = [k for k in keys if k in means]
+    for i, key in enumerate(present):
+        prefix = "└─" if i == len(present) - 1 else "├─"
+        label = (labels or {}).get(key, key.replace("_", " ")) + ":"
+        v = variance[key]
+        if means[key] is None:
+            # Null in every run: the metric exists but was never computable.
+            logger.info("%s%s %-30s n/a  (not computable in any of %d runs)",
+                        indent, prefix, label, runs)
+            continue
+        partial = ""
+        if v.get("n", runs) < runs:
+            # Mean over fewer runs than executed — say so, or the mean
+            # overstates its support.
+            partial = f"  ({v['n']}/{runs} runs)"
+        logger.info("%s%s %-30s %.3f ± %.3f   [%.3f, %.3f]%s",
+                    indent, prefix, label, means[key], v["std"],
+                    v["min"], v["max"], partial)
 
 
 def log_variance_block(
@@ -374,35 +460,43 @@ def log_variance_block(
     variance: dict,
     durations: list[float] | None = None,
     total_seconds: float | None = None,
+    sections: dict | None = None,
+    labels: dict | None = None,
 ) -> None:
-    """Print ══ VARIANCE (N runs) ══: mean ± std [min, max] per metric,
-    a time tree (per run + total), and a caching warning when every metric
-    has zero spread. The math behind means/variance lives in
-    utils.build_variance."""
+    """Print ══ VARIANCE (N runs) ══ (docs/output_conventions.md rule set 4).
+
+    With *sections* the block mirrors the per-run structure: 📊 Metrics
+    (grouped), ⚪ Behavior, 💥 Health, ⏱ Time — a section renders iff its
+    per-run block exists for the command. The zero-variance caching
+    warning is computed over Metrics only (all-zero Health is the desired
+    state, not caching evidence). Without *sections*: legacy flat render.
+    The math lives in utils.build_variance."""
     logger.info("")
     logger.info(settings.section_rule(f"VARIANCE ({runs} runs)", char="═"))
     logger.info("")
-    logger.info(" 📊 Metrics  (mean ± std  [min, max])")
-    keys = list(means.keys())
-    for i, key in enumerate(keys):
-        prefix = "└─" if i == len(keys) - 1 else "├─"
-        v = variance[key]
-        if means[key] is None:
-            # Null in every run: the metric exists but was never computable.
-            logger.info(
-                "    %s %-24s n/a  (not computable in any of %d runs)",
-                prefix, key + ":", runs,
-            )
-            continue
-        partial = ""
-        if v.get("n", runs) < runs:
-            # Mean over fewer runs than executed — say so, or the mean
-            # overstates its support.
-            partial = f"  ({v['n']}/{runs} runs)"
-        logger.info(
-            "    %s %-24s %.3f ± %.3f   [%.3f, %.3f]%s",
-            prefix, key + ":", means[key], v["std"], v["min"], v["max"], partial,
-        )
+    if sections is None:
+        logger.info(" 📊 Metrics  (mean ± std  [min, max])")
+        _log_variance_rows(list(means.keys()), means, variance, runs, labels)
+        warn_keys = list(means.keys())
+    else:
+        logger.info(" 📊 Metrics  (mean ± std  [min, max])")
+        metric_groups = sections.get("metrics", [])
+        warn_keys = []
+        for group_name, group_keys in metric_groups:
+            if group_name:
+                logger.info("    %s", group_name)
+            _log_variance_rows(group_keys, means, variance, runs, labels)
+            warn_keys.extend(group_keys)
+        behavior = [k for k in sections.get("behavior", []) if k in means]
+        if behavior:
+            logger.info("")
+            logger.info(" ⚪ Abstention Behavior")
+            _log_variance_rows(behavior, means, variance, runs, labels)
+        health = [k for k in sections.get("health", []) if k in means]
+        if health:
+            logger.info("")
+            logger.info(" 💥 Reliability  (tooling — should be zero)")
+            _log_variance_rows(health, means, variance, runs, labels)
     if durations:
         logger.info("")
         total = total_seconds if total_seconds is not None else sum(durations)
@@ -410,7 +504,8 @@ def log_variance_block(
         for i, d in enumerate(durations, 1):
             prefix = "└─" if i == len(durations) else "├─"
             logger.info("    %s %-10s %6.1fs", prefix, f"run {i}:", d)
-    stds = [v["std"] for v in variance.values() if v["std"] is not None]
+    stds = [variance[k]["std"] for k in warn_keys
+            if k in variance and variance[k]["std"] is not None]
     if stds and all(std == 0 for std in stds):
         logger.info("")
         logger.info(" ⚠️  Zero variance on every metric — all %d runs returned"

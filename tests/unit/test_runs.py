@@ -21,11 +21,11 @@ def _patch_api_keys(monkeypatch):
     monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
 
-def _pipeline(runs):
+def _pipeline(runs, verbosity="full"):
     with patch("contextchecker.services.extraction.Extractor"), \
          patch("contextchecker.services.checking.Checker"):
         return RagCheckerPipeline(extractor_model=EXT, checker_model=CHK,
-                                  runs=runs)
+                                  runs=runs, verbosity=verbosity)
 
 
 # ── Aggregation helpers (stats.py) ───────────────────────────────────────────
@@ -107,7 +107,9 @@ class TestPipelineRuns:
         assert pipeline._extract_response.verbosity == "compact"
 
     def test_multi_run_document_shape(self, monkeypatch):
-        pipeline = _pipeline(runs=3)
+        # silent: the fabricated last_report lacks the fields the per-run
+        # findings blocks print; this test asserts the document, not logs.
+        pipeline = _pipeline(runs=3, verbosity="silent")
         seen = []
 
         async def fake_run_once(data, announce=True, report=True):
@@ -145,7 +147,7 @@ class TestPipelineRuns:
     def test_run_one_in_place_then_deep_copies(self, monkeypatch):
         """Run 1 keeps the run() contract (mutates the input); runs 2..N
         operate on isolated deep copies."""
-        pipeline = _pipeline(runs=3)
+        pipeline = _pipeline(runs=3, verbosity="silent")
         seen = []
         mutated_at_entry = []
 

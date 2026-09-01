@@ -189,7 +189,8 @@ contextchecker check <input_file> [options]
 | **Input File** | `input_file` *(Argument)* | *Required* | Path to the JSON file with extracted knowledge graph triplets. |
 | **Extractor Model** | `--extractor-model`, `-e` | *Required* | The model name that was used for extraction (used to read the `{extractor_model}_response_kg` key). |
 | **Output File** | `--output`, `-o` | `results/{input_stem}_check.json` | Output JSON file path, written next to the input. The `results/` directory is automatically created. |
-| **Checker Model** | `--model`, `-m` | `None` | Model name for the checker LLM (e.g. `gemini-3.1`). Determines output keys. |
+| **Checker Model** | `--checker-model`, `--model`, `-m` | `None` | Model name for the checker LLM (e.g. `gemini-3.1`). Determines output keys. |
+| **Concurrency** | `--concurrency` | `10` | Max simultaneous LLM requests, per LLM client. |
 | **API Base URL** | `--checker-base-api` | `None` | Optional base URL override for the checker LLM API. |
 | **Joint Mode Toggle** | `--joint` / `--no-joint` | `True` | Toggle joint checking (multiple claims per LLM call) on or off. |
 | **Max Bundle size** | `--joint-num` | `10` | The maximum number of claims to bundle in a single joint call. |

@@ -298,6 +298,24 @@ def compute_overall_metrics(results: list[dict]) -> dict:
 class RagCheckerPipeline(BaseService):
     """2 extractions + 4 checking directions composed into one run."""
 
+    _VARIANCE_SECTIONS = {
+        "metrics": [
+            ("Overall", ["precision", "recall", "f1"]),
+            ("Retriever", ["claim_recall", "context_precision"]),
+            ("Generator", ["faithfulness", "hallucination", "self_knowledge",
+                           "context_utilization",
+                           "noise_sensitivity_in_relevant",
+                           "noise_sensitivity_in_irrelevant"]),
+        ],
+        "behavior": ["abstention_rate", "justified_abstention_rate",
+                     "unjustified_abstention_rate"],
+        "health": ["extraction_error_rate", "checker_failure_rate"],
+    }
+    _VARIANCE_LABELS = {
+        "noise_sensitivity_in_relevant": "noise sensitivity relevant",
+        "noise_sensitivity_in_irrelevant": "noise sensitivity irrelevant",
+    }
+
     def __init__(
         self,
         extractor_model: str,
@@ -785,7 +803,7 @@ class RagCheckerPipeline(BaseService):
 
         Extraction failures branch in only when present: they sit inside
         the rate denominator (evaluated items), so the tree owes the
-        reconciliation (docs/holy_data.md rule set 1)."""
+        reconciliation."""
         if self.verbosity != "full":
             return
         ab = _abstention_breakdown(self.last_report["results"])
@@ -817,8 +835,7 @@ class RagCheckerPipeline(BaseService):
         logger.info("")
 
     def _log_reliability(self) -> None:
-        """💥 Reliability rate rows — harness health, always printed
-        (docs/holy_data.md rule set 2: hidden ≠ zero)."""
+        """💥 Reliability rate rows — harness health, always printed."""
         if self.verbosity != "full":
             return
         report = self.last_report
@@ -831,7 +848,7 @@ class RagCheckerPipeline(BaseService):
             [("📝", "Extraction", ab["errored"], ab["evaluated"],
               "items failed", "extraction_error_rate", causes),
              ("🔎", "Checking", none_cells, total_cells,
-              "verdicts missing", "checker_failure_rate", None)],
+              "verdicts unjudged", "checker_failure_rate", None)],
             header_note="tooling — excluded from all metrics,"
                         " counted once here",
         )

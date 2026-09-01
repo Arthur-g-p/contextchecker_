@@ -69,8 +69,7 @@ def abstention_counts(entries: list[dict]) -> dict:
     """Item-level behavior counts over report entries.
 
     Single source for both the metric rates and the ⚪ Abstention Behavior
-    tree, so footer fractions can never drift from the JSON rates
-    (docs/holy_data.md, one number one home)."""
+    tree, so footer fractions can never drift from the JSON rates."""
     evaluated = len(entries)
     errored = sum(1 for e in entries if e.get("extraction_errors"))
     abstained = sum(1 for e in entries

@@ -129,11 +129,15 @@ Identity (enforced by a shared denominator and asserted in tests):
 
 | Metric | Definition | Why it exists |
 | --- | --- | --- |
-| `abstention_rate` | abstained items / evaluated items | The paper punishes "I don't know" as a wrong answer, tanking generator metrics. Here abstentions are excluded from the generator family — which would be gameable (abstain on everything, look perfect) unless the rate itself is a headline number. |
-| `justified_abstention_rate` | abstained AND no chunk entails any gt claim (item claim_recall = 0) / evaluated | The retriever gave the generator nothing; refusing was right. Diagnostic: fix the retriever. |
-| `unjustified_abstention_rate` | abstained AND retrieval evidence existed / evaluated | Evidence was retrieved and the generator refused anyway. Diagnostic: fix the generator. Computed for free from `retrieved2answer`, which runs for abstained items regardless — a split no string-matching abstention detector can produce. |
+| `abstention_rate` | abstained items / items the model got to answer (evaluated − extraction-errored) | The paper punishes "I don't know" as a wrong answer, tanking generator metrics. Here abstentions are excluded from the generator family — which would be gameable (abstain on everything, look perfect) unless the rate itself is a headline number. |
+| `justified_abstention_rate` | abstained AND no chunk entails any gt claim (item claim_recall = 0) / (evaluated − errored) | The retriever gave the generator nothing; refusing was right. Diagnostic: fix the retriever. |
+| `unjustified_abstention_rate` | abstained AND retrieval evidence existed / (evaluated − errored) | Evidence was retrieved and the generator refused anyway. Diagnostic: fix the generator. Computed for free from `retrieved2answer`, which runs for abstained items regardless — a split no string-matching abstention detector can produce. |
 | `extraction_error_rate` (+ per-side counts) | items with tooling failures / evaluated | The report is honest about its own tooling. These items are excluded from every quality metric — our parse failure must never masquerade as the evaluated system's abstention or hallucination. |
 | `checker_failure_rate` | None verdicts / all issued checks | Checker reliability per run: a run with 4% failed judgments deserves less trust than one with 0.1%. Catches loud failures (parse/context); silent checker degradation (all-Entailment bias) is a known open problem — see the drawbacks backlog. |
+
+Behavior-rate denominators exclude extraction-errored items (no-results
+leave the denominator): a tooling failure is charged exactly once, in
+`extraction_error_rate` — never by diluting a behavior rate.
 
 ## Repeated runs: `--runs N` (variance measurement)
 
