@@ -85,6 +85,9 @@ class TokenStats:
     _phases: dict = field(default_factory=dict)
     _current_phase: str = "default"
 
+    # Locked request strategy per (endpoint, model), recorded by the client.
+    _strategies: dict = field(default_factory=dict)
+
     # Thread-Lock for clean counting with async
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -124,6 +127,21 @@ class TokenStats:
                 p["input_tokens"] += inp
                 p["output_tokens"] += out
                 p["reasoning_tokens"] += reasoning
+
+    def record_strategy(self, model: str, endpoint: str | None, strategy: str):
+        """Remember which request strategy a model locked, for report _meta."""
+        with self._lock:
+            self._strategies[(endpoint, model)] = strategy
+
+    def strategies(self) -> dict[str, str]:
+        """{model: strategy name}. A model seen on two endpoints keeps both
+        entries, the second keyed with its endpoint appended."""
+        out: dict[str, str] = {}
+        with self._lock:
+            for (endpoint, model), name in self._strategies.items():
+                key = model if model not in out else f"{model} @ {endpoint or 'litellm'}"
+                out[key] = name
+        return out
 
     def log_request(self):
         """Count one HTTP call, whatever it returns.

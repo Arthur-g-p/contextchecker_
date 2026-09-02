@@ -36,7 +36,7 @@ from contextchecker.pipelines.directions import (
     unwrap_items,
 )
 from contextchecker.pipelines.ragchecker import _ENTAILMENT, _ratio, _row_entailed
-from contextchecker.stats import log_mece_tree, log_rate_rows, log_token_stats
+from contextchecker.stats import GLOBAL_STATS, log_mece_tree, log_rate_rows, log_token_stats
 from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
@@ -209,6 +209,7 @@ class FaithfulnessPipeline(BaseService):
                 total_items=len(data),
                 evaluated_items=len(results),
                 dropped_items=dropped,
+                request_strategies=GLOBAL_STATS.strategies(),
             ),
             "overall_metrics": self._compute_overall(results),
             "results": results,

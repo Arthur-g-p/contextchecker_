@@ -21,6 +21,7 @@ from contextchecker.pipelines.directions import unwrap_items
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
+from contextchecker.stats import GLOBAL_STATS
 from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
@@ -157,6 +158,7 @@ class RefCheckerPipeline(BaseService):
                 total_items=len(data),
                 evaluated_items=len(data) - dropped,
                 dropped_items=dropped,
+                request_strategies=GLOBAL_STATS.strategies(),
             ),
             "results": data,
         }

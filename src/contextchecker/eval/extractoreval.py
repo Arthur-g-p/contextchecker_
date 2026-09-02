@@ -23,6 +23,7 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
 from contextchecker.stats import (
+    GLOBAL_STATS,
     VarianceTracker,
     log_mece_tree,
     log_multi_run_hint,
@@ -365,6 +366,7 @@ class ExtractorEvaluator:
             dropped_items=result.total_items - result.to_compare_items,
             pred_key=self._pred_key,
             matching="llm-2-pass",
+            request_strategies=GLOBAL_STATS.strategies(),
         )
 
         summary_doc = {"_meta": meta, **asdict(result)}

@@ -26,6 +26,7 @@ from contextchecker.eval.metrics import (
 )
 from contextchecker.models import CheckerEvalResult
 from contextchecker.stats import (
+    GLOBAL_STATS,
     VarianceTracker,
     log_mece_tree,
     log_multi_run_hint,
@@ -233,6 +234,7 @@ class CheckerEvaluator:
                 total_items=result.total_items,
                 evaluated_items=result.total_items,
                 dropped_items=sum(result.skipped.values()),
+                request_strategies=GLOBAL_STATS.strategies(),
             ),
             **asdict(result),
         }

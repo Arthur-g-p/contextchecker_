@@ -702,6 +702,12 @@ class LLMClient:
                             self._discovery_succeeded = True
                             LLMClient._STRATEGY_CACHE[(self.base_url, self.model)] = self._strategy_index
                             logger.info("   🔒 Strategy locked: '%s'", self.strategy.name)
+                            # Names, not indices: indices renumber with RETRY_MATRIX.
+                            # LiteLLM never consults the matrix, so name the mode instead.
+                            GLOBAL_STATS.record_strategy(
+                                self.model, self.base_url,
+                                self.strategy.name if self.base_url else "LiteLLM passthrough",
+                            )
 
                         # Cache hint (only log once to avoid spam) Catch it properly
                         if not self._cache_hit_logged:
