@@ -13,7 +13,8 @@ Input (list[dict])
   ├─ _strip()       →  Removes any existing verdicts from the GT triplets to force a full recompute.
   ├─ Check          →  Delegates to `CheckingService` to predict verdicts (Joint or Single mode).
   ├─ _compare()     →  Compares predicted verdicts 1:1 against the `human_label`s.
-  └─ Metrics        →  Computes Accuracy, per-class F1/Precision/Recall, and a confusion matrix.
+  ├─ Metrics        →  Computes Accuracy, per-class F1/Precision/Recall, and a confusion matrix.
+  └─ Disagreements  →  Collects every wrong or unjudged claim per item into a second document.
 ```
 
 ## Step 1: Validation (`_validate`)
@@ -38,7 +39,7 @@ The service calls the LLM, parses the entailment verdict out of the response, an
 Iterates over every validated triplet and directly compares the newly predicted `verdict` against its original `human_label`. 
 
 - Collects matched triplets into lists for `y_true` (ground truth) and `y_pred` (predictions).
-- Collects false positives and false negatives for disagreement logging.
+- Claims with no verdict (checker failure) are excluded from both lists and counted as unjudged.
 
 ## Step 5: Metrics and Disagreements
 
@@ -67,7 +68,60 @@ Computes standard multi-class classification metrics, reported as:
   charged exactly once here (`N of M claims unjudged →
   checker_failure_rate`).
 
-Metrics and configuration are returned as a `CheckerEvalResult`. Disagreements (instances where the predicted verdict did not match the human label) are saved to a `<filename>_disagreements.json` file for further error analysis.
+Metrics and configuration are returned as a `CheckerEvalResult` and written as
+the summary file. Disagreements (claims whose predicted verdict did not match
+the human label) go to a `<filename>_disagreements.json` sibling for error
+analysis — and for reviewing the labels themselves: on a heavily skewed slice a
+handful of wrong human labels moves the accuracy more than the checker does.
+
+## Output Format
+
+Two files are written, both opening with `_args` and `_meta` (see
+docs/output_conventions.md). The summary carries `CheckerEvalResult` verbatim.
+
+### Disagreements file
+
+```json
+{
+  "_args": { "...": "..." },
+  "_meta": { "...": "..." },
+  "total_disagreements": 30,
+  "total_unjudged": 0,
+  "items": [
+    {
+      "id": "1006506",
+      "question": "when did mount nyiragongo last erupted",
+      "response": "Mount Nyiragongo last erupted on January 17, 2002.",
+      "labeled": 1,
+      "correct": 0,
+      "wrong": [
+        {
+          "triplet": "Mount Nyiragongo last erupted on January 17, 2002",
+          "human_label": "Entailment",
+          "verdict": "Neutral",
+          "explanation": "The reference states that an eruption occurred in 2002 but ..."
+        }
+      ],
+      "unjudged": []
+    }
+  ]
+}
+```
+
+- `total_disagreements` counts wrong **claims** and reconciles with the ❌
+  row of the 🔎 Verdicts tree; `total_unjudged` with the 💥 row.
+- `items` lists only items with at least one wrong or unjudged claim.
+  `labeled` / `correct` give the item's own tally so a reader sees how much
+  of the item went right.
+- `wrong` entries carry the checker's own explanation — that is the text to
+  read when deciding whether the checker or the annotator erred.
+- `unjudged` holds claims the checker never returned a verdict for, with
+  the `cause` from the checker error marker. An item whose only problem was
+  a checker failure still appears, so the failure stays traceable.
+- The reference is not repeated (it can be a full retrieved context per
+  item); join back to the input on `id`.
+- With `--runs > 1` the document becomes `{_args, _meta, runs: [...]}`,
+  mirroring the summary.
 
 With `--runs N`, the variance block aggregates accuracy, macro F1, the
 per-label F1s, and `checker_failure_rate` as `mean ± std [min, max]`

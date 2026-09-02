@@ -489,7 +489,7 @@ def eval_checker(
         ..., help="Path to eval JSON with GT triplets + human_label."
     ),
     output_file: Path = typer.Option(
-        None, "--output", "-o", help="Output path. Defaults to results/{input_stem}_checker_eval[_{runs}].json."
+        None, "--output", "-o", help="Output path. Defaults to results/{input_stem}_checker_eval[_{runs}].json. A *_disagreements.json sibling is written alongside."
     ),
     checker_model: str = typer.Option(
         ..., "--checker-model", "-m", help="Model name for the checker LLM."
@@ -524,6 +524,9 @@ def eval_checker(
     _print_header("eval checker")
 
     output_file = _resolve_output(input_file, "checker_eval", output_file, runs=runs)
+    disagree_file = output_file.with_name(
+        output_file.stem + "_disagreements.json"
+    )
 
     # Load input
     try:
@@ -547,20 +550,25 @@ def eval_checker(
             max_words=max_words,
             runs=runs,
         )
-        result_doc = evaluator.run_sync(data)
+        summary_doc, disagreements_doc = evaluator.run_sync(data)
+        _args = _capture_args("eval checker")
     except ContextCheckerError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write the document verbatim — the evaluator assembled it.
+    # Write both documents verbatim — the evaluator assembled them.
     output_file.write_text(
-        json.dumps({"_args": _capture_args("eval checker"), **result_doc},
-                   indent=2, ensure_ascii=False),
+        json.dumps({"_args": _args, **summary_doc}, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    disagree_file.write_text(
+        json.dumps({"_args": _args, **disagreements_doc}, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
     logger.info("")
     logger.info("Results written to %s", output_file)
+    logger.info("Disagreements written to %s", disagree_file)
 
 
 
