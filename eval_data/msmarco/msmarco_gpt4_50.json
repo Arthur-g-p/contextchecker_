@@ -299,7 +299,7 @@
           "is associated with an increased risk of",
           "depression"
         ],
-        "human_label": "Entailment"
+        "human_label": "Neutral"
       },
       {
         "triplet": [
@@ -864,7 +864,7 @@
           "caused by",
           "diabetes"
         ],
-        "human_label": "Neutral"
+        "human_label": "Entailment"
       },
       {
         "triplet": [
@@ -872,7 +872,7 @@
           "caused by",
           "kidney problems"
         ],
-        "human_label": "Neutral"
+        "human_label": "Entailment"
       },
       {
         "triplet": [
@@ -880,7 +880,7 @@
           "caused by",
           "liver disease"
         ],
-        "human_label": "Neutral"
+        "human_label": "Entailment"
       },
       {
         "triplet": [
@@ -888,7 +888,7 @@
           "caused by",
           "Cushings Disease"
         ],
-        "human_label": "Neutral"
+        "human_label": "Entailment"
       },
       {
         "triplet": [
@@ -896,7 +896,7 @@
           "caused by",
           "urinary tract infections"
         ],
-        "human_label": "Neutral"
+        "human_label": "Entailment"
       },
       {
         "triplet": [
@@ -928,7 +928,7 @@
           "caused by",
           "interstitial cystitis"
         ],
-        "human_label": "Entailment"
+        "human_label": "Neutral"
       },
       {
         "triplet": [
@@ -944,7 +944,7 @@
           "caused by",
           "damage to nerves that supply the bladder"
         ],
-        "human_label": "Entailment"
+        "human_label": "Neutral"
       },
       {
         "triplet": [
@@ -995,7 +995,7 @@
           "refers to",
           "USB (Universal Serial Bus) port"
         ],
-        "human_label": "Entailment"
+        "human_label": "Neutral"
       },
       {
         "triplet": [
@@ -2253,7 +2253,7 @@
           "zip code",
           "10583"
         ],
-        "human_label": "Neutral"
+        "human_label": "Entailment"
       }
     ],
     "question": "vision world scarsdale ny",
@@ -2280,7 +2280,7 @@
           "can diagnose",
           "ADHD"
         ],
-        "human_label": "Entailment"
+        "human_label": "Neutral"
       }
     ],
     "question": "can a school psychologist diagnose adhd",

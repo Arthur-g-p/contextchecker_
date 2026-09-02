@@ -21,8 +21,8 @@ The original is reconstructible from the RefChecker repository.
 
 ## What was changed, and what was not
 
-> **No verdict was ever altered.** Every original human label is exactly as the
-> RefChecker annotators left it.
+> **Four human labels were changed** — listed at the end of this file. Every
+> other verdict is exactly as the RefChecker annotators left it.
 
 The extractions around those labels were repaired. The annotation task judged
 whether each *given* triplet was Entailment / Neutral / Contradiction / Abstain,
@@ -64,10 +64,10 @@ directly back into the extraction and atomization services.
 
 | file | items | abstentions | triplets | Entailment | Neutral | Contradiction | always-Ent. baseline |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `msmarco_gpt4_100.json` | 100 | 10 | 487 | 450 (92%) | 35 (7%) | 2 (0.4%) | 92.4% |
-| `msmarco_gpt4_50.json` | 50 | 3 | 260 | 237 (91%) | 22 (8%) | 1 (0.4%) | 91.2% |
-| `msmarco_gpt4_25.json` | 25 | 1 | 127 | 120 (94%) | 7 (6%) | 0 | 94.5% |
-| `msmarco_gpt4_5.json` | 5 | 1 | 28 | 22 (79%) | 6 (21%) | 0 | 78.6% |
+| `msmarco_gpt4_100.json` | 100 | 10 | 487 | 451 (93%) | 34 (7%) | 2 (0.4%) | 92.6% |
+| `msmarco_gpt4_50.json` | 50 | 3 | 260 | 238 (92%) | 21 (8%) | 1 (0.4%) | 91.5% |
+| `msmarco_gpt4_25.json` | 25 | 1 | 116 | 113 (97%) | 3 (3%) | 0 | 97.4% |
+| `msmarco_gpt4_5.json` | 5 | 1 | 15 | 14 (93%) | 1 (7%) | 0 | 93.3% |
 
 An **abstention** here is an item whose response declines to answer — all ten
 read some form of "The passages do not provide ...". They carry an empty triplet
@@ -97,3 +97,12 @@ strongest of those models, so its error rate sits below the noisy-context
 average.
 
 The evaluation procedure is described in full in the evaluation article.
+
+## Changed labels
+
+| item | triplet | from | to | why |
+| --- | --- | --- | --- | --- |
+| `71168` | heavy marijuana use → increased risk of → depression | Entailment | Neutral | the passages support increased risk of *psychosis*; depression appears only in the reverse direction, people with depression being more likely to use cannabis |
+| `57346` | bus port → refers to → USB port | Entailment | Neutral | inverts genus and species — USB is *a* bus standard; FireWire appears in the same passages as an alternative |
+| `537560` | Scarsdale, New York → zip code → 10583 | Neutral | Entailment | stated outright in a postal address, "Scarsdale, New York 10583" |
+| `63192` | school psychologist → can diagnose → ADHD | Entailment | Neutral | the passages name who may diagnose, and school psychologists are not among them |

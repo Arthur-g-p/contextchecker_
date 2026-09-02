@@ -451,7 +451,7 @@ class FaithfulnessPipeline(BaseService):
                 ("⚪", ab["abstained"], "abstained",
                  "no ground truth — cannot judge justified vs not"),
             ],
-            footer=[("abstained", ab["abstained"], top)],
+            footer=[("abstention rate", ab["abstained"], top)],
             header_note=note,
         )
         logger.info("")
