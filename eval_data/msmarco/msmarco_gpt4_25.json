@@ -392,137 +392,6 @@
     ]
   },
   {
-    "id": "810239",
-    "response": "The cause of dogs urinating all the time can be due to several medical problems such as diabetes, kidney problems, liver disease, and Cushings Disease. Other causes can include urinary tract infections, bladder problems such as UTI or cystitis, interstitial cystitis, bladder dysfunction, and damage to nerves that supply the bladder. Behavioral causes can also lead to frequent urination, such as changes in the environment, stress, and anxiety.",
-    "claude2_response_kg": [
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "diabetes"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "kidney problems"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "liver disease"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "Cushings Disease"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "urinary tract infections"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "bladder problems"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "bladder problems",
-          "examples",
-          "UTI"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "bladder problems",
-          "examples",
-          "cystitis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "interstitial cystitis"
-        ],
-        "human_label": "Neutral"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "bladder dysfunction"
-        ],
-        "human_label": "Neutral"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "damage to nerves that supply the bladder"
-        ],
-        "human_label": "Neutral"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "changes in the environment"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "stress"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "anxiety"
-        ],
-        "human_label": "Entailment"
-      }
-    ],
-    "question": "what is the cause of dogs urinating all the time",
-    "context": [
-      "Excessive thirst and frequent urination are signs of four serious canine medical problems: diabetes, kidney problems, liver disease and Cushings Disease. After running basic tests, your veterinarian has eliminated the first three, leaving Cushings Disease as the diagnosis.",
-      "Some owners are under the misconception that the dog is peeing in the house to punish the owner. Dogs do not retaliate or do things out of spite. Read through the possible causes below and you may be able to gain some insight into your dog's problem.",
-      "Causes of Urination Problems in Dogs. ... ... Many factors can cause or exacerbate urination problems in dogs. Canine bladder problems can be a direct result of a physical issue such as a UTI or cystitis or can be behaviorally oriented as in the case of submissive urination. Knowing the cause of a dog's urination problems can help lead to the most effective solution in each specific case.",
-      "This causes the bladder wall to become irritable. The bladder begins to contract even when it contains small amounts of urine, causing more frequent urination. Interstitial cystitis . This condition of unknown cause is characterized by pain in the bladder and pelvic region.",
-      "Damage to nerves that supply the bladder can lead to problems with bladder function, including frequent and sudden urges to urinate. Less common causes include bladder cancer, bladder dysfunction, and radiation therapy. Often, frequent urination is not a symptom of a problem, but is the problem.",
-      "Causes of Frequent Urination. Frequent urination can be a symptom of many different problems. When frequent urination is accompanied by fever, an urgent need to urinate, and pain or discomfort in the abdomen, you may have a urinary tract infection. Other possible causes of frequent urination include: Diabetes .",
-      "Common Medical Causes Sudden Onset of Peeing in the House: Common Behavioral Causes of Sudden Onset of Peeing in the House: Changes to the environment are also a common behavioral cause for a dog to suddenly begin urinating in the home. * Adding a new pet to the household. * Change in the owners household routines. * Changes in the neighborhood like a new dog moving in. Stress and anxiety can lead to inappropriate urination.",
-      "Excessive thirst and frequent urination are signs of four serious dog health problems: diabetes, kidney problems, liver disease and Cushings Disease. Regrettably, not treating Cushings Disease could precipitate the others.",
-      "Signs of Canine Bladder Problems. There are a few common behaviors that indicate a probable canine bladder problem. If your dog is normally house trained and then begins urinating in the house or other forbidden areas, he's telling you that he's having a problem with his urination.",
-      "The majority of time, the source of the disease is a hyperactive pituitary gland, which is found at the base of the brain. Approximately 85% of Cushings in dogs is from a minute benign tumor on the pituitary gland. In the other 15% of cases, it may be caused by a tumor on one or both of the adrenal glands, which are located in front of the kidneys. Approximately 50% of these tumors are benign."
-    ]
-  },
-  {
     "id": "57346",
     "response": "A bus port, in the context of these passages, refers to a USB (Universal Serial Bus) port. It is an external bus standard that supports data transfer rates and can connect to multiple peripheral devices. It is used for connection, communication, and power supply between computers and electronic devices. USB ports are backward compatible and can support devices and cables of previous versions. They are also used to implement connections to storage devices using a set of standards.",
     "claude2_response_kg": [
@@ -716,6 +585,49 @@
       "Would you like to tell us about a lower price? Compare with similar items This item Natural Quartz Crystal Natraj Shiva Lingam / Sphatik Shivling Lord Shiva Puja 26.8g Artist Haat Handmade Hindu God Idols – Original Parad Shivling Stone / Small Black Stone Shiva Lingam /Idols for Home Decor & Pooja (Black, 4X2.5X4 Inch.",
       "It is prescribed for the deepest kind of worship of Lord Shiva. It has no color of its own, but takes on the color of the substance which comes in contact with it. It represents the 'Nirguna Brahman' or the attribute-less Supreme Self or the formless Shiva. Image is of 58g Sphatik Lingam, and is therefore larger than the actual product.",
       "Owing to the rich industrial experience and expertise in this business, we are engaged in providing Sphatik Shivling. Features: Innovatively designed; High spiritual value; Symbol of Lord Shiva"
+    ]
+  },
+  {
+    "id": "283271",
+    "response": "The passages mention that there have been roughly 20 recognized mass extinctions, of which 5 are major.",
+    "claude2_response_kg": [
+      {
+        "triplet": [
+          "extinctions",
+          "number",
+          "roughly 20"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "mass extinctions",
+          "count",
+          "5"
+        ],
+        "human_label": "Entailment"
+      },
+      {
+        "triplet": [
+          "major mass extinctions",
+          "are a subset of",
+          "recognized mass extinctions"
+        ],
+        "human_label": "Entailment"
+      }
+    ],
+    "question": "how many extinctions have occurred",
+    "context": [
+      "As species have appeared and others have disappeared, the overall trend in diversity has been strongly upward. Note also that this trend has periodic interruptions, called mass extinctions. The average rate over the past 200 my is 1-2 species per year, and 3-4 families per my. The average duration of a species is 2-10 million years (based on last 200 million years). Mass extinctions. Roughly 20 are recognized, of which 5 are major and the largest is the Permean, in which 50% of all marine families and 80+% of all marine species went extinct.",
+      "Ordovician–Silurian extinction events (End Ordovician or O-S): 450–440 Ma at the Ordovician-Silurian transition. Two events occurred that killed off 27% of all families, 57% of all genera and 60% to 70% of all species. Together they are ranked by many scientists as the second largest of the five major extinctions in Earth's history in terms of percentage of genera that became extinct.",
+      "Triassic–Jurassic extinction event (End Triassic): 201.3 Ma at the Triassic-Jurassic transition. About 23% of all families, 48% of all genera (20% of marine families and 55% of marine genera) and 70% to 75% of all species became extinct.",
+      "Two events occurred that killed off 27% of all families and 57% of all genera. Together they are ranked by many scientists as the second largest of the five major extinctions in Earth's history in terms of percentage of genera that went extinct. Source(s): http://en.wikipedia.org/wiki/Extinction_...",
+      "The K-T Extinction event. 1  Dinosaurs, many land plants, ammonites, much marine life perished. 2  The explanation: a huge meteor, perhaps 150 km in diameter, collided with Earth.  Alternative explanations: dual meteors, or massive volcanic activity triggered by a meteor.",
+      "Estimates of the number of major mass extinctions in the last 540 million years range from as few as five to more than twenty. These differences stem from the threshold chosen for describing an extinction event as major, and the data chosen to measure past diversity.",
+      "At the end of the Frasnian Age in the later part(s) of the Devonian Period, a prolonged series of extinctions eliminated about 19% of all families, 50% of all genera and 70% of all species. This extinction event lasted perhaps as long as 20 Ma, and there is evidence for a series of extinction pulses within this period.",
+      "Best Answer: There have been 5 Mass Extinction events in Earth's history. They are. 1.Cretaceous–Tertiary extinction event (End Cretaceous or K-T extinction): 65.5 Ma at the Cretaceous.Maastrichtian-Paleogene.Dania... transition interval. The K–T event is now called the Cretaceous–Paleogene (or K–Pg) extinction event by many researchers.",
+      "The most recent and debatably best-known, the Cretaceous–Paleogene extinction event, which occurred approximately 66 million years ago (Ma), was a large-scale mass extinction of animal and plant species in a geologically short period of time.",
+      "Extinction is a natural event  perhaps 95% of all the species that have ever lived have gone extinct. By late 1700s, as more fossil species were unearthed, catastrophism became the dominant explanation."
     ]
   },
   {

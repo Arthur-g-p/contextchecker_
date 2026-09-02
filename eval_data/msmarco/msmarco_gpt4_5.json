@@ -27,137 +27,6 @@
     ]
   },
   {
-    "id": "810239",
-    "response": "The cause of dogs urinating all the time can be due to several medical problems such as diabetes, kidney problems, liver disease, and Cushings Disease. Other causes can include urinary tract infections, bladder problems such as UTI or cystitis, interstitial cystitis, bladder dysfunction, and damage to nerves that supply the bladder. Behavioral causes can also lead to frequent urination, such as changes in the environment, stress, and anxiety.",
-    "claude2_response_kg": [
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "diabetes"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "kidney problems"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "liver disease"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "Cushings Disease"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "urinary tract infections"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "bladder problems"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "bladder problems",
-          "examples",
-          "UTI"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "bladder problems",
-          "examples",
-          "cystitis"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "interstitial cystitis"
-        ],
-        "human_label": "Neutral"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "bladder dysfunction"
-        ],
-        "human_label": "Neutral"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "damage to nerves that supply the bladder"
-        ],
-        "human_label": "Neutral"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "changes in the environment"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "stress"
-        ],
-        "human_label": "Entailment"
-      },
-      {
-        "triplet": [
-          "dogs urinating all the time",
-          "caused by",
-          "anxiety"
-        ],
-        "human_label": "Entailment"
-      }
-    ],
-    "question": "what is the cause of dogs urinating all the time",
-    "context": [
-      "Excessive thirst and frequent urination are signs of four serious canine medical problems: diabetes, kidney problems, liver disease and Cushings Disease. After running basic tests, your veterinarian has eliminated the first three, leaving Cushings Disease as the diagnosis.",
-      "Some owners are under the misconception that the dog is peeing in the house to punish the owner. Dogs do not retaliate or do things out of spite. Read through the possible causes below and you may be able to gain some insight into your dog's problem.",
-      "Causes of Urination Problems in Dogs. ... ... Many factors can cause or exacerbate urination problems in dogs. Canine bladder problems can be a direct result of a physical issue such as a UTI or cystitis or can be behaviorally oriented as in the case of submissive urination. Knowing the cause of a dog's urination problems can help lead to the most effective solution in each specific case.",
-      "This causes the bladder wall to become irritable. The bladder begins to contract even when it contains small amounts of urine, causing more frequent urination. Interstitial cystitis . This condition of unknown cause is characterized by pain in the bladder and pelvic region.",
-      "Damage to nerves that supply the bladder can lead to problems with bladder function, including frequent and sudden urges to urinate. Less common causes include bladder cancer, bladder dysfunction, and radiation therapy. Often, frequent urination is not a symptom of a problem, but is the problem.",
-      "Causes of Frequent Urination. Frequent urination can be a symptom of many different problems. When frequent urination is accompanied by fever, an urgent need to urinate, and pain or discomfort in the abdomen, you may have a urinary tract infection. Other possible causes of frequent urination include: Diabetes .",
-      "Common Medical Causes Sudden Onset of Peeing in the House: Common Behavioral Causes of Sudden Onset of Peeing in the House: Changes to the environment are also a common behavioral cause for a dog to suddenly begin urinating in the home. * Adding a new pet to the household. * Change in the owners household routines. * Changes in the neighborhood like a new dog moving in. Stress and anxiety can lead to inappropriate urination.",
-      "Excessive thirst and frequent urination are signs of four serious dog health problems: diabetes, kidney problems, liver disease and Cushings Disease. Regrettably, not treating Cushings Disease could precipitate the others.",
-      "Signs of Canine Bladder Problems. There are a few common behaviors that indicate a probable canine bladder problem. If your dog is normally house trained and then begins urinating in the house or other forbidden areas, he's telling you that he's having a problem with his urination.",
-      "The majority of time, the source of the disease is a hyperactive pituitary gland, which is found at the base of the brain. Approximately 85% of Cushings in dogs is from a minute benign tumor on the pituitary gland. In the other 15% of cases, it may be caused by a tumor on one or both of the adrenal glands, which are located in front of the kidneys. Approximately 50% of these tumors are benign."
-    ]
-  },
-  {
     "id": "57346",
     "response": "A bus port, in the context of these passages, refers to a USB (Universal Serial Bus) port. It is an external bus standard that supports data transfer rates and can connect to multiple peripheral devices. It is used for connection, communication, and power supply between computers and electronic devices. USB ports are backward compatible and can support devices and cables of previous versions. They are also used to implement connections to storage devices using a set of standards.",
     "claude2_response_kg": [
@@ -270,6 +139,33 @@
       "Short for Universal Serial Bus, USB (pronounced yoo-es-bee) is a standard that was introduced in 1995 by Intel, Compaq, Microsoft and other computer companies.",
       "Type-A plugs and receptacles from both USB 3.0 and USB 2.0 are designed to interoperate. Type-B plugs and receptacles in USB 3.0 are somewhat larger than those in USB 2.0; thus, USB 2.0 Type-B plugs can fit into USB 3.0 Type-B receptacles, while the opposite is not possible.",
       "1 USB runs with a 5 V power line, while FireWire in current implementations supplies 12 V and theoretically can supply up to 30 V. 2  Standard USB hub ports can provide from the typical 500 mA/2.5 W of current, only 100 mA from non-hub ports."
+    ]
+  },
+  {
+    "id": "309249",
+    "response": "A designer baby costs between $20,000 to $50,000.",
+    "claude2_response_kg": [
+      {
+        "triplet": [
+          "designer baby",
+          "costs between",
+          "$20,000 to $50,000"
+        ],
+        "human_label": "Entailment"
+      }
+    ],
+    "question": "how much does a designer baby cost",
+    "context": [
+      "A baby shower typically costs $100-$1,000, depending on the number of guests, the menu and location. Many baby showers are held in a home with finger foods provided by the host or hostess, typically with 15-40 guests.",
+      "The process used to edit the genes of human embryos is so easy you could do it in a community bio-hacker space. May 1, 2015, 11:11 AM.",
+      "All a scientist has to do to make it work is inject the right set of CRISPR molecules that they want into a cell — in this case, an embryo — and the delivery system seeks out the sections you are looking for. As Medvedik explains, once you have the equipment, you don't need much more to work with CRISPR.",
+      "If markets in designer baby technology are allowed, these markets will be expensive. If so, then only the rich will be able to afford designer babies. The rich will use the technology to give their children greater health, intelligence, and other desirable traits, creating even further inequality. Causing further equality would be wrong.",
+      "Similarly, if it turned out that designer baby technology forever remained too expensive for the bottom 5% of stable households (the kind of households where we would want children to be raised), then this doesn’t on its face call for eliminating the market in designer baby technology.",
+      "Designer babies won’t destroy the human race. No one has a clue how to make a brilliant, blue-eyed baby. (Reuters/Jerry Lampen) There has been a lot of chatter in the media lately about the threat of designer babies to the future of the human race.",
+      "Jennifer Doudna, one of the co-discoverers of CRISPR, told MIT Tech Review's Antonio Regalado just how easy it was to work with the tool: Any scientist with molecular biology skills and knowledge of how to work with [embryos] is going to be able to do this..",
+      "American babies for China's elite. Wealthy Chinese are not-so-secretly creating a race of genetically-superior designer babies by using American surrogates – and surprisingly, it’s a bargain despite price tags of $20,000 to $50,000. The family gets a second, genetically-designed child and can eventually emigrate to the U.S. once the made-to-order baby turns 21.",
+      "Typical costs: 1  A baby shower typically costs $100-$1,000, depending on the number of guests, the menu and location. 2  The location for a baby shower may range from no cost (for a home or church) up to $200 to reserve a community space for the shower guests. For example, the Mifflin Township Community Center in Gahanna, OH, costs $200 for four hours (or $100 for residents of the township) and can accommodate 80 shower guests.",
+      "Designer babies won’t destroy the human race. No one has a clue how to make a brilliant, blue-eyed baby. There has been a lot of chatter in the media lately about the threat of designer babies to the future of the human race."
     ]
   },
   {
