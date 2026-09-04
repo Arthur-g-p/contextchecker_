@@ -159,16 +159,21 @@ class FaithfulnessPipeline(BaseService):
     # -- Validation --
 
     def _validate(self, data: list[dict]) -> list[dict]:
-        """Step 1: Hard drop - response and retrieved_context non-empty."""
+        """Step 1: Hard drop - response present (a string; "" is a full
+        abstention, not missing data) and retrieved_context non-empty."""
         valid = []
         for i, item in enumerate(data):
             if not isinstance(item, dict):
                 logger.debug("Item %d is not an object (%s) - skipping.",
                              i, type(item).__name__)
                 continue
-            missing = [k for k in REQUIRED_KEYS if not item.get(k)]
+            missing = []
+            if not isinstance(item.get("response"), str):
+                missing.append("response")
+            if not item.get("retrieved_context"):
+                missing.append("retrieved_context")
             if missing:
-                logger.debug("Item %d missing/empty %s - skipping.",
+                logger.debug("Item %d missing %s - skipping.",
                              i, ", ".join(missing))
                 continue
             valid.append(item)

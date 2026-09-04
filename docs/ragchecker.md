@@ -129,15 +129,28 @@ Identity (enforced by a shared denominator and asserted in tests):
 
 | Metric | Definition | Why it exists |
 | --- | --- | --- |
-| `abstention_rate` | abstained items / items the model got to answer (evaluated − extraction-errored) | The paper punishes "I don't know" as a wrong answer, tanking generator metrics. Here abstentions are excluded from the generator family — which would be gameable (abstain on everything, look perfect) unless the rate itself is a headline number. |
-| `justified_abstention_rate` | abstained AND no chunk entails any gt claim (item claim_recall = 0) / (evaluated − errored) | The retriever gave the generator nothing; refusing was right. Diagnostic: fix the retriever. |
-| `unjustified_abstention_rate` | abstained AND retrieval evidence existed / (evaluated − errored) | Evidence was retrieved and the generator refused anyway. Diagnostic: fix the generator. Computed for free from `retrieved2answer`, which runs for abstained items regardless — a split no string-matching abstention detector can produce. |
+| `abstention_rate` | abstained items / items the model got to answer (evaluated − extraction-errored). Distribution information, never a quality score. | The paper punishes "I don't know" as a wrong answer, tanking generator metrics. Here abstentions are excluded from the generator family — which would be gameable (abstain on everything, look perfect) unless the rate itself is a headline number. |
+| `justified_abstention_rate` | abstained / **unanswerable** items (those annotated `"gt_answer": ""` — no answer exists) | Correct silence, judged by the annotation (SQuAD 2.0's NoAns). |
+| `unjustified_abstention_rate` | abstained / **answerable** items (a GT answer is present) | An answer was expected and the system refused — charged in recall. The *cause* is apportioned by retrieval evidence (`abstention_counts`: `all_chunks_irrelevant` / `relevant_chunk_present` / `relevance_unknown`), computed for free from `retrieved2answer`, which runs for abstained items regardless. The cause never softens the verdict. |
+| `unwarranted_answer_rate` | answered / **unanswerable** items | Answered where no answer exists — the failure mode of systems that never shut up. Precision is 0 by necessity (there is no reference to check the claims against; no request is spent). |
+| `answers_with_relevant_context` | per item, defined only when `claim_recall > 0` (a chunk entails a GT claim): 1 if the response has claims, 0 if it abstained; macro-averaged, printed as *answers when context is relevant* with its `(x of y items)` support | Did the generator talk when it had evidence. Higher is better; the complement is the tree's *refused with relevant chunks* count. |
+| `abstains_without_relevant_context` | per item, defined only when `claim_recall = 0` (no chunk entails any GT claim): 1 if it abstained, 0 if it answered; macro-averaged, printed as *abstains when context is irrelevant* | Did the generator shut up on trash context. Higher is better under this project's reading; a system meant to answer from its own knowledge reads it the other way (see self-knowledge). Undefined, like its sibling, when `claim_recall` is null — no GT claims (the blank-GT items among them) or unjudged retrieval. |
 | `extraction_error_rate` (+ per-side counts) | items with tooling failures / evaluated | The report is honest about its own tooling. These items are excluded from every quality metric — our parse failure must never masquerade as the evaluated system's abstention or hallucination. |
 | `checker_failure_rate` | None verdicts / all issued checks | Checker reliability per run: a run with 4% failed judgments deserves less trust than one with 0.1%. Catches loud failures (parse/context); silent checker degradation (all-Entailment bias) is a known open problem — see the drawbacks backlog. |
 
 Behavior-rate denominators exclude extraction-errored items (no-results
 leave the denominator): a tooling failure is charged exactly once, in
 `extraction_error_rate` — never by diluting a behavior rate.
+
+**What an abstention costs** (docs/abstention.md §4): recall is judged
+from the response text as the paper does — a refusal entails nothing, so
+it reads 0 and F1 follows; precision and the faithfulness family have no
+claims → `null`. Abstentions are never excluded from recall.
+
+**The blank-GT convention**: mark an unanswerable question with an
+explicit `"gt_answer": ""`. Field absent or `null` = missing GT (item
+dropped); present and empty = *no answer exists*. An empty `response`
+is likewise data (a full abstention), never a missing field.
 
 ## Repeated runs: `--runs N` (variance measurement)
 

@@ -30,7 +30,7 @@ Input (list[dict])
   ├─ 2b atomicity  →  OPTIONAL orthogonal axis, measured on a deep copy
   ├─ 2c duplicates →  Orthogonal axis, read-only
   ├─ _classify()   →  Five buckets: to_compare, justified_abstention,
-  │                   unjustified_abstention, wrongful_answer, extraction_error
+  │                   unjustified_abstention, unwarranted_answer, extraction_error
   ├─ Match (LLM)   →  2-pass entailment check over the `to_compare` items
   └─ Metrics       →  Precision / Recall / F1 + orthogonal axes + tooling rates
 ```
@@ -48,8 +48,10 @@ never be reported as the extractor's mistake.
 
 ## Step 1: Validation (`_validate`)
 
-- **Keeps** items with a `response`. Missing GT is *not* an error — it is the
-  trap that catches hallucinated extractions (`wrongful_answer`).
+- **Keeps** items with a `response` and a GT key. Absent or null GT key
+  = missing data (dropped, reported); an explicit empty list is data —
+  nothing to extract, the annotated no-answer that makes unwarranted
+  answers detectable.
 - **Drops** items without a `response`; there is nothing to extract from.
 - **Canonicalizes** key aliases (`context` → `reference`) and GT triplets
   (`{"triplet": [s, p, o]}` → `{"subject", "predicate", "object"}`).
@@ -99,7 +101,7 @@ abstention vocabulary matches the `ragcheck` pipeline: an abstention is
 | `to_compare` | yes | yes | sent to LLM matching |
 | `justified_abstention` | no | no | correct silence — no penalty |
 | `unjustified_abstention` | yes | no | every GT claim charged as a recall miss |
-| `wrongful_answer` | no | yes | every predicted claim charged as a precision miss |
+| `unwarranted_answer` | no | yes | every predicted claim charged as a precision miss |
 | `extraction_error` | any | — | tooling failure → **excluded from all metrics**, counted in `extraction_errors` |
 
 The `extraction_error` bucket exists so a parse failure can never masquerade as
@@ -151,7 +153,7 @@ recall_counts:
   recall          = covered / denominator
 
 precision_counts:
-  total_pred_claims = supported + unsupported + wrongful_answer_penalty + unjudged
+  total_pred_claims = supported + unsupported + unwarranted_answer_penalty + unjudged
   denominator       = total_pred_claims - unjudged
   precision         = supported / denominator
 
@@ -292,7 +294,7 @@ the run turned out to be — derived keys, counts, timings).
     "total_pred_claims": 19,
     "supported": 18,
     "unsupported": 0,
-    "wrongful_answer_penalty": 1,
+    "unwarranted_answer_penalty": 1,
     "unjudged": 0,
     "denominator": 19
   },
@@ -302,7 +304,7 @@ the run turned out to be — derived keys, counts, timings).
   "gt_stats":   { "total_triplets": 27, "avg_per_item": 13.5 },
   "pred_stats": { "total_triplets": 19, "avg_per_item": 9.5 },
 
-  "abstentions": { "justified": 0, "unjustified": 1, "wrongful_answer": 1 },
+  "abstentions": { "justified": 0, "unjustified": 1, "unwarranted_answer": 1 },
 
   "checker_failures": {
     "count": 0,
@@ -405,7 +407,7 @@ read `extraction_errors` and `abstentions` for the split.
 ```
 
 - `error_type` is present only on whole-item entries and is one of
-  `extraction_error`, `wrongful_answer`, `unjustified_abstention`.
+  `extraction_error`, `unwarranted_answer`, `unjustified_abstention`.
 - `false_positives` / `false_negatives` contain **judged** misses only — every
   entry carries a real verdict from the checker.
 - `unjudged` holds claims the checker never returned a verdict for. An item
@@ -436,8 +438,9 @@ in the JSON, so print and file can never disagree.
 
 Below the funnels, the orthogonal sections always print (a hidden row is
 indistinguishable from an unmeasured one): `⚪ Abstention Behavior` (the
-item-outcome partition — compared / justified / unjustified / wrongful
-answer, with footer rates), `💥 Reliability` (extraction + matching checker
+item-outcome partition — answered / justified / unjustified / unwarranted
+answer, with footer rates over the annotation split: justified and
+unwarranted over the unanswerable items, unjustified over the answerable), `💥 Reliability` (extraction + matching checker
 + atomization, each row `count of denominator → rate_key rate`; an
 unconfigured axis prints `not measured`), `🧬 Atomicity` and
 `🔁 Duplicates`. See docs/output_conventions.md for the display rules.

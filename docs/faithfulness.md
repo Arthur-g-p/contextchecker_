@@ -18,7 +18,9 @@ retrieved context", whether it happens to be true in the world or not.
 
 ## Input
 
-Required per item (hard drop): `response`, `retrieved_context`
+Required per item (hard drop): `response`, `retrieved_context`. An empty
+`response` string is data — a full abstention — not a missing field;
+absent or `null` is missing. An empty chunk list is a drop.
 (`[{doc_id, text}]` or bare strings). No `gt_answer` anywhere. The
 `{"results": [...]}` envelope is accepted.
 

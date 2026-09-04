@@ -149,14 +149,14 @@ class ExtractorEvalResult:
                                            #  "unjustified_abstention_penalty", "unjudged",
                                            #  "denominator"}
     precision_counts: dict                 # {"total_pred_claims", "supported", "unsupported",
-                                           #  "wrongful_answer_penalty", "unjudged",
+                                           #  "unwarranted_answer_penalty", "unjudged",
                                            #  "denominator"}
     total_items: int                       # items in dataset
     to_compare_items: int                  # items with GT + predictions to compare
     gt_stats: dict                         # {"total_triplets": N, "avg_per_item": float}
     pred_stats: dict                       # {"total_triplets": N, "avg_per_item": float}
     abstentions: dict                      # item counts: {"justified": N,
-                                           #  "unjustified": N, "wrongful_answer": N}
+                                           #  "unjustified": N, "unwarranted_answer": N}
                                            #  — the claim-level penalties live in the
                                            #  counts dicts. Naming follows ragcheck:
                                            #  justified = nothing was there to find.
@@ -180,7 +180,7 @@ class ExtractorEvalResult:
     # and causes.
     justified_abstention_rate: float | None = None
     unjustified_abstention_rate: float | None = None
-    wrongful_answer_rate: float | None = None
+    unwarranted_answer_rate: float | None = None
     atomicity_rate: float | None = None
     claim_density: float | None = None
     duplicate_rate: float | None = None

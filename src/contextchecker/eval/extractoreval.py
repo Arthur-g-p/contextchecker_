@@ -60,7 +60,7 @@ class _ItemBucket:
     justified when there was nothing to find, unjustified when there was.
     """
     to_compare: list[dict]              # has GT + has predictions → normal matching
-    wrongful_answer: list[dict]         # no GT but model predicted → precision penalty
+    unwarranted_answer: list[dict]         # no GT but model predicted → precision penalty
     unjustified_abstention: list[dict]  # has GT but no predictions → recall penalty
     justified_abstention: list[dict]    # no GT, no predictions → correct silence
     # extraction failed (tooling) → excluded from ALL metrics, counted in
@@ -118,7 +118,7 @@ class ExtractorEvaluator:
                               "duplicate_rate"]),
         ],
         "behavior": ["justified_abstention_rate",
-                     "unjustified_abstention_rate", "wrongful_answer_rate"],
+                     "unjustified_abstention_rate", "unwarranted_answer_rate"],
         "health": ["extraction_error_rate", "checker_failure_rate",
                    "atomization_failure_rate"],
     }
@@ -489,42 +489,45 @@ class ExtractorEvaluator:
     # ── Validation (fail-fast) ───────────────────────────────────
 
     def _validate(self, data: list[dict]) -> list[dict]:
-        """Fail-fast validation: items must have a response to extract from.
+        """Fail-fast validation: an item needs a response to extract from
+        and a GT key to be judged against.
 
-        Items missing 'response' are dropped — we can't extract without text.
-        Missing GT is NOT an error — it's the trap for wrongful_answer detection.
-        If zero survive → InvalidInputError.
-
-        GT presence is judged on the KEY, not its contents: an empty list is a
-        deliberate abstention trap. No item carrying the key at all means wrong
-        file or wrong --gt-key — fatal, and caught before any LLM call.
+        Absent or null GT key = missing data → dropped (the same rule as
+        ragcheck's gt_answer: absent is missing, an explicit empty is data).
+        An empty GT list is data: "nothing to extract" — the annotated
+        no-answer, which is what makes unwarranted answers detectable.
+        If zero survive → InvalidInputError; if every response-bearing item
+        lacks the GT key, that is a wrong file or wrong --gt-key — fatal,
+        and caught before any LLM call.
         """
         valid = []
-        dropped = 0
+        self._dropped_missing_response = 0
+        self._dropped_missing_gt = 0
 
-        for i, item in enumerate(data):
+        for item in data:
             if not item.get("response"):
-                dropped += 1
+                self._dropped_missing_response += 1
+                continue
+            if not isinstance(item.get(self._gt_key), list):
+                self._dropped_missing_gt += 1
                 continue
             valid.append(item)
 
         if not valid:
+            with_response = len(data) - self._dropped_missing_response
+            if with_response and self._dropped_missing_gt == with_response:
+                raise InvalidInputError(
+                    f"No ground truth found: none of the {with_response} "
+                    f"evaluable items contain the key '{self._gt_key}'. "
+                    f"`eval extractor` measures the extractor against labeled "
+                    f"GT — check the input file, or point --gt-key at the "
+                    f"right key."
+                )
             raise InvalidInputError(
                 f"No evaluable items. All {len(data)} items dropped "
-                f"(missing_response={dropped})."
+                f"(missing_response={self._dropped_missing_response}, "
+                f"missing_gt={self._dropped_missing_gt})."
             )
-
-        missing_key = sum(1 for item in valid if self._gt_key not in item)
-
-        if missing_key == len(valid):
-            raise InvalidInputError(
-                f"No ground truth found: none of the {len(valid)} evaluable "
-                f"items contain the key '{self._gt_key}'. `eval extractor` "
-                f"measures the extractor against labeled GT — check the input "
-                f"file, or point --gt-key at the right key."
-            )
-
-        self._missing_gt_count = missing_key
 
         return valid
 
@@ -539,7 +542,7 @@ class ExtractorEvaluator:
         an empty prediction list after a crashed extraction says nothing
         about the extractor's willingness to answer.
         """
-        to_compare, wrongful_answer = [], []
+        to_compare, unwarranted_answer = [], []
         unjustified_abstention, justified_abstention = [], []
         extraction_error = []
 
@@ -556,7 +559,7 @@ class ExtractorEvaluator:
             if has_gt and has_pred:
                 to_compare.append(item)
             elif not has_gt and has_pred:
-                wrongful_answer.append(item)
+                unwarranted_answer.append(item)
             elif has_gt and not has_pred:
                 unjustified_abstention.append(item)
             else:
@@ -564,7 +567,7 @@ class ExtractorEvaluator:
 
         return _ItemBucket(
             to_compare=to_compare,
-            wrongful_answer=wrongful_answer,
+            unwarranted_answer=unwarranted_answer,
             unjustified_abstention=unjustified_abstention,
             justified_abstention=justified_abstention,
             extraction_error=extraction_error,
@@ -604,9 +607,9 @@ class ExtractorEvaluator:
             len(item[self._gt_key]) for item in buckets.unjustified_abstention
         )
 
-        # Wrongful answer: every predicted triplet is an unsupported prediction (FP)
+        # Unwarranted answer: every predicted triplet is an unsupported prediction (FP)
         answer_fp_penalty = sum(
-            len(item[self._pred_key]) for item in buckets.wrongful_answer
+            len(item[self._pred_key]) for item in buckets.unwarranted_answer
         )
 
         recall_den = covered + missed + abstention_fn_penalty
@@ -634,7 +637,7 @@ class ExtractorEvaluator:
             "total_pred_claims": precision_den + unjudged_pred,
             "supported": supported,
             "unsupported": unsupported,
-            "wrongful_answer_penalty": answer_fp_penalty,
+            "unwarranted_answer_penalty": answer_fp_penalty,
             "unjudged": unjudged_pred,
             "denominator": precision_den,
         }
@@ -663,7 +666,7 @@ class ExtractorEvaluator:
         )
         pred_triplets = sum(
             len(item[self._pred_key])
-            for item in buckets.to_compare + buckets.wrongful_answer
+            for item in buckets.to_compare + buckets.unwarranted_answer
         )
         to_compare_count = len(buckets.to_compare)
         gt_avg = gt_triplets / to_compare_count if to_compare_count > 0 else 0.0
@@ -674,7 +677,7 @@ class ExtractorEvaluator:
         # the extraction step (all five buckets).
         error_items = buckets.extraction_error
         attempted = (
-            to_compare_count + len(buckets.wrongful_answer)
+            to_compare_count + len(buckets.unwarranted_answer)
             + len(buckets.unjustified_abstention) + len(buckets.justified_abstention)
             + len(error_items)
         )
@@ -689,6 +692,9 @@ class ExtractorEvaluator:
         }
 
         behavioral = attempted - len(error_items)
+        unanswerable = (len(buckets.justified_abstention)
+                        + len(buckets.unwarranted_answer))
+        answerable = to_compare_count + len(buckets.unjustified_abstention)
 
         return ExtractorEvalResult(
             precision=precision,
@@ -709,18 +715,20 @@ class ExtractorEvaluator:
             abstentions={
                 "justified": len(buckets.justified_abstention),
                 "unjustified": len(buckets.unjustified_abstention),
-                "wrongful_answer": len(buckets.wrongful_answer),
+                "unwarranted_answer": len(buckets.unwarranted_answer),
             },
             checker_failures=checker_failures,
             atomicity=atomicity,
             duplicates=duplicates,
             extraction_errors=extraction_errors,
+            # justified and unwarranted are rates over the items with no GT;
+            # unjustified over the items with GT.
             justified_abstention_rate=_bucket_rate(
-                len(buckets.justified_abstention), behavioral),
+                len(buckets.justified_abstention), unanswerable),
             unjustified_abstention_rate=_bucket_rate(
-                len(buckets.unjustified_abstention), behavioral),
-            wrongful_answer_rate=_bucket_rate(
-                len(buckets.wrongful_answer), behavioral),
+                len(buckets.unjustified_abstention), answerable),
+            unwarranted_answer_rate=_bucket_rate(
+                len(buckets.unwarranted_answer), unanswerable),
             atomicity_rate=atomicity["atomicity_rate"] if atomicity else None,
             claim_density=(atomicity["information_density"]
                            if atomicity else None),
@@ -965,7 +973,7 @@ class ExtractorEvaluator:
     ) -> list[dict]:
         """Build the per-item disagreement list for error analysis.
 
-        Includes: valid items with FP/FN, wrongful answers, wrongful
+        Includes: valid items with FP/FN, unwarranted answers, unwarranted
         abstentions, and extraction errors (so failed items are identifiable).
         Skipped items and perfect matches are excluded.
         """
@@ -1009,14 +1017,14 @@ class ExtractorEvaluator:
                 "unjudged": unjudged,
             })
 
-        # Wrongful answers — model predicted but shouldn't have
-        for i, item in enumerate(buckets.wrongful_answer):
+        # Unwarranted answers — model predicted but shouldn't have
+        for i, item in enumerate(buckets.unwarranted_answer):
             pred_count = len(item[self._pred_key])
             disagreements.append({
-                "id": item.get("id", f"wrongful-answer-{i}"),
+                "id": item.get("id", f"unwarranted-answer-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "error_type": "wrongful_answer",
+                "error_type": "unwarranted_answer",
                 "tp": 0,
                 "fp": pred_count,
                 "fn": 0,
@@ -1028,7 +1036,7 @@ class ExtractorEvaluator:
                     {
                         "pred_triplet": self._triplet_to_str(t),
                         "verdict": "no comparison made.",
-                        "reason": "No GT — wrongful answer",
+                        "reason": "No GT — unwarranted answer",
                     }
                     for t in item[self._pred_key]
                 ],
@@ -1071,14 +1079,14 @@ class ExtractorEvaluator:
         """Print 📂 Data section — pre-extraction validation summary."""
         logger.info(" 📂 Data")
         logger.info("    Total:       %d items", total)
-        if dropped > 0:
-            logger.info("    ├─ dropped:  %d  (missing response)", dropped)
-        missing_gt = getattr(self, "_missing_gt_count", 0)
+        no_response = getattr(self, "_dropped_missing_response", dropped)
+        no_gt = getattr(self, "_dropped_missing_gt", 0)
+        if no_response > 0:
+            logger.info("    ├─ dropped:  %d  (missing response)", no_response)
+        if no_gt > 0:
+            logger.info("    ├─ dropped:  %d  (missing GT key '%s')",
+                        no_gt, self._gt_key)
         logger.info("    └─ to extract: %d items", valid)
-        if missing_gt:
-            logger.info("       ├─ with GT key: %d", valid - missing_gt)
-            logger.info("       └─ no GT key:   %d  (⚠️ wrongful-answer traps)",
-                        missing_gt)
         logger.info("")
 
     def _log_eval_config(self) -> None:
@@ -1143,14 +1151,14 @@ class ExtractorEvaluator:
         logger.info("    Precision — %d total predicted claims", pc["total_pred_claims"])
         logger.info("     ├─ ✅ %d supported by GT  (judged)", pc["supported"])
         logger.info("     ├─ ❌ %d unsupported  (judged)", pc["unsupported"])
-        if pc["wrongful_answer_penalty"]:
+        if pc["unwarranted_answer_penalty"]:
             logger.info(
-                "     ├─ ⚪ %d wrongful-answer penalty  (%d items, no GT for %d claims)",
-                pc["wrongful_answer_penalty"], ab["wrongful_answer"],
-                pc["wrongful_answer_penalty"],
+                "     ├─ ⚪ %d unwarranted-answer penalty  (%d items, no GT for %d claims)",
+                pc["unwarranted_answer_penalty"], ab["unwarranted_answer"],
+                pc["unwarranted_answer_penalty"],
             )
         else:
-            logger.info("     ├─ ⚪ 0 wrongful-answer penalty")
+            logger.info("     ├─ ⚪ 0 unwarranted-answer penalty")
         if pc["unjudged"]:
             logger.info(
                 "     ├─ 💥 %d unjudged by checker  (excluded from evaluation — no verdict returned)",
@@ -1189,29 +1197,32 @@ class ExtractorEvaluator:
         # behavior; tooling failures are excluded from this universe
         # by _classify — one number, one home).
         behavioral = (result.to_compare_items + ab["justified"]
-                      + ab["unjustified"] + ab["wrongful_answer"])
+                      + ab["unjustified"] + ab["unwarranted_answer"])
+        errored = (result.extraction_errors or {}).get("count", 0)
         logger.info("")
         log_mece_tree(
-            "⚪ Abstention Behavior", behavioral, "valid items",
+            "⚪ Abstention Behavior", behavioral, "evaluated items",
             [
-                ("🔬", result.to_compare_items, "compared",
-                 "GT present, predictions present"),
+                ("🔬", result.to_compare_items, "answered",
+                 "GT present, claims extracted — scored"),
                 ("✅", ab["justified"],
                  f"justified abstention{'' if ab['justified'] == 1 else 's'}",
-                 "GT empty, 0 predictions — correct silence"),
+                 "GT empty — no answer exists; abstention is justified"),
                 ("❌", ab["unjustified"],
                  f"unjustified abstention{'' if ab['unjustified'] == 1 else 's'}",
-                 f"GT present, 0 predictions — "
-                 f"{rc['unjustified_abstention_penalty']} claims → recall penalty"),
-                ("❌", ab["wrongful_answer"],
-                 f"wrongful answer{'' if ab['wrongful_answer'] == 1 else 's'}",
-                 f"GT empty, predictions present — "
-                 f"{pc['wrongful_answer_penalty']} claims → precision penalty"),
+                 "GT present — an answer was expected; charged in recall"),
+                ("❌", ab["unwarranted_answer"],
+                 f"unwarranted answer{'' if ab['unwarranted_answer'] == 1 else 's'}",
+                 "GT empty — no answer exists, answered anyway; charged in precision"),
             ],
-            footer=[("justified", ab["justified"], behavioral),
-                    ("unjustified", ab["unjustified"], behavioral),
-                    ("wrongful", ab["wrongful_answer"], behavioral)],
-            header_note="not tooling — extraction parsed fine",
+            footer=[("justified", ab["justified"],
+                     ab["justified"] + ab["unwarranted_answer"], "unanswerable"),
+                    ("unjustified", ab["unjustified"],
+                     result.to_compare_items + ab["unjustified"], "answerable"),
+                    ("unwarranted", ab["unwarranted_answer"],
+                     ab["justified"] + ab["unwarranted_answer"], "unanswerable")],
+            header_note=(f"{errored} extraction-failed excluded — see 💥 Reliability"
+                         if errored else None),
         )
 
         # ── Reliability — the eval's own tooling, co-equal with P/R/F1 but
@@ -1290,7 +1301,7 @@ class ExtractorEvaluator:
             rc["covered"], rc["denominator"],
             rc["missed"], rc["unjustified_abstention_penalty"],
             pc["supported"], pc["denominator"],
-            pc["unsupported"], pc["wrongful_answer_penalty"],
+            pc["unsupported"], pc["unwarranted_answer_penalty"],
             (f" · 💥 {result.checker_failures['count']} unjudged excluded"
              if result.checker_failures["count"] else ""),
         )

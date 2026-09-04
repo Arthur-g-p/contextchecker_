@@ -59,7 +59,8 @@ def _evaluator(**kwargs):
 # ── Test _validate ───────────────────────────────────────────────────────────
 
 class TestValidate:
-    """_validate only drops items missing response — GT is not required."""
+    """_validate drops items missing a response or the GT key; an empty GT
+    list is data (nothing to extract — the annotated no-answer)."""
 
     def test_valid_items_pass(self):
         ev = _evaluator()
@@ -69,11 +70,23 @@ class TestValidate:
         valid = ev._validate(data)
         assert len(valid) == 1
 
-    def test_missing_gt_NOT_dropped(self):
-        """Items with no GT survive validation — they are the wrongful_answer trap."""
+    def test_absent_gt_key_is_missing_data(self):
+        """Absent = missing (dropped), same rule as ragcheck's gt_answer."""
         ev = _evaluator()
         data = [
             _make_item(gt_triplets=None),
+            _make_item(gt_triplets=[_make_triplet("a", "b", "c")]),
+        ]
+        valid = ev._validate(data)
+        assert len(valid) == 1
+        assert ev._dropped_missing_gt == 1
+
+    def test_empty_gt_list_is_the_annotated_no_answer(self):
+        """Explicit [] = nothing to extract — kept, it is what makes
+        unwarranted answers detectable."""
+        ev = _evaluator()
+        data = [
+            _make_item(gt_triplets=[]),
             _make_item(gt_triplets=[_make_triplet("a", "b", "c")]),
         ]
         valid = ev._validate(data)
@@ -134,42 +147,41 @@ class TestCorpusGtGuard:
         assert len(valid) == 2
 
     def test_empty_gt_not_counted_as_missing(self):
-        """Abstentions have the key, so they never reach the trap branch."""
+        """Abstentions carry the key (an empty list), so nothing is dropped."""
         ev = _evaluator()
         data = [_make_item(gt_triplets=[]), _make_item(gt_triplets=[])]
         ev._validate(data)
-        assert ev._missing_gt_count == 0
+        assert ev._dropped_missing_gt == 0
 
-    def test_partial_missing_key_passes_and_counts(self):
+    def test_all_gt_keys_absent_is_a_wrong_file(self):
+        """Every response-bearing item lacks the key → wrong file / wrong
+        --gt-key, caught before any LLM call."""
         ev = _evaluator()
-        data = [
-            _make_item(gt_triplets=None),
-            _make_item(gt_triplets=[_make_triplet("a", "b", "c")]),
-        ]
-        valid = ev._validate(data)
-        assert len(valid) == 2
-        assert ev._missing_gt_count == 1
+        with pytest.raises(InvalidInputError, match="No ground truth found"):
+            ev._validate([_make_item(gt_triplets=None), _make_item(gt_triplets=None)])
 
 
 class TestDataTreeRendering:
-    """_log_data_pre branches 'to extract' only when the split is real."""
+    """_log_data_pre reports each drop reason only when it happened."""
 
-    def test_branches_when_items_lack_gt_key(self):
+    def test_reports_missing_gt_drops(self):
         ev = _evaluator()
-        ev._missing_gt_count = 1
+        ev._dropped_missing_response = 0
+        ev._dropped_missing_gt = 1
         with patch("contextchecker.eval.extractoreval.logger") as mock_log:
             ev._log_data_pre(6, 1, 5)
         lines = [str(c) for c in mock_log.info.call_args_list]
-        assert any("with GT key" in l and "4" in l for l in lines)
-        assert any("no GT key" in l and "wrongful-answer traps" in l for l in lines)
+        assert any("missing GT key" in l and "1" in l for l in lines)
+        assert not any("missing response" in l for l in lines)
 
-    def test_no_branch_when_every_item_has_gt_key(self):
+    def test_silent_when_nothing_dropped(self):
         ev = _evaluator()
-        ev._missing_gt_count = 0
+        ev._dropped_missing_response = 0
+        ev._dropped_missing_gt = 0
         with patch("contextchecker.eval.extractoreval.logger") as mock_log:
             ev._log_data_pre(5, 0, 5)
         lines = [str(c) for c in mock_log.info.call_args_list]
-        assert not any("GT key" in l for l in lines)
+        assert not any("dropped" in l for l in lines)
 
 
 # ── Test pred_key / gt_key collision guard ───────────────────────────────────
@@ -210,22 +222,22 @@ class TestClassify:
         )]
         buckets = ev._classify(data)
         assert len(buckets.to_compare) == 1
-        assert len(buckets.wrongful_answer) == 0
+        assert len(buckets.unwarranted_answer) == 0
         assert len(buckets.unjustified_abstention) == 0
         assert len(buckets.justified_abstention) == 0
 
-    def test_wrongful_answer(self):
-        """Item with predictions but no GT → wrongful answer."""
+    def test_unwarranted_answer(self):
+        """Item with predictions but no GT → unwarranted answer."""
         ev = _evaluator()
         data = [_make_item(
             gt_triplets=None,
             pred_triplets=[_make_canonical_triplet("a", "b", "c")],
         )]
         buckets = ev._classify(data)
-        assert len(buckets.wrongful_answer) == 1
+        assert len(buckets.unwarranted_answer) == 1
 
     def test_unjustified_abstention(self):
-        """Item with GT but no predictions → wrongful abstention."""
+        """Item with GT but no predictions → unwarranted abstention."""
         ev = _evaluator()
         data = [_make_item(
             gt_triplets=[_make_triplet("a", "b", "c")],
@@ -248,7 +260,7 @@ class TestClassify:
             pred_triplets=[_make_canonical_triplet("a", "b", "c")],
         )]
         buckets = ev._classify(data)
-        assert len(buckets.wrongful_answer) == 1
+        assert len(buckets.unwarranted_answer) == 1
 
     def test_empty_pred_treated_as_no_pred(self):
         ev = _evaluator()
@@ -270,7 +282,7 @@ class TestClassify:
         ]
         buckets = ev._classify(data)
         assert len(buckets.to_compare) == 1
-        assert len(buckets.wrongful_answer) == 1
+        assert len(buckets.unwarranted_answer) == 1
         assert len(buckets.unjustified_abstention) == 1
         assert len(buckets.justified_abstention) == 1
 
@@ -431,7 +443,7 @@ class TestBuildResult:
                 _make_item(gt_triplets=[_make_triplet("a", "b", "c")],
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[],
             justified_abstention=[],
         )
@@ -456,7 +468,7 @@ class TestBuildResult:
                 _make_item(gt_triplets=[_make_triplet("a", "b", "c")],
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[
                 _make_item(gt_triplets=[_make_triplet("d", "e", "f"),
                                         _make_triplet("g", "h", "i")]),
@@ -474,14 +486,14 @@ class TestBuildResult:
         assert result.recall == round(1 / 3, 4)
         assert result.abstentions["unjustified"] == 1
 
-    def test_wrongful_answer_fp_penalty(self):
+    def test_unwarranted_answer_fp_penalty(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[
                 _make_item(gt_triplets=[_make_triplet("a", "b", "c")],
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
-            wrongful_answer=[
+            unwarranted_answer=[
                 _make_item(gt_triplets=None,
                            pred_triplets=[_make_canonical_triplet("x", "y", "z")]),
             ],
@@ -494,15 +506,15 @@ class TestBuildResult:
         pc = result.precision_counts
         assert pc["supported"] == 1
         assert pc["unsupported"] == 0
-        assert pc["wrongful_answer_penalty"] == 1  # penalty IS in the denominator
+        assert pc["unwarranted_answer_penalty"] == 1  # penalty IS in the denominator
         assert pc["denominator"] == 2
         assert result.precision == 0.5
-        assert result.abstentions["wrongful_answer"] == 1
+        assert result.abstentions["unwarranted_answer"] == 1
 
     def test_zero_items(self):
         """Empty denominator → None, never 0.0: nothing judged is not a score."""
         ev = _evaluator()
-        buckets = _ItemBucket(to_compare=[], wrongful_answer=[], unjustified_abstention=[], justified_abstention=[])
+        buckets = _ItemBucket(to_compare=[], unwarranted_answer=[], unjustified_abstention=[], justified_abstention=[])
         result = ev._build_result([], buckets, total_items=0)
         assert result.precision is None
         assert result.recall is None
@@ -517,7 +529,7 @@ class TestBuildResult:
                 _make_item(gt_triplets=[_make_triplet("a", "b", "c")],
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[],
             justified_abstention=[],
         )
@@ -546,7 +558,7 @@ class TestBuildResult:
                                         _make_triplet("d", "e", "f")],
                            pred_triplets=[_make_canonical_triplet("a", "b", "c")]),
             ],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[],
             justified_abstention=[],
         )
@@ -570,7 +582,7 @@ class TestBuildResult:
                 _make_item(gt_triplets=[_make_triplet(c, c, c) for c in "abcd"],
                            pred_triplets=[_make_canonical_triplet(c, c, c) for c in "abc"]),
             ],
-            wrongful_answer=[
+            unwarranted_answer=[
                 _make_item(gt_triplets=None,
                            pred_triplets=[_make_canonical_triplet("x", "y", "z")]),
             ],
@@ -591,7 +603,7 @@ class TestBuildResult:
         assert (rc["covered"] + rc["missed"] + rc["unjustified_abstention_penalty"]
                 + rc["unjudged"]) == rc["total_gt_claims"] == 5
         assert rc["denominator"] == rc["total_gt_claims"] - rc["unjudged"] == 4
-        assert (pc["supported"] + pc["unsupported"] + pc["wrongful_answer_penalty"]
+        assert (pc["supported"] + pc["unsupported"] + pc["unwarranted_answer_penalty"]
                 + pc["unjudged"]) == pc["total_pred_claims"] == 4
         assert pc["denominator"] == pc["total_pred_claims"] - pc["unjudged"] == 3
         # Totals must equal what the extraction stats report
@@ -611,7 +623,7 @@ class TestUnjudgedInDisagreements:
                           pred_triplets=[_make_canonical_triplet("a", "b", "c")],
                           item_id="u1")
         buckets = _ItemBucket(
-            to_compare=[item], wrongful_answer=[],
+            to_compare=[item], unwarranted_answer=[],
             unjustified_abstention=[], justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
@@ -631,7 +643,7 @@ class TestUnjudgedInDisagreements:
         item = _make_item(gt_triplets=[_make_canonical_triplet("a", "b", "c")],
                           pred_triplets=[_make_canonical_triplet("a", "b", "c")])
         buckets = _ItemBucket(
-            to_compare=[item], wrongful_answer=[],
+            to_compare=[item], unwarranted_answer=[],
             unjustified_abstention=[], justified_abstention=[],
         )
         item_results = [_ItemMatchResult(
@@ -648,7 +660,7 @@ ERROR_KEY = "test-model_extraction_error"
 
 class TestExtractionErrors:
     """[] caused by a tooling failure must be excluded from ALL metrics and
-    reported as an error rate — not scored as (wrongful/correct) abstention."""
+    reported as an error rate — not scored as (unwarranted/correct) abstention."""
 
     def test_errored_items_get_own_bucket(self):
         ev = _evaluator()
@@ -660,7 +672,7 @@ class TestExtractionErrors:
 
         buckets = ev._classify([errored, normal])
         assert buckets.extraction_error == [errored]
-        # Crucially NOT scored as wrongful abstention despite GT + empty pred
+        # Crucially NOT scored as unwarranted abstention despite GT + empty pred
         assert buckets.unjustified_abstention == []
         assert buckets.to_compare == [normal]
 
@@ -672,7 +684,7 @@ class TestExtractionErrors:
         errored[ERROR_KEY] = "parse_failure"
         buckets = _ItemBucket(
             to_compare=[],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[],
             justified_abstention=[_make_item()],
             extraction_error=[errored],
@@ -692,7 +704,7 @@ class TestExtractionErrors:
         errored = _make_item(item_id="broken-1")
         errored[ERROR_KEY] = "context_too_long"
         buckets = _ItemBucket(
-            to_compare=[], wrongful_answer=[], unjustified_abstention=[],
+            to_compare=[], unwarranted_answer=[], unjustified_abstention=[],
             justified_abstention=[], extraction_error=[errored],
         )
         disagreements = ev._build_disagreements(buckets, [])
@@ -712,7 +724,7 @@ class TestBuildDisagreements:
                 gt_triplets=[_make_triplet("a", "b", "c")],
                 pred_triplets=[_make_canonical_triplet("a", "b", "c")],
             )],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[],
             justified_abstention=[],
         )
@@ -728,7 +740,7 @@ class TestBuildDisagreements:
                 gt_triplets=[_make_canonical_triplet("a", "b", "c")],
                 pred_triplets=[_make_canonical_triplet("x", "y", "z")],
             )],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[],
             justified_abstention=[],
         )
@@ -740,11 +752,11 @@ class TestBuildDisagreements:
         assert "error_type" not in disagreements[0]
         assert disagreements[0]["fp"] == 1
 
-    def test_wrongful_answer_in_disagreements(self):
+    def test_unwarranted_answer_in_disagreements(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[],
-            wrongful_answer=[_make_item(
+            unwarranted_answer=[_make_item(
                 gt_triplets=None,
                 pred_triplets=[_make_canonical_triplet("a", "b", "c")],
             )],
@@ -753,14 +765,14 @@ class TestBuildDisagreements:
         )
         disagreements = ev._build_disagreements(buckets, [])
         assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "wrongful_answer"
+        assert disagreements[0]["error_type"] == "unwarranted_answer"
         assert disagreements[0]["false_positives"][0]["verdict"] == "no comparison made."
 
     def test_unjustified_abstention_in_disagreements(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[],
-            wrongful_answer=[],
+            unwarranted_answer=[],
             unjustified_abstention=[_make_item(
                 gt_triplets=[_make_canonical_triplet("a", "b", "c"), _make_canonical_triplet("d", "e", "f")],
                 pred_triplets=None,
@@ -846,17 +858,18 @@ class TestEvaluateIntegration:
         assert disagreements_doc["total_disagreements"] == 1
         assert disagreements_doc["items"][0]["error_type"] == "unjustified_abstention"
 
-    def test_wrongful_answer_from_extraction(self):
-        """Item has no GT but extraction produces triplets → wrongful answer."""
+    def test_unwarranted_answer_from_extraction(self):
+        """GT is an explicit empty list (nothing to extract) but extraction
+        produces triplets → unwarranted answer."""
         ev = _evaluator()
 
         data = [
             _make_item(
-                gt_triplets=None,
+                gt_triplets=[],
                 item_id="1",
             ),
-            # Present-but-empty key satisfies the corpus GT guard; no
-            # predictions, so the counts below are unchanged.
+            # Second no-answer item with no predictions: a justified
+            # abstention, so the counts below are unchanged.
             _make_item(
                 gt_triplets=[],
                 item_id="2",
@@ -877,9 +890,9 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_done"):
             summary_doc, disagreements_doc = ev.run_sync(data)
 
-        assert summary_doc["abstentions"]["wrongful_answer"] == 1
-        assert summary_doc["precision_counts"]["wrongful_answer_penalty"] == 1
+        assert summary_doc["abstentions"]["unwarranted_answer"] == 1
+        assert summary_doc["precision_counts"]["unwarranted_answer_penalty"] == 1
         assert summary_doc["precision"] == 0.0  # measured: 1 penalty claim, 0 supported
         assert disagreements_doc["total_disagreements"] == 1
-        assert disagreements_doc["items"][0]["error_type"] == "wrongful_answer"
+        assert disagreements_doc["items"][0]["error_type"] == "unwarranted_answer"
         assert disagreements_doc["items"][0]["false_positives"][0]["verdict"] == "no comparison made."

@@ -61,9 +61,17 @@ class TestValidate:
         assert "gt_answer" not in item
         assert len(pipeline._validate([item])) == 1
 
-    @pytest.mark.parametrize("key", ["response", "retrieved_context"])
-    def test_missing_or_empty_key_drops_item(self, pipeline, key):
-        valid = pipeline._validate([_full_item(**{key: ""}), _full_item()])
+    def test_empty_chunks_drop_item(self, pipeline):
+        valid = pipeline._validate([_full_item(retrieved_context=[]), _full_item()])
+        assert len(valid) == 1
+
+    def test_empty_response_is_an_abstention_not_missing(self, pipeline):
+        """docs/abstention.md §1: "" is a full abstention — kept, flagged later."""
+        valid = pipeline._validate([_full_item(response=""), _full_item()])
+        assert len(valid) == 2
+
+    def test_null_response_is_missing(self, pipeline):
+        valid = pipeline._validate([_full_item(response=None), _full_item()])
         assert len(valid) == 1
 
     def test_nothing_valid_raises(self, pipeline):

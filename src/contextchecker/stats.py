@@ -302,9 +302,12 @@ def log_mece_tree(
 ) -> None:
     """Render one MECE tree per docs/output_conventions.md rule set 1.
 
-    *branches* are (icon, count, plain-English label, note-or-None); their
-    counts must partition *total* — a mismatch logs a warning (holy-data
-    enforcement, never a crash). *footer* rates are (name, numerator,
+    *branches* are (icon, count, plain-English label, note-or-None[,
+    children]); their counts must partition *total* — a mismatch logs a
+    warning (holy-data enforcement, never a crash). Optional *children*
+    are (label, count, note-or-None) sub-branches that partition their
+    parent's count — a cause breakdown, never a second level of the
+    header's partition. *footer* rates are (name, numerator,
     denominator), rendered as the single terminal `→` line with visible
     fractions; only footer rates may be aggregated by the variance block,
     under the same names.
@@ -314,21 +317,39 @@ def log_mece_tree(
         top += f"  ({header_note})"
     logger.info(top)
 
-    branch_sum = sum(count for _, count, _, _ in branches)
+    branch_sum = sum(b[1] for b in branches)
     if branch_sum != total:
         logger.warning(
             "⚠️  MECE violation in '%s': branches sum to %d, header says %d",
             header, branch_sum, total,
         )
 
-    texts = [f"{count} {label}" for _, count, label, _ in branches]
+    texts = [f"{b[1]} {b[2]}" for b in branches]
     width = max(len(t) for t in texts) if texts else 0
-    for i, (icon, _, _, note) in enumerate(branches):
-        prefix = "├─" if footer or i < len(branches) - 1 else "└─"
+    for i, b in enumerate(branches):
+        icon, count, _, note = b[:4]
+        children = b[4] if len(b) > 4 else None
+        last = not footer and i == len(branches) - 1
+        prefix = "└─" if last else "├─"
         line = f"     {prefix} {icon} {texts[i]:<{width}}"
         if note:
             line = f"{line}  ({note})"
         logger.info(line.rstrip())
+        if children:
+            child_sum = sum(c[1] for c in children)
+            if child_sum != count:
+                logger.warning(
+                    "⚠️  MECE violation in '%s' › %s: sub-branches sum to %d,"
+                    " branch says %d", header, b[2], child_sum, count,
+                )
+            stem = "          " if last else "     │    "
+            cwidth = max(len(f"{c[1]} {c[0]}") for c in children)
+            for j, (clabel, ccount, cnote) in enumerate(children):
+                sub = "└─" if j == len(children) - 1 else "├─"
+                cline = f"{stem}{sub} {f'{ccount} {clabel}':<{cwidth}}"
+                if cnote:
+                    cline = f"{cline}  ({cnote})"
+                logger.info(cline.rstrip())
 
     if footer:
         parts = []
@@ -337,8 +358,8 @@ def log_mece_tree(
             # optional 4th element: a fraction suffix, e.g. "judged" when
             # the footer denominator is a subset of the header total.
             suffix = f" {entry[3]}" if len(entry) > 3 and entry[3] else ""
-            parts.append(f"{name} n/a" if not den
-                         else f"{name} {num / den:.3f} ({num} / {den}{suffix})")
+            rate = "n/a" if not den else f"{num / den:.3f}"
+            parts.append(f"{name} {rate} ({num} / {den}{suffix})")
         logger.info("     └─ → %s", " · ".join(parts))
 
 

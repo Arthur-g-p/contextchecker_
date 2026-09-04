@@ -65,14 +65,24 @@ class TestValidate:
         valid = pipeline._validate([item, _full_item()])
         assert len(valid) == 1
 
-    @pytest.mark.parametrize("key,empty", [
-        ("response", ""),
-        ("gt_answer", ""),
-        ("retrieved_context", []),
-    ])
-    def test_empty_value_drops_item(self, pipeline, key, empty):
-        """Falsy counts as missing — empty GT or chunk list means garbage metrics."""
-        valid = pipeline._validate([_full_item(**{key: empty}), _full_item()])
+    def test_empty_chunk_list_drops_item(self, pipeline):
+        """No context = nothing to evaluate against."""
+        valid = pipeline._validate([_full_item(retrieved_context=[]), _full_item()])
+        assert len(valid) == 1
+
+    def test_empty_strings_are_data_not_missing(self, pipeline):
+        """docs/abstention.md §2: an empty response is a full abstention; an
+        explicit "" gt_answer is the annotated no-answer. Both are kept, and
+        only the latter is marked."""
+        valid = pipeline._validate(
+            [_full_item(response=""), _full_item(gt_answer="  "), _full_item()])
+        assert len(valid) == 3
+        assert valid[1]["gt_no_answer"] is True
+        assert "gt_no_answer" not in valid[0]
+        assert "gt_no_answer" not in valid[2]
+
+    def test_null_gt_answer_is_missing(self, pipeline):
+        valid = pipeline._validate([_full_item(gt_answer=None), _full_item()])
         assert len(valid) == 1
 
     def test_nothing_valid_raises(self, pipeline):
@@ -266,9 +276,10 @@ def _matrix(rows):
 
 
 def _metrics_entry(a2r, r2a, ret2r, ret2a, n_chunks,
-                   is_abstention=False, errors=None):
+                   is_abstention=False, errors=None, gt_no_answer=False):
     entry = {
         "is_abstention": is_abstention,
+        "gt_no_answer": gt_no_answer,
         "retrieved_context": [
             {"doc_id": f"{i:03d}", "text": "t"} for i in range(n_chunks)
         ],
@@ -366,14 +377,35 @@ class TestMetricsGating:
         m = compute_item_metrics(entry)
         assert all(m[name] is None for name in METRIC_NAMES)
 
-    def test_abstention_keeps_retrieval_metrics_only(self):
-        entry = _metrics_entry([], [E], [], [[E, N]], 2, is_abstention=True)
+    def test_abstention_recall_is_judged_from_the_text(self):
+        """docs/abstention.md §4: a refusal entails nothing → recall 0, F1 0.
+        Precision and the faithfulness family have no claims → None."""
+        entry = _metrics_entry([], [N], [], [[E, N]], 2, is_abstention=True)
         m = compute_item_metrics(entry)
         assert m["claim_recall"] == 1.0
         assert m["context_precision"] == 0.5
         assert m["precision"] is None
-        assert m["recall"] is None
+        assert m["recall"] == 0.0
+        assert m["f1"] == 0.0
         assert m["faithfulness"] is None
+        # relevant chunk existed and it refused: the worst case, on record
+        assert m["answers_with_relevant_context"] == 0.0
+        assert m["abstains_without_relevant_context"] is None
+
+    def test_false_abstention_surfaces_through_recall(self):
+        """Zero extracted claims but the text entails a GT claim: the extractor
+        under-extracted. Recall says so instead of hiding it."""
+        entry = _metrics_entry([], [E], [], [[E, N]], 2, is_abstention=True)
+        m = compute_item_metrics(entry)
+        assert m["recall"] == 1.0
+        assert m["f1"] is None  # precision undefined, recall > 0
+
+    def test_refusal_calibration_without_relevant_context(self):
+        answered = _metrics_entry([E], [N], [[N, N]], [[N, N]], 2)
+        refused = _metrics_entry([], [N], [], [[N, N]], 2, is_abstention=True)
+        assert compute_item_metrics(answered)["abstains_without_relevant_context"] == 0.0
+        assert compute_item_metrics(refused)["abstains_without_relevant_context"] == 1.0
+        assert compute_item_metrics(answered)["answers_with_relevant_context"] is None
 
 
 class TestOverallMetrics:
@@ -400,20 +432,39 @@ class TestOverallMetrics:
             (0.2273 + 0.0) / 2, abs=1e-3)
 
     def test_abstention_rates(self):
-        """No-results leave the denominator: the errored item is excluded,
-        so rates are over the 2 items the model actually got to answer
-        (the tooling failure is charged once, in extraction_error_rate)."""
+        """The errored item leaves every denominator (charged once, in
+        extraction_error_rate). GT is present on both live items, so the
+        abstention is unjustified — its cause: no chunk entailed a GT
+        claim. No unanswerable items → the NoAns rates are n/a, never 0."""
         overall = compute_overall_metrics(self._results())
         assert overall["abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
-        assert overall["justified_abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
-        assert overall["unjustified_abstention_rate"] == 0.0
+        assert overall["unjustified_abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
+        assert overall["justified_abstention_rate"] is None
+        assert overall["unwarranted_answer_rate"] is None
+        assert overall["abstention_counts"]["all_chunks_irrelevant"] == 1
 
-    def test_unjustified_abstention_detected(self):
-        abstained = _metrics_entry([], [E], [], [[E]], 1, is_abstention=True)
+    def test_unjustified_abstention_with_evidence_detected(self):
+        abstained = _metrics_entry([], [N], [], [[E]], 1, is_abstention=True)
         abstained["metrics"] = compute_item_metrics(abstained)
         overall = compute_overall_metrics([abstained])
         assert overall["unjustified_abstention_rate"] == 1.0
-        assert overall["justified_abstention_rate"] == 0.0
+        assert overall["abstention_counts"]["relevant_chunk_present"] == 1
+        assert overall["justified_abstention_rate"] is None
+
+    def test_no_answer_items_split_justified_and_unwarranted(self):
+        """The blank-GT convention: GT "" marks the unanswerable items;
+        silence there is justified, an answer there is unwarranted."""
+        silent = _metrics_entry([], [], [], [], 1, is_abstention=True,
+                                gt_no_answer=True)
+        spoke = _metrics_entry([N, N], [], [[N], [N]], [], 1, gt_no_answer=True)
+        for e in (silent, spoke):
+            e["metrics"] = compute_item_metrics(e)
+        overall = compute_overall_metrics([silent, spoke])
+        assert overall["justified_abstention_rate"] == 0.5
+        assert overall["unwarranted_answer_rate"] == 0.5
+        assert overall["unjustified_abstention_rate"] is None  # no answerable items
+        assert spoke["metrics"]["precision"] == 0.0            # unwarranted: precision 0
+        assert spoke["metrics"]["recall"] is None              # nothing to deliver
 
     def test_error_rate_and_counts(self):
         overall = compute_overall_metrics(self._results())
@@ -426,3 +477,212 @@ class TestOverallMetrics:
         overall = compute_overall_metrics([entry])
         # 6 cells total (2 + 1 + 2 + 1), 2 of them None
         assert overall["checker_failure_rate"] == pytest.approx(2 / 6, abs=1e-3)
+
+
+# ── Refusal calibration: the right action given the retrieval situation ─────
+
+class TestRefusalCalibration:
+    """Two per-item binaries, 1 = the generator did the right thing in its
+    situation. claim_recall > 0 → answering is right; claim_recall == 0 →
+    abstaining is right; claim_recall None → situation unknown → both None."""
+
+    def test_all_four_cells(self):
+        relevant_answered = _metrics_entry([E], [E], [[E, N]], [[E, N]], 2)
+        relevant_refused = _metrics_entry([], [N], [], [[E, N]], 2, is_abstention=True)
+        irrelevant_answered = _metrics_entry([E], [N], [[N, N]], [[N, N]], 2)
+        irrelevant_refused = _metrics_entry([], [N], [], [[N, N]], 2, is_abstention=True)
+
+        m = compute_item_metrics(relevant_answered)
+        assert (m["answers_with_relevant_context"], m["abstains_without_relevant_context"]) == (1.0, None)
+        m = compute_item_metrics(relevant_refused)
+        assert (m["answers_with_relevant_context"], m["abstains_without_relevant_context"]) == (0.0, None)
+        m = compute_item_metrics(irrelevant_answered)
+        assert (m["answers_with_relevant_context"], m["abstains_without_relevant_context"]) == (None, 0.0)
+        m = compute_item_metrics(irrelevant_refused)
+        assert (m["answers_with_relevant_context"], m["abstains_without_relevant_context"]) == (None, 1.0)
+
+    def test_unknown_situation_leaves_both_none(self):
+        # GT extracted to zero claims: no retrieved2answer rows at all
+        no_gt_claims = _metrics_entry([E], [], [[N]], [], 1, is_abstention=True)
+        # GT claims exist but every retrieval cell is unjudged
+        unjudged = _metrics_entry([], [N], [], [[None, None]], 2, is_abstention=True)
+        for entry in (no_gt_claims, unjudged):
+            m = compute_item_metrics(entry)
+            assert m["claim_recall"] is None
+            assert m["answers_with_relevant_context"] is None
+            assert m["abstains_without_relevant_context"] is None
+
+    def test_blank_gt_items_never_enter_the_rows(self):
+        """Judge A gates judge B: an unanswerable item has no GT claims, so
+        the retrieval situation is undefined and neither row counts it —
+        whether it stayed silent (justified) or spoke (unwarranted)."""
+        silent = _metrics_entry([], [], [], [], 1, is_abstention=True, gt_no_answer=True)
+        spoke = _metrics_entry([N], [], [[N]], [], 1, gt_no_answer=True)
+        for entry in (silent, spoke):
+            m = compute_item_metrics(entry)
+            assert m["answers_with_relevant_context"] is None
+            assert m["abstains_without_relevant_context"] is None
+
+    def test_extraction_error_nulls_both(self):
+        entry = _metrics_entry([E], [E], [[E]], [[E]], 1, errors={"gt_answer": "timeout"})
+        m = compute_item_metrics(entry)
+        assert m["answers_with_relevant_context"] is None
+        assert m["abstains_without_relevant_context"] is None
+
+    def test_macro_rows_reconcile_with_the_tree(self):
+        """The Generator row and the ⚪ tree read the same items: the refused
+        share of the 'answers when context is relevant' support equals the
+        tree's 'refused with relevant chunks' count, and likewise for the
+        irrelevant side."""
+        entries = [
+            _metrics_entry([E], [E], [[E, N]], [[E, N]], 2),                       # relevant, answered
+            _metrics_entry([E], [E], [[E, N]], [[N, E]], 2),                       # relevant, answered
+            _metrics_entry([], [N], [], [[E, N]], 2, is_abstention=True),          # relevant, refused
+            _metrics_entry([E], [N], [[N, N]], [[N, N]], 2),                       # irrelevant, answered
+            _metrics_entry([], [N], [], [[N, N]], 2, is_abstention=True),          # irrelevant, refused
+            _metrics_entry([], [N], [], [[None, None]], 2, is_abstention=True),    # unknown, refused
+        ]
+        for e in entries:
+            e["metrics"] = compute_item_metrics(e)
+        overall = compute_overall_metrics(entries)
+        counts = overall["abstention_counts"]
+
+        assert overall["support"]["answers_with_relevant_context"] == 3
+        assert overall["answers_with_relevant_context"] == pytest.approx(2 / 3, abs=1e-3)
+        refused_with_evidence = round((1 - overall["answers_with_relevant_context"]) * 3)
+        assert refused_with_evidence == counts["relevant_chunk_present"] == 1
+
+        assert overall["support"]["abstains_without_relevant_context"] == 2
+        assert overall["abstains_without_relevant_context"] == 0.5
+        assert counts["all_chunks_irrelevant"] == 1
+        assert counts["relevance_unknown"] == 1
+        assert counts["unjustified"] == 3
+
+    def test_context_utilization_is_zero_for_a_refusal_not_null(self):
+        """A refusal delivers none of the GT claims the chunks carried, so
+        utilization is a real 0 (the row prints without an item bracket);
+        noise sensitivity needs response claims and stays null."""
+        refused = _metrics_entry([], [N, N], [], [[E, N], [N, N]], 2, is_abstention=True)
+        m = compute_item_metrics(refused)
+        assert m["context_utilization"] == 0.0
+        assert m["noise_sensitivity_in_relevant"] is None
+
+
+# ── Known-before-request verdicts ────────────────────────────────────────────
+
+class TestPrefillKnownVerdicts:
+
+    def _items(self, pipeline):
+        blank_gt = _full_item(gt_answer="", **{
+            RESPONSE_KG: [{"subject": "a", "predicate": "b", "object": "c"}],
+            GT_KG: [],
+        })
+        empty_response = _full_item(response="", **{
+            RESPONSE_KG: [],
+            GT_KG: [{"subject": "x", "predicate": "y", "object": "z"}],
+        })
+        ordinary = _checked_item()
+        pipeline._validate([blank_gt, empty_response, ordinary])
+        pipeline._prefill_known_verdicts([blank_gt, empty_response, ordinary])
+        return blank_gt, empty_response, ordinary
+
+    def test_blank_gt_prefills_answer2response_neutral(self, pipeline):
+        blank_gt, _, _ = self._items(pipeline)
+        triplet = blank_gt[RESPONSE_KG][0]
+        assert triplet[f"{CHK}_answer2response_verdict"] == "Neutral"
+        assert "not sent to the checker" in triplet[f"{CHK}_answer2response_explanation"]
+        # precision 0, never null: the unwarranted answer is charged
+        entry = pipeline.build_report([blank_gt])["results"][0]
+        assert entry["metrics"]["precision"] == 0.0
+
+    def test_empty_response_prefills_response2answer_neutral(self, pipeline):
+        _, empty_response, _ = self._items(pipeline)
+        triplet = empty_response[GT_KG][0]
+        assert triplet[f"{CHK}_response2answer_verdict"] == "Neutral"
+        # recall 0 (non-delivery), not null (unjudged): docs/abstention.md §4
+        entry = pipeline.build_report([empty_response])["results"][0]
+        assert entry["metrics"]["recall"] == 0.0
+        assert entry["metrics"]["f1"] == 0.0
+
+    def test_ordinary_items_untouched(self, pipeline):
+        _, _, ordinary = self._items(pipeline)
+        assert ordinary[RESPONSE_KG][0][f"{CHK}_answer2response_verdict"] == "Entailment"
+        assert ordinary[GT_KG][0][f"{CHK}_response2answer_verdict"] == "Entailment"
+
+    def test_refusal_text_is_not_prefilled(self, pipeline):
+        """A refusal *sentence* still goes to the checker: the extractor's
+        abstention call may be wrong and the text may entail a GT claim."""
+        refusal = _full_item(response="I do not know.", **{
+            RESPONSE_KG: [], "is_abstention": True,
+            GT_KG: [{"subject": "x", "predicate": "y", "object": "z"}],
+        })
+        pipeline._validate([refusal])
+        pipeline._prefill_known_verdicts([refusal])
+        assert f"{CHK}_response2answer_verdict" not in refusal[GT_KG][0]
+
+
+# ── Console output: ⚪ tree and 📊 rows ───────────────────────────────────────
+
+class TestConsoleBlocks:
+
+    def _report(self, pipeline):
+        entries = [
+            _metrics_entry([E], [E], [[E, N]], [[E, N]], 2),                      # answered
+            _metrics_entry([], [N], [], [[E, N]], 2, is_abstention=True),         # refused, relevant chunks present
+            _metrics_entry([], [N], [], [[N, N]], 2, is_abstention=True),         # refused, no relevant chunks
+            _metrics_entry([], [N], [], [[None, None]], 2, is_abstention=True),   # refused, relevant chunks unknown
+            _metrics_entry([], [], [], [], 1, is_abstention=True, gt_no_answer=True),  # justified
+            _metrics_entry([N], [], [[N]], [], 1, gt_no_answer=True),             # unwarranted
+        ]
+        for e in entries:
+            e["metrics"] = compute_item_metrics(e)
+        pipeline.last_report = {
+            "_meta": {"evaluated_items": len(entries)},
+            "overall_metrics": compute_overall_metrics(entries),
+            "results": entries,
+        }
+
+    def test_abstention_tree(self, pipeline, caplog):
+        import logging
+        self._report(pipeline)
+        with caplog.at_level(logging.INFO):
+            pipeline._log_abstention()
+        text = caplog.text
+        assert "⚪ Abstention Behavior — 6 evaluated items" in text
+        assert "1 answered" in text and "(GT present — scored)" in text
+        assert "1 justified abstention " in text and "correct silence" in text
+        assert "3 unjustified abstentions" in text and "charged in recall" in text
+        assert "1 refused with relevant chunks" in text and "generator fault" in text
+        assert "1 refused without relevant chunks" in text and "retriever fault" in text
+        assert "1 refused, relevant chunks unknown" in text
+        assert "1 unwarranted answer " in text and "charged in precision" in text
+        assert ("→ justified 0.500 (1 / 2 unanswerable) · unjustified 0.750 (3 / 4 answerable)"
+                " · unwarranted 0.500 (1 / 2 unanswerable)") in text
+        assert "MECE violation" not in text
+
+    def test_generator_rows(self, pipeline, caplog):
+        import logging
+        self._report(pipeline)
+        with caplog.at_level(logging.INFO):
+            pipeline._log_metrics()
+        text = caplog.text
+        # 2 items had a relevant chunk (1 answered, 1 refused); 1 had none
+        # and refused; the unknown and blank-GT items enter neither row.
+        assert "answers when context is relevant:     0.500  (2 of 6 items)" in text
+        assert "abstains when context is irrelevant:  1.000  (1 of 6 items)" in text
+        assert "answers without" not in text and "abstains despite" not in text
+
+    def test_variance_roster_matches_printed_rates(self):
+        """Rule set 4.1: only footer rates of the ⚪ tree enter Behavior;
+        the Generator rows carry the two calibration keys."""
+        sections = RagCheckerPipeline._VARIANCE_SECTIONS
+        assert "abstention_rate" not in sections["behavior"]
+        assert sections["behavior"] == ["justified_abstention_rate",
+                                        "unjustified_abstention_rate",
+                                        "unwarranted_answer_rate"]
+        generator = dict(sections["metrics"])["Generator"]
+        assert "answers_with_relevant_context" in generator
+        assert "abstains_without_relevant_context" in generator
+        labels = RagCheckerPipeline._VARIANCE_LABELS
+        assert labels["answers_with_relevant_context"] == "answers when context is relevant"
+        assert labels["abstains_without_relevant_context"] == "abstains when context is irrelevant"

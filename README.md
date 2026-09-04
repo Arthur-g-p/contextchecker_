@@ -38,8 +38,11 @@ disagree with.
   never silently zeroed. A claim the checker failed to judge leaves both
   sides of the ratio rather than counting against the system under test,
   and a metric with an empty denominator is `null`, never `0.0`.
-  Abstentions ("I don't know") are detected and excluded from
-  hallucination counts instead of being punished.
+  Abstentions ("I don't know") are first-class labeled outcomes: judged
+  justified or unjustified, their cause apportioned between retriever
+  and generator, and unanswerable questions (`"gt_answer": ""`) expose
+  unwarranted answers — while the metrics stay standard (a refusal is
+  non-delivery; see docs/abstention.md).
 - **Any OpenAI-compatible endpoint**: point the extractor and checker at
   different models, providers, or local servers independently.
 

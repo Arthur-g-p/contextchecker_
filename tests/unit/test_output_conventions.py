@@ -278,7 +278,7 @@ class TestExtractorEvalSurfacedRates:
         gt_item = {"gt": [{"s": 1}], "pred": [{"s": 1}]}
         buckets = _ItemBucket(
             to_compare=[gt_item, dict(gt_item)],
-            wrongful_answer=[{"pred": [{"s": 1}, {"s": 2}]}],
+            unwarranted_answer=[{"pred": [{"s": 1}, {"s": 2}]}],
             unjustified_abstention=[],
             justified_abstention=[{}],
             extraction_error=[{"err": "parse_failure"}],
@@ -288,12 +288,13 @@ class TestExtractorEvalSurfacedRates:
         return ExtractorEvaluator._build_result(
             dummy, [], buckets, 5, atomicity, duplicates)
 
-    def test_behavior_rates_over_behavioral_universe(self):
-        # behavioral = 2 compared + 1 justified + 0 unjustified + 1 wrongful
+    def test_behavior_rates_condition_on_the_annotation_split(self):
+        # unanswerable = 1 justified + 1 unwarranted; answerable = 2 answered
+        # + 0 unjustified (SQuAD 2.0's NoAns / HasAns split)
         r = self._result()
-        assert r.justified_abstention_rate == 0.25
+        assert r.justified_abstention_rate == 0.5
         assert r.unjustified_abstention_rate == 0.0
-        assert r.wrongful_answer_rate == 0.25
+        assert r.unwarranted_answer_rate == 0.5
 
     def test_extraction_error_rate_over_attempted(self):
         # attempted = behavioral(4) + errored(1); errored charged here only
@@ -334,19 +335,24 @@ class TestAbstentionBreakdown:
     def test_split_predicate_and_uncategorized(self):
         from contextchecker.pipelines.ragchecker import _abstention_breakdown
         entries = [
-            {"metrics": {"claim_recall": 0.8}},                       # answered
-            {"is_abstention": True, "metrics": {"claim_recall": 0.0}},   # justified
-            {"is_abstention": True, "metrics": {"claim_recall": 0.5}},   # unjustified
-            {"is_abstention": True, "metrics": {}},                      # uncategorized
-            {"extraction_errors": {"response": "x"}, "metrics": {}},     # errored
+            {"metrics": {"claim_recall": 0.8}},                        # answered
+            {"is_abstention": True, "metrics": {"claim_recall": 0.0}},    # unjustified — all chunks irrelevant
+            {"is_abstention": True, "metrics": {"claim_recall": 0.5}},    # unjustified — relevant chunk present
+            {"is_abstention": True, "metrics": {}},                       # unjustified — relevance unknown
+            {"gt_no_answer": True, "is_abstention": True, "metrics": {}}, # justified
+            {"gt_no_answer": True, "metrics": {}},                        # unwarranted
+            {"extraction_errors": {"response": "x"}, "metrics": {}},      # errored
         ]
         c = _abstention_breakdown(entries)
-        assert c["justified"] == 1
-        assert c["unjustified"] == 1
-        assert c["uncategorized"] == 1
-        assert c["abstained"] == 3
-        assert c["answered"] == 1
-        assert c["errored"] == 1
+        # Judge A decides the verdict, Judge B only apportions the cause.
+        assert c["answerable"] == 4 and c["unanswerable"] == 2
+        assert c["answered_answerable"] == 1
+        assert c["justified"] == 1 and c["unwarranted"] == 1
+        assert c["unjustified"] == 3
+        assert c["all_chunks_irrelevant"] == 1
+        assert c["relevant_chunk_present"] == 1
+        assert c["relevance_unknown"] == 1
+        assert c["abstained"] == 4 and c["errored"] == 1
 
 
 # ── Verdict cell counts (no-results leave the denominator) ───────────────────

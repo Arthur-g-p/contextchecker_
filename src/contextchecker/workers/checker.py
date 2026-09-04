@@ -572,7 +572,3 @@ class Checker:
                     results[idx][cid] = ClaimVerdict(verdict=None, error="parse_failure")
 
         return results
-
-
-    # TODO: retry pass for parse errors
-    # TODO: wire to stats tracking
