@@ -120,7 +120,11 @@ works.
 
 **The first request walks the matrix alone**, serialized behind a lock while
 every other request waits. On the first success the level is locked and stored
-in a process-wide cache keyed by `(base_url, model)`, so every later request —
+in a process-wide cache keyed by `(base_url, model)`, and recorded per model as
+`request_strategies` in the `_meta` of every envelope report (refcheck, ragcheck,
+faithcheck, both evals — not extract/check/atomize), next to `usage`, the run's
+request and token counts. `requests` there counts every HTTP call, tokens only
+exist for calls that answered — a timeout is a request with no tokens. Every later request —
 and every other worker pointed at the same endpoint — starts there with zero
 overhead. Typical cost: two or three extra round trips, once.
 

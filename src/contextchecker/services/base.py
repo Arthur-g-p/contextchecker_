@@ -24,6 +24,7 @@ from contextchecker.stats import (
     VarianceTracker,
     log_multi_run_hint,
     log_run_line,
+    sum_usage,
 )
 
 logger = settings.get_logger(__name__)
@@ -204,6 +205,7 @@ class BaseService(ABC):
                       if k not in ("run", "duration_seconds")}
         outer_meta["runs"] = self._runs
         outer_meta["duration_seconds"] = total_seconds
+        outer_meta["usage"] = sum_usage([r["_meta"].get("usage") for r in reports])
         self.last_report = {
             "_meta": outer_meta,
             "overall_metrics": means,

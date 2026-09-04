@@ -24,6 +24,8 @@ from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
 from contextchecker.stats import (
     GLOBAL_STATS,
+    sum_usage,
+    usage_since,
     VarianceTracker,
     log_mece_tree,
     log_multi_run_hint,
@@ -251,6 +253,7 @@ class ExtractorEvaluator:
                     if k not in ("run", "duration_seconds")}
             meta["runs"] = self._runs
             meta["duration_seconds"] = total
+            meta["usage"] = sum_usage([d["_meta"].get("usage") for d in summaries])
             return meta
 
         summary_doc = {"_meta": _outer_meta(summaries[0]),
@@ -275,6 +278,7 @@ class ExtractorEvaluator:
         """
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
+        self._usage_at_start = GLOBAL_STATS.snapshot()
 
         # Step 0: Canonicalize key aliases
         BaseService._canonicalize_keys(data)
@@ -367,6 +371,7 @@ class ExtractorEvaluator:
             pred_key=self._pred_key,
             matching="llm-2-pass",
             request_strategies=GLOBAL_STATS.strategies(),
+            usage=usage_since(getattr(self, "_usage_at_start", None)),
         )
 
         summary_doc = {"_meta": meta, **asdict(result)}

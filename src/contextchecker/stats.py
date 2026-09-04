@@ -176,7 +176,7 @@ class TokenStats:
                 "total_errors": self.total_errors,
             }
             if self._phases:
-                result["phases"] = dict(self._phases)
+                result["phases"] = {k: dict(v) for k, v in self._phases.items()}
             return result
         except Exception:
             return {"input_tokens": None, "output_tokens": None,
@@ -193,6 +193,58 @@ class TokenStats:
 
 # Global instance — written to by LLMClient, read by services.
 GLOBAL_STATS = TokenStats()
+
+
+_USAGE_KEYS = ("requests", "input_tokens", "output_tokens", "reasoning_tokens")
+
+
+def usage_since(before: dict | None) -> dict:
+    """What one report cost: GLOBAL_STATS now minus a snapshot taken at its start.
+
+    The global counters run for the whole process, so under --runs a raw
+    read would charge run 3 for runs 1 and 2 as well. `requests` counts every
+    HTTP call; tokens exist only for calls that returned usage, so a timeout
+    or a rejected request adds a request and no tokens.
+    """
+    now = GLOBAL_STATS.snapshot()
+    if before is None:                      # report built without a run
+        before = now
+
+    def _delta(a: dict, b: dict, requests_key: str) -> dict:
+        return {
+            "requests": a.get(requests_key, 0) - b.get(requests_key, 0),
+            "input_tokens": a.get("input_tokens", 0) - b.get("input_tokens", 0),
+            "output_tokens": a.get("output_tokens", 0) - b.get("output_tokens", 0),
+            "reasoning_tokens": a.get("reasoning_tokens", 0) - b.get("reasoning_tokens", 0),
+        }
+
+    usage = _delta(now, before, "total_requests")
+    phases = {}
+    for name, after in now.get("phases", {}).items():
+        d = _delta(after, before.get("phases", {}).get(name, {}), "requests")
+        if d["requests"] > 0:
+            phases[name] = d
+    if phases:
+        usage["phases"] = phases
+    return usage
+
+
+def sum_usage(usages: list[dict | None]) -> dict:
+    """Add per-run usage blocks into one — for the outer _meta of a --runs report."""
+    total = {k: 0 for k in _USAGE_KEYS}
+    phases: dict[str, dict] = {}
+    for u in usages:
+        if not u:
+            continue
+        for k in _USAGE_KEYS:
+            total[k] += u.get(k, 0)
+        for name, p in u.get("phases", {}).items():
+            acc = phases.setdefault(name, {k: 0 for k in _USAGE_KEYS})
+            for k in _USAGE_KEYS:
+                acc[k] += p.get(k, 0)
+    if phases:
+        total["phases"] = phases
+    return total
 
 
 # ───────────────────────────────────────────────────────────────

@@ -27,6 +27,8 @@ from contextchecker.eval.metrics import (
 from contextchecker.models import CheckerEvalResult
 from contextchecker.stats import (
     GLOBAL_STATS,
+    sum_usage,
+    usage_since,
     VarianceTracker,
     log_mece_tree,
     log_multi_run_hint,
@@ -164,6 +166,7 @@ class CheckerEvaluator:
                     if k not in ("run", "duration_seconds")}
             meta["runs"] = self._runs
             meta["duration_seconds"] = total_seconds
+            meta["usage"] = sum_usage([d["_meta"].get("usage") for d in summaries])
             return meta
 
         summary_doc = {"_meta": _outer_meta(summaries[0]),
@@ -190,6 +193,7 @@ class CheckerEvaluator:
         """
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
+        self._usage_at_start = GLOBAL_STATS.snapshot()
 
         # Step 0: Canonicalize key aliases (context→reference, query→question)
         BaseService._canonicalize_keys(data)
@@ -265,6 +269,7 @@ class CheckerEvaluator:
             evaluated_items=result.total_items,
             dropped_items=sum(result.skipped.values()),
             request_strategies=GLOBAL_STATS.strategies(),
+            usage=usage_since(getattr(self, "_usage_at_start", None)),
         )
         summary_doc = {"_meta": meta, **asdict(result)}
         disagreements_doc = {

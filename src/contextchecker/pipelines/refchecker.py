@@ -21,7 +21,7 @@ from contextchecker.pipelines.directions import unwrap_items
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
-from contextchecker.stats import GLOBAL_STATS
+from contextchecker.stats import GLOBAL_STATS, usage_since
 from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
@@ -86,6 +86,7 @@ class RefCheckerPipeline(BaseService):
         """
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
+        self._usage_at_start = GLOBAL_STATS.snapshot()
         data = unwrap_items(data)                     # Step 0: accept a
         self._canonicalize_keys(data)                 # {"results": [...]} envelope
         valid = self._validate(data)                  # 1
@@ -159,6 +160,7 @@ class RefCheckerPipeline(BaseService):
                 evaluated_items=len(data) - dropped,
                 dropped_items=dropped,
                 request_strategies=GLOBAL_STATS.strategies(),
+                usage=usage_since(getattr(self, "_usage_at_start", None)),
             ),
             "results": data,
         }

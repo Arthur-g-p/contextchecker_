@@ -37,7 +37,7 @@ from contextchecker.pipelines.directions import (
     run_direction,
     unwrap_items,
 )
-from contextchecker.stats import GLOBAL_STATS, log_mece_tree, log_rate_rows, log_token_stats
+from contextchecker.stats import GLOBAL_STATS, log_mece_tree, log_rate_rows, log_token_stats, usage_since
 from contextchecker.utils import build_meta
 
 logger = settings.get_logger(__name__)
@@ -495,6 +495,7 @@ class RagCheckerPipeline(BaseService):
         """
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
+        self._usage_at_start = GLOBAL_STATS.snapshot()
         data = unwrap_items(data)                     # Step 0: accept the
         self._canonicalize_keys(data)                 # {"results": [...]}
         valid = self._validate(data)                  # envelope; query→question
@@ -621,6 +622,7 @@ class RagCheckerPipeline(BaseService):
                 evaluated_items=len(results),
                 dropped_items=dropped,
                 request_strategies=GLOBAL_STATS.strategies(),
+                usage=usage_since(getattr(self, "_usage_at_start", None)),
             ),
             "overall_metrics": compute_overall_metrics(results),
             "results": results,
