@@ -656,8 +656,9 @@ class TestConsoleBlocks:
         assert "1 refused without relevant chunks" in text and "retriever fault" in text
         assert "1 refused, relevant chunks unknown" in text
         assert "1 unwarranted answer " in text and "charged in precision" in text
-        assert ("→ justified 0.500 (1 / 2 unanswerable) · unjustified 0.750 (3 / 4 answerable)"
-                " · unwarranted 0.500 (1 / 2 unanswerable)") in text
+        assert ("→ justified abstention rate 0.500 (1 / 2 unanswerable)"
+                " · unjustified abstention rate 0.750 (3 / 4 answerable)"
+                " · unwarranted answer rate 0.500 (1 / 2 unanswerable)") in text
         assert "MECE violation" not in text
 
     def test_generator_rows(self, pipeline, caplog):
@@ -668,8 +669,8 @@ class TestConsoleBlocks:
         text = caplog.text
         # 2 items had a relevant chunk (1 answered, 1 refused); 1 had none
         # and refused; the unknown and blank-GT items enter neither row.
-        assert "answers when context is relevant:     0.500  (2 of 6 items)" in text
-        assert "abstains when context is irrelevant:  1.000  (1 of 6 items)" in text
+        assert "answers when context is relevant:     0.500  (2 of 6 items · higher is better)" in text
+        assert "abstains when context is irrelevant:  1.000  (1 of 6 items · depends on goals)" in text
         assert "answers without" not in text and "abstains despite" not in text
 
     def test_variance_roster_matches_printed_rates(self):

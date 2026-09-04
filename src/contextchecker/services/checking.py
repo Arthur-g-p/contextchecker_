@@ -23,12 +23,12 @@ from contextchecker import settings
 from contextchecker.settings import DEFAULT_MAX_WORDS
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.models import CheckingPayload
-from contextchecker.utils import canonicalize_triplets
+from contextchecker.utils import canonicalize_triplets, plural
 from contextchecker.services.base import BaseService
 from contextchecker.workers.checker import (
     Checker, ClaimVerdict, _reference_word_count,
 )
-from contextchecker.stats import GLOBAL_STATS, log_api_parsing, log_token_stats
+from contextchecker.stats import GLOBAL_STATS, log_api_parsing, log_mece_tree, log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -36,6 +36,17 @@ logger = settings.get_logger(__name__)
 # max_words, we reduce the chunk size. Word count is a proxy for
 # tokens since not all endpoints support tokenization.
 CONTEXT_BUDGET_RATIO = 0.75
+
+
+def mode_label(joint: bool, joint_num: int, max_words: int | None) -> str:
+    """The Config "Mode:" string, resolved the way the service resolves it
+    (joint mode falls back to DEFAULT_MAX_WORDS)."""
+    if joint:
+        words = max_words if max_words is not None else settings.DEFAULT_MAX_WORDS
+        return f"joint (max {joint_num} claims/call, {words} max words)"
+    if max_words:
+        return f"single (1 claim/call, {max_words} max words)"
+    return "single (1 claim/call)"
 
 
 # ── Context budget helpers ───────────────────────────────────────────────────
@@ -191,6 +202,12 @@ class CheckingService(BaseService):
         return self._extraction_error_key
 
     @property
+    def mode_label(self) -> str:
+        """Human-readable execution mode for Config blocks (service, evals,
+        pipelines print the same string)."""
+        return mode_label(self.joint, self.joint_num, self.max_words)
+
+    @property
     def last_stats(self):
         """Read-only view of the worker's last PhaseStats — lets composing
         pipelines report per-phase requests/failures without reaching into
@@ -244,12 +261,14 @@ class CheckingService(BaseService):
         entailment = 0
         contradiction = 0
         neutral = 0
-        items_with_output = len(verdicts_map)
+        unjudged = 0
 
         for item_idx, claim_verdicts in verdicts_map.items():
             for claim_idx, cv in claim_verdicts.items():
                 verdict_val = cv.verdict.value if cv.verdict else None
-                if verdict_val is not None:
+                if verdict_val is None:
+                    unjudged += 1
+                else:
                     total_triplets += 1
                     if verdict_val == "Entailment":
                         entailment += 1
@@ -265,8 +284,8 @@ class CheckingService(BaseService):
         )
 
         self._log_results(
-            items_with_output=items_with_output,
-            total=len(data),
+            unjudged=unjudged,
+            total=len(pending),
             total_triplets=total_triplets,
             entailment=entailment,
             contradiction=contradiction,
@@ -550,10 +569,10 @@ class CheckingService(BaseService):
             return
         invalid = total - valid
         logger.info(" 📂 Validation")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         if invalid > 0:
-            logger.info("    ├─ dropped:  %d  (missing '%s' or 'reference')", invalid, self._kg_key)
-        logger.info("    └─ valid:    %d items", valid)
+            logger.info("     ├─ dropped:  %d  (missing '%s' or 'reference')", invalid, self._kg_key)
+        logger.info("     └─ valid:    %d items", valid)
         logger.info("")
 
     def _log_skip(self, valid: int, skip_stats: dict, pending: int) -> None:
@@ -569,14 +588,14 @@ class CheckingService(BaseService):
             return
 
         logger.info(" 🔄 Skip")
-        logger.info("    Total:            %d valid items", valid)
+        logger.info("    %-24s%d valid items", "Total:", valid)
         if already > 0:
-            logger.info("    ├─ already checked: %d  (verdict exists for this model)", already)
+            logger.info("     ├─ %-20s%d  (verdict exists for this model)", "already checked:", already)
         if abstained > 0:
-            logger.info("    ├─ abstained:       %d  (empty claims, no error)", abstained)
+            logger.info("     ├─ %-20s%d  (empty claims, no error)", "abstained:", abstained)
         if failed > 0:
-            logger.info("    ├─ extraction failed: %d  ('%s' present)", failed, self._extraction_error_key)
-        logger.info("    └─ pending:        %d items", pending)
+            logger.info("     ├─ %-20s%d  ('%s' present)", "extraction failed:", failed, self._extraction_error_key)
+        logger.info("     └─ %-20s%d items", "pending:", pending)
         logger.info("")
 
     def _log_config(self) -> None:
@@ -589,19 +608,13 @@ class CheckingService(BaseService):
         logger.info(" ⚙️  Config")
         logger.info("    Model:       %s", location)
         logger.info("    Extractor:   %s (reading '%s')", self._extractor_model, self._kg_key)
-        if self.joint:
-            logger.info("    Mode:        joint (max %d claims/call, %d max words)", self.joint_num, self.max_words)
-        else:
-            if self.max_words:
-                logger.info("    Mode:        single (1 claim/call, %d max words)", self.max_words)
-            else:
-                logger.info("    Mode:        single (1 claim/call)")
+        logger.info("    Mode:        %s", self.mode_label)
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
     def _log_results(
         self,
-        items_with_output: int,
+        unjudged: int,
         total: int,
         total_triplets: int,
         entailment: int,
@@ -624,23 +637,25 @@ class CheckingService(BaseService):
         if phase_stats:
             log_api_parsing(phase_stats.first_pass_count, phase_stats)
 
-        self._log_bl_results(items_with_output, total_triplets, entailment, contradiction, neutral)
+        self._log_bl_results(total_triplets, unjudged, entailment, contradiction, neutral)
         self._log_done(total, total_triplets, skipped)
         if self.verbosity == "full":
             log_token_stats()
 
     def _log_bl_results(
-        self, items_with_output: int, total_triplets: int, entailment: int, contradiction: int, neutral: int
+        self, judged: int, unjudged: int, entailment: int, contradiction: int, neutral: int
     ) -> None:
-        """Print 🔎 Checking summary.
-
-        Shows items with output: total triplets evaluated, breakdown of verdicts.
-        """
-        logger.info(" 🔎 Checking:")
-        logger.info("    %d claims evaluated (%d items)", total_triplets, items_with_output)
-        logger.info("     ├─ 🟢 %d Entailment", entailment)
-        logger.info("     ├─ 🔴 %d Contradiction", contradiction)
-        logger.info("     └─ ⚪ %d Neutral", neutral)
+        """Print the 🔎 Checking tree: every issued claim lands in exactly
+        one branch, null verdicts included."""
+        log_mece_tree(
+            "🔎 Checking", judged + unjudged, "claims",
+            [
+                ("🟢", entailment, "Entailment", None),
+                ("🔴", contradiction, "Contradiction", None),
+                ("⚪", neutral, "Neutral", None),
+                ("💥", unjudged, "unjudged", "no verdict — see 🌐 API & Parsing"),
+            ],
+        )
         logger.info("")
 
     def _log_done(
@@ -649,9 +664,8 @@ class CheckingService(BaseService):
         """Print ✅ Done summary line (full only)."""
         if self.verbosity != "full":
             return
-        parts = [f"{total_triplets} triplets checked"]
+        parts = [f"{total} {plural(total, 'item')}",
+                 f"{total_triplets} {plural(total_triplets, 'claim')}"]
         if skipped > 0:
-            parts.append(f"{skipped} skipped")
-        logger.info(
-            " ✅ Done: %d items checked → %s", total, ", ".join(parts)
-        )
+            parts.append(f"{skipped} {plural(skipped, 'item')} skipped")
+        logger.info(" ✅ Done: %s", " · ".join(parts))

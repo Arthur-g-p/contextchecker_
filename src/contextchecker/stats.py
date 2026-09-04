@@ -260,7 +260,7 @@ def log_api_parsing(
     Shows first-pass results, permanent failures, retryable failures
     with per-round breakdown.
     """
-    logger.info(" 🌐 API & Parsing:")
+    logger.info(" 🌐 API & Parsing")
     logger.info("    %d tasks sent to LLM [%d HTTP requests]", pending, stats.http_requests)
 
     # ── Success on first attempt
@@ -335,13 +335,20 @@ def log_run_line(
     that exist in *metrics* as numbers are shown, so each command passes its
     own headline keys and missing/null metrics drop out silently.
     """
-    parts = [
+    logger.info(" ✅ Run %d/%d done in %.1fs · %s",
+                run, runs, duration_seconds,
+                format_headline(metrics, keys) or "done")
+
+
+def format_headline(metrics: dict, keys: tuple[str, ...]) -> str:
+    """``precision 0.657 · recall 0.250 · f1 0.163`` — the headline metrics
+    of one run, presence-filtered: keys missing or null drop out. Shared by
+    the run line and the single-run Done line, so both speak one grammar."""
+    return " · ".join(
         f"{key} {metrics[key]:.3f}"
         for key in keys
         if isinstance(metrics.get(key), (int, float))
-    ]
-    logger.info(" ✅ Run %d/%d done in %.1fs · %s",
-                run, runs, duration_seconds, " · ".join(parts) or "done")
+    )
 
 
 def log_mece_tree(
@@ -385,7 +392,7 @@ def log_mece_tree(
         prefix = "└─" if last else "├─"
         line = f"     {prefix} {icon} {texts[i]:<{width}}"
         if note:
-            line = f"{line}  ({note})"
+            line = f"{line}  {note}" if note.startswith("[") else f"{line}  ({note})"
         logger.info(line.rstrip())
         if children:
             child_sum = sum(c[1] for c in children)
@@ -400,7 +407,8 @@ def log_mece_tree(
                 sub = "└─" if j == len(children) - 1 else "├─"
                 cline = f"{stem}{sub} {f'{ccount} {clabel}':<{cwidth}}"
                 if cnote:
-                    cline = f"{cline}  ({cnote})"
+                    cline = (f"{cline}  {cnote}" if cnote.startswith("[")
+                             else f"{cline}  ({cnote})")
                 logger.info(cline.rstrip())
 
     if footer:
@@ -488,9 +496,12 @@ class VarianceTracker:
     _meta stay with the command (docs/holy_data.md rule set 4).
     """
 
-    def __init__(self, sections: dict | None, labels: dict | None = None):
+    def __init__(self, sections: dict | None, labels: dict | None = None,
+                 unmeasured: dict | None = None, directions: dict | None = None):
         self._sections = sections
         self._labels = labels
+        self._directions = directions
+        self._unmeasured = unmeasured
         self._metrics: list[dict] = []
         self._durations: list[float] = []
         self._started = time.perf_counter()
@@ -514,35 +525,48 @@ class VarianceTracker:
         if log:
             log_variance_block(runs, means, variance,
                                self._durations, self.total_seconds,
-                               sections=self._sections, labels=self._labels)
+                               sections=self._sections, labels=self._labels,
+                               unmeasured=self._unmeasured,
+                               directions=self._directions)
             log_token_stats()
         return means, variance
 
 
+def _variance_label(key: str, labels: dict | None) -> str:
+    return (labels or {}).get(key, key.replace("_", " "))
+
+
 def _log_variance_rows(
     keys: list[str], means: dict, variance: dict, runs: int,
-    labels: dict | None, indent: str = "    ",
+    labels: dict | None, indent: str = "    ", width: int = 30,
+    unmeasured: dict | None = None, directions: dict | None = None,
 ) -> None:
-    """One mean ± std row per key; plain-English labels, null and
-    partial-support handling."""
+    """One mean ± std row per key: label (same name as the per-run line),
+    null / unmeasured / partial-support handling. *width* is the label
+    column, shared by every section of the block."""
     present = [k for k in keys if k in means]
     for i, key in enumerate(present):
         prefix = "└─" if i == len(present) - 1 else "├─"
-        label = (labels or {}).get(key, key.replace("_", " ")) + ":"
+        label = _variance_label(key, labels) + ":"
         v = variance[key]
+        if unmeasured and key in unmeasured:
+            logger.info("%s%s %-*s n/a  (not measured — %s)",
+                        indent, prefix, width, label, unmeasured[key])
+            continue
         if means[key] is None:
             # Null in every run: the metric exists but was never computable.
-            logger.info("%s%s %-30s n/a  (not computable in any of %d runs)",
-                        indent, prefix, label, runs)
+            logger.info("%s%s %-*s n/a  (not computable in any of %d runs)",
+                        indent, prefix, width, label, runs)
             continue
         partial = ""
         if v.get("n", runs) < runs:
             # Mean over fewer runs than executed — say so, or the mean
             # overstates its support.
             partial = f"  ({v['n']}/{runs} runs)"
-        logger.info("%s%s %-30s %.3f ± %.3f   [%.3f, %.3f]%s",
-                    indent, prefix, label, means[key], v["std"],
-                    v["min"], v["max"], partial)
+        note = f"  ({directions[key]})" if directions and key in directions else ""
+        logger.info("%s%s %-*s %.3f ± %.3f   [%.3f, %.3f]%s%s",
+                    indent, prefix, width, label, means[key], v["std"],
+                    v["min"], v["max"], partial, note)
 
 
 def log_variance_block(
@@ -553,6 +577,8 @@ def log_variance_block(
     total_seconds: float | None = None,
     sections: dict | None = None,
     labels: dict | None = None,
+    unmeasured: dict | None = None,
+    directions: dict | None = None,
 ) -> None:
     """Print ══ VARIANCE (N runs) ══ (docs/output_conventions.md rule set 4).
 
@@ -565,9 +591,14 @@ def log_variance_block(
     logger.info("")
     logger.info(settings.section_rule(f"VARIANCE ({runs} runs)", char="═"))
     logger.info("")
+    health = [k for k in (sections or {}).get("health", []) if k in means]
+    labels = {**(labels or {}), **{k: k for k in health}}
+    width = max((len(_variance_label(k, labels)) + 2 for k in means), default=30)
+    rows = dict(means=means, variance=variance, runs=runs, labels=labels,
+                width=width, unmeasured=unmeasured, directions=directions)
     if sections is None:
         logger.info(" 📊 Metrics  (mean ± std  [min, max])")
-        _log_variance_rows(list(means.keys()), means, variance, runs, labels)
+        _log_variance_rows(list(means.keys()), **rows)
         warn_keys = list(means.keys())
     else:
         logger.info(" 📊 Metrics  (mean ± std  [min, max])")
@@ -576,18 +607,17 @@ def log_variance_block(
         for group_name, group_keys in metric_groups:
             if group_name:
                 logger.info("    %s", group_name)
-            _log_variance_rows(group_keys, means, variance, runs, labels)
+            _log_variance_rows(group_keys, **rows)
             warn_keys.extend(group_keys)
         behavior = [k for k in sections.get("behavior", []) if k in means]
         if behavior:
             logger.info("")
-            logger.info(" ⚪ Abstention Behavior")
-            _log_variance_rows(behavior, means, variance, runs, labels)
-        health = [k for k in sections.get("health", []) if k in means]
+            logger.info(" ⚪ %s", sections.get("behavior_title", "Abstention Behavior"))
+            _log_variance_rows(behavior, **rows)
         if health:
             logger.info("")
             logger.info(" 💥 Reliability  (tooling — should be zero)")
-            _log_variance_rows(health, means, variance, runs, labels)
+            _log_variance_rows(health, **rows)
     if durations:
         logger.info("")
         total = total_seconds if total_seconds is not None else sum(durations)
@@ -602,7 +632,6 @@ def log_variance_block(
         logger.info(" ⚠️  Zero variance on every metric — all %d runs returned"
                     " identical results. A caching backend/proxy is the usual"
                     " cause.", runs)
-    logger.info("")
 
 
 def log_token_stats() -> None:
@@ -613,6 +642,7 @@ def log_token_stats() -> None:
     stats = GLOBAL_STATS.snapshot()
     phases = stats.get("phases", {})
 
+    logger.info("")  # one blank before the appendix, whatever closed the findings
     logger.info(settings.section_rule("Execution Stats"))
     logger.info("")
     logger.info(" 📊 Tokens")

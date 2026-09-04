@@ -28,7 +28,7 @@ from contextchecker.exceptions import (
     ContextTooLongError, ContentPolicyError, LLMTimeoutError, FinishReasonLengthError,
 )
 from contextchecker.stats import PhaseStats, RoundResult
-from contextchecker.utils import format_prompt, prepare_plain_prompt
+from contextchecker.utils import format_prompt, plural, prepare_plain_prompt
 from contextchecker import settings
 
 logger = settings.get_logger(__name__)
@@ -184,8 +184,9 @@ class Atomizer:
                 break
 
             logger.info(
-                "   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
-                round_num + 1, len(retry_indices), round_config.temperature,
+                "   ♻️  Round %d: retrying %d %s (temp=%.1f, prompt=%s)...",
+                round_num + 1, len(retry_indices), plural(len(retry_indices), "item"),
+                round_config.temperature,
                 round_config.prompt,
             )
 

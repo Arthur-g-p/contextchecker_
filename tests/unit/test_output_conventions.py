@@ -278,9 +278,9 @@ class TestExtractorEvalSurfacedRates:
         gt_item = {"gt": [{"s": 1}], "pred": [{"s": 1}]}
         buckets = _ItemBucket(
             to_compare=[gt_item, dict(gt_item)],
-            unwarranted_answer=[{"pred": [{"s": 1}, {"s": 2}]}],
-            unjustified_abstention=[],
-            justified_abstention=[{}],
+            abstention_misread=[{"pred": [{"s": 1}, {"s": 2}]}],
+            answer_missed=[],
+            abstention_recognized=[{}],
             extraction_error=[{"err": "parse_failure"}],
         )
         dummy = SimpleNamespace(_gt_key="gt", _pred_key="pred",
@@ -292,9 +292,9 @@ class TestExtractorEvalSurfacedRates:
         # unanswerable = 1 justified + 1 unwarranted; answerable = 2 answered
         # + 0 unjustified (SQuAD 2.0's NoAns / HasAns split)
         r = self._result()
-        assert r.justified_abstention_rate == 0.5
-        assert r.unjustified_abstention_rate == 0.0
-        assert r.unwarranted_answer_rate == 0.5
+        assert r.abstention_recognized_rate == 0.5
+        assert r.answer_missed_rate == 0.0
+        assert r.abstention_misread_rate == 0.5
 
     def test_extraction_error_rate_over_attempted(self):
         # attempted = behavioral(4) + errored(1); errored charged here only

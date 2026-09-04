@@ -29,8 +29,8 @@ Input (list[dict])
   ├─ extract       →  Runs `ExtractionService` (quiet) → predicted triplets
   ├─ 2b atomicity  →  OPTIONAL orthogonal axis, measured on a deep copy
   ├─ 2c duplicates →  Orthogonal axis, read-only
-  ├─ _classify()   →  Five buckets: to_compare, justified_abstention,
-  │                   unjustified_abstention, unwarranted_answer, extraction_error
+  ├─ _classify()   →  Five buckets: to_compare, abstention_recognized,
+  │                   answer_missed, abstention_misread, extraction_error
   ├─ Match (LLM)   →  2-pass entailment check over the `to_compare` items
   └─ Metrics       →  Precision / Recall / F1 + orthogonal axes + tooling rates
 ```
@@ -50,8 +50,8 @@ never be reported as the extractor's mistake.
 
 - **Keeps** items with a `response` and a GT key. Absent or null GT key
   = missing data (dropped, reported); an explicit empty list is data —
-  nothing to extract, the annotated no-answer that makes unwarranted
-  answers detectable.
+  nothing to extract: the response abstained, and that is what makes a
+  misread abstention detectable.
 - **Drops** items without a `response`; there is nothing to extract from.
 - **Canonicalizes** key aliases (`context` → `reference`) and GT triplets
   (`{"triplet": [s, p, o]}` → `{"subject", "predicate", "object"}`).
@@ -93,15 +93,17 @@ anything. Reported as `duplicate_rate` plus the offending triplets per item.
 ## Step 3: Classification (`_classify`)
 
 After extraction, every item lands in exactly one of **five** buckets. The
-abstention vocabulary matches the `ragcheck` pipeline: an abstention is
-*justified* when there was nothing to find, *unjustified* when there was.
+abstention is always the *response's* (GT has no claims because the response
+asserted nothing); the extractor never abstains — it either *recognizes* an
+abstaining response or *misreads* it into invented claims. This differs from
+`ragcheck`, whose abstention judges are about the question.
 
 | bucket | GT | predictions | effect |
 | --- | --- | --- | --- |
 | `to_compare` | yes | yes | sent to LLM matching |
-| `justified_abstention` | no | no | correct silence — no penalty |
-| `unjustified_abstention` | yes | no | every GT claim charged as a recall miss |
-| `unwarranted_answer` | no | yes | every predicted claim charged as a precision miss |
+| `abstention_recognized` | no | no | abstaining response, nothing extracted — correct, no penalty |
+| `answer_missed` | yes | no | answering response, nothing extracted — every GT claim charged as a recall miss |
+| `abstention_misread` | no | yes | abstaining response, claims invented — every predicted claim charged as a precision miss |
 | `extraction_error` | any | — | tooling failure → **excluded from all metrics**, counted in `extraction_errors` |
 
 The `extraction_error` bucket exists so a parse failure can never masquerade as
@@ -148,12 +150,12 @@ every claim of a side lands in exactly one bucket:
 
 ```
 recall_counts:
-  total_gt_claims = covered + missed + unjustified_abstention_penalty + unjudged
+  total_gt_claims = covered + missed + answer_missed_penalty + unjudged
   denominator     = total_gt_claims - unjudged
   recall          = covered / denominator
 
 precision_counts:
-  total_pred_claims = supported + unsupported + unwarranted_answer_penalty + unjudged
+  total_pred_claims = supported + unsupported + abstention_misread_penalty + unjudged
   denominator       = total_pred_claims - unjudged
   precision         = supported / denominator
 
@@ -286,7 +288,7 @@ the run turned out to be — derived keys, counts, timings).
     "total_gt_claims": 27,
     "covered": 15,
     "missed": 0,
-    "unjustified_abstention_penalty": 12,
+    "answer_missed_penalty": 12,
     "unjudged": 0,
     "denominator": 27
   },
@@ -294,7 +296,7 @@ the run turned out to be — derived keys, counts, timings).
     "total_pred_claims": 19,
     "supported": 18,
     "unsupported": 0,
-    "unwarranted_answer_penalty": 1,
+    "abstention_misread_penalty": 1,
     "unjudged": 0,
     "denominator": 19
   },
@@ -304,7 +306,8 @@ the run turned out to be — derived keys, counts, timings).
   "gt_stats":   { "total_triplets": 27, "avg_per_item": 13.5 },
   "pred_stats": { "total_triplets": 19, "avg_per_item": 9.5 },
 
-  "abstentions": { "justified": 0, "unjustified": 1, "unwarranted_answer": 1 },
+  "abstention_handling": { "answers": 3, "answers_extracted": 2, "answers_missed": 1,
+                           "abstentions": 1, "abstentions_recognized": 0, "abstentions_misread": 1 },
 
   "checker_failures": {
     "count": 0,
@@ -407,7 +410,7 @@ read `extraction_errors` and `abstentions` for the split.
 ```
 
 - `error_type` is present only on whole-item entries and is one of
-  `extraction_error`, `unwarranted_answer`, `unjustified_abstention`.
+  `extraction_error`, `abstention_misread`, `answer_missed`.
 - `false_positives` / `false_negatives` contain **judged** misses only — every
   entry carries a real verdict from the checker.
 - `unjudged` holds claims the checker never returned a verdict for. An item
@@ -427,7 +430,7 @@ read `extraction_errors` and `abstentions` for the split.
     Recall — 27 total GT claims
      ├─ ✅ 15 covered by predictions  (judged)
      ├─ ❌ 0 missed  (judged)
-     ├─ ⚪ 12 unjustified-abstention penalty  (1 items, 0 predictions for 12 claims)
+     ├─ ⚪ 12 answer-missed penalty  (1 items, 0 predictions for 12 claims)
      ├─ 💥 0 unjudged by checker
      └─ → Recall 0.556  (15 / 27)
 ```
@@ -437,10 +440,11 @@ denominator, and the 💥 branch sits explicitly outside it. The same partition 
 in the JSON, so print and file can never disagree.
 
 Below the funnels, the orthogonal sections always print (a hidden row is
-indistinguishable from an unmeasured one): `⚪ Abstention Behavior` (the
-item-outcome partition — answered / justified / unjustified / unwarranted
-answer, with footer rates over the annotation split: justified and
-unwarranted over the unanswerable items, unjustified over the answerable), `💥 Reliability` (extraction + matching checker
+indistinguishable from an unmeasured one): `⚪ Abstention Handling` (two
+response kinds with their outcomes as sub-branches — answers: extracted /
+nothing extracted; abstentions: recognized / misread — footer rates
+`abstention recognized` and `abstention misread` over the abstaining
+responses, `answer missed` over the answering ones), `💥 Reliability` (extraction + matching checker
 + atomization, each row `count of denominator → rate_key rate`; an
 unconfigured axis prints `not measured`), `🧬 Atomicity` and
 `🔁 Duplicates`. See docs/output_conventions.md for the display rules.

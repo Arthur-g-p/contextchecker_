@@ -31,14 +31,16 @@ from contextchecker.services.base import BaseService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
 from contextchecker.pipelines.directions import (
+    _location,
     abstention_counts,
+    log_pipeline_tree,
+    verdict_summary,
     normalize_chunks,
-    phase_failure_lines,
     run_direction,
     unwrap_items,
 )
-from contextchecker.stats import GLOBAL_STATS, log_mece_tree, log_rate_rows, log_token_stats, usage_since
-from contextchecker.utils import build_meta
+from contextchecker.stats import GLOBAL_STATS, format_headline, log_mece_tree, log_rate_rows, log_token_stats, usage_since
+from contextchecker.utils import build_meta, plural
 
 logger = settings.get_logger(__name__)
 
@@ -346,6 +348,9 @@ def compute_overall_metrics(results: list[dict]) -> dict:
 class RagCheckerPipeline(BaseService):
     """2 extractions + 4 checking directions composed into one run."""
 
+    # Headline of the run line and the Done line (the Overall group).
+    _RUN_SUMMARY_KEYS = ("precision", "recall", "f1")
+
     _VARIANCE_SECTIONS = {
         "metrics": [
             ("Overall", ["precision", "recall", "f1"]),
@@ -363,6 +368,22 @@ class RagCheckerPipeline(BaseService):
         "behavior": ["justified_abstention_rate",
                      "unjustified_abstention_rate", "unwarranted_answer_rate"],
         "health": ["extraction_error_rate", "checker_failure_rate"],
+    }
+    # How to read each row — the round-bracket aid in the Metrics tree
+    # and the variance block. Missing key = no direction of its own.
+    _METRIC_DIRECTIONS = {
+        "precision": "higher is better", "recall": "higher is better", "f1": "higher is better",
+        "claim_recall": "higher is better", "context_precision": "higher is better",
+        "faithfulness": "higher is better", "hallucination": "lower is better",
+        "self_knowledge": "depends on goals",
+        "answers_with_relevant_context": "higher is better",
+        "abstains_without_relevant_context": "depends on goals",
+        "context_utilization": "higher is better",
+        "noise_sensitivity_in_relevant": "lower is better",
+        "noise_sensitivity_in_irrelevant": "lower is better",
+        "justified_abstention_rate": "higher is better",
+        "unjustified_abstention_rate": "lower is better",
+        "unwarranted_answer_rate": "lower is better",
     }
     _VARIANCE_LABELS = {
         "answers_with_relevant_context": "answers when context is relevant",
@@ -743,11 +764,11 @@ class RagCheckerPipeline(BaseService):
             return
         dropped = total - valid
         logger.info(" 📂 Validation")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         if dropped:
-            logger.info("    ├─ dropped:  %d  (missing/empty %s)",
+            logger.info("     ├─ dropped:  %d  (missing/empty %s)",
                         dropped, "/".join(REQUIRED_KEYS))
-        logger.info("    └─ valid:    %d items", valid)
+        logger.info("     └─ valid:    %d items", valid)
         logger.info("")
 
     def _log_skip(self, *args, **kwargs) -> None:
@@ -756,11 +777,14 @@ class RagCheckerPipeline(BaseService):
     def _log_config(self) -> None:
         if self.verbosity != "full":
             return
+        checking = self._directions[0][1]
         logger.info(" ⚙️  Config")
-        logger.info("    Extractor:   %s", self._extractor_model)
-        logger.info("    Checker:     %s", self._checker_model)
+        logger.info("    Extractor:   %s", _location(self._extract_response))
+        logger.info("    Checker:     %s", _location(checking))
+        logger.info("    Mode:        %s", checking.mode_label)
         logger.info("    Directions:  %s",
                     ", ".join(d.name for d, _ in self._directions))
+        logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
     def _log_results(self) -> None:
@@ -814,7 +838,6 @@ class RagCheckerPipeline(BaseService):
         report = self.last_report
         results = report["results"]
 
-        logger.info("")
         logger.info(settings.section_rule("RAGCHECK RESULTS", char="═"))
         logger.info("")
 
@@ -824,34 +847,15 @@ class RagCheckerPipeline(BaseService):
         gt_claims = sum(len(e["gt_answer_claims"]) for e in results)
         phases.append(("📝", "extract response",
                        self._extract_response.last_stats,
-                       f"{response_claims} claims"))
+                       f"{response_claims} {plural(response_claims, 'claim')}"))
         phases.append(("📝", "extract gt_answer",
                        self._extract_gt.last_stats,
-                       f"{gt_claims} claims"))
+                       f"{gt_claims} {plural(gt_claims, 'claim')}"))
         for direction, service in self._directions:
             c = self._verdict_counts(results, direction.name)
-            summary = (f"{c['total']} verdicts "
-                       f"(🟢 {c['Entailment']} · 🔴 {c['Contradiction']}"
-                       f" · ⚪ {c['Neutral']})")
-            if c["unknown"]:
-                summary += f" · ❓ {c['unknown']}"
-            phases.append(("🔎", direction.name, service.last_stats, summary))
-
-        total_requests = sum(s.http_requests for _, _, s, _ in phases if s)
-        logger.info(" 🔀 Pipeline")
-        logger.info("    %d LLM requests across %d phases", total_requests, len(phases))
-        for i, (icon, name, stats, summary) in enumerate(phases):
-            last = i == len(phases) - 1
-            prefix = "└─" if last else "├─"
-            requests = stats.http_requests if stats else 0
-            logger.info("    %s %s %-21s %2d reqs → %s",
-                        prefix, icon, name + ":", requests, summary)
-            continuation = "   " if last else "│ "
-            failure_lines = phase_failure_lines(stats)
-            for j, sub in enumerate(failure_lines):
-                sub_prefix = "└─" if j == len(failure_lines) - 1 else "├─"
-                logger.info("    %s      %s %s", continuation, sub_prefix, sub)
-        logger.info("")
+            phases.append(("🔎", direction.name, service.last_stats,
+                           verdict_summary(c)))
+        log_pipeline_tree(phases)
 
     def _log_metrics(self) -> None:
         """📊 Metrics: the first-impression overview (macro, from the report)."""
@@ -866,34 +870,39 @@ class RagCheckerPipeline(BaseService):
         def fmt(name: str) -> str:
             value = om.get(name)
             text = "n/a" if value is None else f"{value:.3f}"
+            notes = []
             if support.get(name) is not None and support[name] != n:
-                text += f"  ({support[name]} of {n} items)"
+                notes.append(f"{support[name]} of {n} items")
+            if value is not None and name in self._METRIC_DIRECTIONS:
+                notes.append(self._METRIC_DIRECTIONS[name])
+            if notes:
+                text += f"  ({' · '.join(notes)})"
             return text
 
         logger.info(" 📊 Metrics  (macro over %d items)", n)
         logger.info("    Overall — how well the response matches the"
                     " ground-truth answer")
-        logger.info("    ├─ %-38s%s", "precision:", fmt("precision"))
-        logger.info("    ├─ %-38s%s", "recall:", fmt("recall"))
-        logger.info("    └─ %-38s%s", "f1:", fmt("f1"))
+        logger.info("     ├─ %-38s%s", "precision:", fmt("precision"))
+        logger.info("     ├─ %-38s%s", "recall:", fmt("recall"))
+        logger.info("     └─ %-38s%s", "f1:", fmt("f1"))
         logger.info("    Retriever — did retrieval bring the needed evidence")
-        logger.info("    ├─ %-38s%s", "claim recall:", fmt("claim_recall"))
-        logger.info("    └─ %-38s%s", "context precision:",
+        logger.info("     ├─ %-38s%s", "claim recall:", fmt("claim_recall"))
+        logger.info("     └─ %-38s%s", "context precision:",
                     fmt("context_precision"))
         logger.info("    Generator — how the response used, ignored, or"
                     " invented beyond the context")
-        logger.info("    ├─ %-38s%s", "faithfulness:", fmt("faithfulness"))
-        logger.info("    ├─ %-38s%s", "hallucination:", fmt("hallucination"))
-        logger.info("    ├─ %-38s%s", "self knowledge:", fmt("self_knowledge"))
-        logger.info("    ├─ %-38s%s", "answers when context is relevant:",
+        logger.info("     ├─ %-38s%s", "faithfulness:", fmt("faithfulness"))
+        logger.info("     ├─ %-38s%s", "hallucination:", fmt("hallucination"))
+        logger.info("     ├─ %-38s%s", "self knowledge:", fmt("self_knowledge"))
+        logger.info("     ├─ %-38s%s", "answers when context is relevant:",
                     fmt("answers_with_relevant_context"))
-        logger.info("    ├─ %-38s%s", "abstains when context is irrelevant:",
+        logger.info("     ├─ %-38s%s", "abstains when context is irrelevant:",
                     fmt("abstains_without_relevant_context"))
-        logger.info("    ├─ %-38s%s", "context utilization:",
+        logger.info("     ├─ %-38s%s", "context utilization:",
                     fmt("context_utilization"))
-        logger.info("    ├─ %-38s%s", "noise sensitivity relevant:",
+        logger.info("     ├─ %-38s%s", "noise sensitivity relevant:",
                     fmt("noise_sensitivity_in_relevant"))
-        logger.info("    └─ %-38s%s", "noise sensitivity irrelevant:",
+        logger.info("     └─ %-38s%s", "noise sensitivity irrelevant:",
                     fmt("noise_sensitivity_in_irrelevant"))
 
         logger.info("")
@@ -914,9 +923,6 @@ class RagCheckerPipeline(BaseService):
         if ab["errored"]:
             note = (f"{ab['errored']} extraction-failed excluded"
                     " — see 💥 Reliability")
-
-        def plural(n: int, word: str) -> str:
-            return word if n == 1 else word + "s"
 
         log_mece_tree(
             "⚪ Abstention Behavior", top, "evaluated items",
@@ -939,12 +945,12 @@ class RagCheckerPipeline(BaseService):
                  plural(ab["unwarranted"], "unwarranted answer"),
                  "GT empty — charged in precision"),
             ],
-            footer=[("justified", ab["justified"], ab["unanswerable"],
-                     "unanswerable"),
-                    ("unjustified", ab["unjustified"], ab["answerable"],
-                     "answerable"),
-                    ("unwarranted", ab["unwarranted"], ab["unanswerable"],
-                     "unanswerable")],
+            footer=[("justified abstention rate", ab["justified"],
+                     ab["unanswerable"], "unanswerable"),
+                    ("unjustified abstention rate", ab["unjustified"],
+                     ab["answerable"], "answerable"),
+                    ("unwarranted answer rate", ab["unwarranted"],
+                     ab["unanswerable"], "unanswerable")],
             header_note=note,
         )
         logger.info("")
@@ -973,6 +979,7 @@ class RagCheckerPipeline(BaseService):
         if self.verbosity != "full":
             return
         report = self.last_report
-        logger.info(" ✅ Done: ragchecked %d/%d items",
-                    report["_meta"]["evaluated_items"],
-                    report["_meta"]["total_items"])
+        n = report["_meta"]["evaluated_items"]
+        logger.info(" ✅ Done: %d %s · %s", n, plural(n, "item"),
+                    format_headline(report.get("overall_metrics", {}),
+                                    self._RUN_SUMMARY_KEYS))

@@ -144,6 +144,12 @@ def prepare_plain_prompt(
     return format_prompt(template, {"schema": build_schema_shape(schema)})
 
 
+def plural(n: int, word: str, plural_form: str | None = None) -> str:
+    """The noun for *n*: ``plural(1, "item")`` → ``item``, ``plural(2, "item")``
+    → ``items``. Log lines only — JSON keys never change number."""
+    return word if n == 1 else (plural_form or word + "s")
+
+
 def format_prompt(template: str, variables: dict) -> str:
     """Replace ``{{key}}`` placeholders in *template* with values from *variables*."""
     result = template

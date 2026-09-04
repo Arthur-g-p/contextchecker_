@@ -146,20 +146,21 @@ class ExtractorEvalResult:
     recall: float | None
     f1: float | None
     recall_counts: dict                    # {"total_gt_claims", "covered", "missed",
-                                           #  "unjustified_abstention_penalty", "unjudged",
+                                           #  "answer_missed_penalty", "unjudged",
                                            #  "denominator"}
     precision_counts: dict                 # {"total_pred_claims", "supported", "unsupported",
-                                           #  "unwarranted_answer_penalty", "unjudged",
+                                           #  "abstention_misread_penalty", "unjudged",
                                            #  "denominator"}
     total_items: int                       # items in dataset
     to_compare_items: int                  # items with GT + predictions to compare
     gt_stats: dict                         # {"total_triplets": N, "avg_per_item": float}
     pred_stats: dict                       # {"total_triplets": N, "avg_per_item": float}
-    abstentions: dict                      # item counts: {"justified": N,
-                                           #  "unjustified": N, "unwarranted_answer": N}
-                                           #  — the claim-level penalties live in the
-                                           #  counts dicts. Naming follows ragcheck:
-                                           #  justified = nothing was there to find.
+    abstention_handling: dict              # item counts: {"answers", "answers_extracted",
+                                           #  "answers_missed", "abstentions",
+                                           #  "abstentions_recognized", "abstentions_misread"}
+                                           #  — the abstention is the response's; the
+                                           #  extractor recognizes or misreads it. Claim-
+                                           #  level penalties live in the counts dicts.
     checker_failures: dict                 # {"count": N, "issued_verdicts": N, "rate": float,
                                            #  "items_affected": N, "unjudged_gt": N,
                                            #  "unjudged_pred": N} — matching verdicts the
@@ -178,9 +179,9 @@ class ExtractorEvalResult:
     # Surfaced run-outcome rates: top-level scalars so the variance
     # roster can aggregate them; the nested dicts above keep the counts
     # and causes.
-    justified_abstention_rate: float | None = None
-    unjustified_abstention_rate: float | None = None
-    unwarranted_answer_rate: float | None = None
+    abstention_recognized_rate: float | None = None
+    answer_missed_rate: float | None = None
+    abstention_misread_rate: float | None = None
     atomicity_rate: float | None = None
     claim_density: float | None = None
     duplicate_rate: float | None = None

@@ -26,7 +26,7 @@ from contextchecker.exceptions import (
     FinishReasonLengthError,
 )
 from contextchecker.stats import PhaseStats, RoundResult
-from contextchecker.utils import format_prompt, prepare_plain_prompt
+from contextchecker.utils import format_prompt, plural, prepare_plain_prompt
 from contextchecker import settings
 
 logger = settings.get_logger(__name__)
@@ -273,8 +273,8 @@ class Checker:
             if not retry_indices:
                 break
 
-            logger.info("   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
-                        round_num + 1, len(retry_indices),
+            logger.info("   ♻️  Round %d: retrying %d %s (temp=%.1f, prompt=%s)...",
+                        round_num + 1, len(retry_indices), plural(len(retry_indices), "item"),
                         round_config.temperature, round_config.prompt)
 
             retry_tasks = []
@@ -486,8 +486,8 @@ class Checker:
             if not retryable_claims:
                 break
 
-            logger.info("   ♻️  Round %d: retrying %d items (temp=%.1f, prompt=%s)...",
-                        round_num + 1, len(retryable_claims),
+            logger.info("   ♻️  Round %d: retrying %d %s (temp=%.1f, prompt=%s)...",
+                        round_num + 1, len(retryable_claims), plural(len(retryable_claims), "chunk"),
                         round_config.temperature, round_config.prompt)
 
             # Build tasks only for the retryable claims

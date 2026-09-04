@@ -32,6 +32,7 @@ from contextchecker import settings
 from contextchecker.exceptions import FilterError, InvalidInputError
 from contextchecker.models import Direction
 from contextchecker.services.checking import CheckingService
+from contextchecker.stats import log_mece_tree
 
 logger = settings.get_logger(__name__)
 
@@ -80,6 +81,37 @@ def abstention_counts(entries: list[dict]) -> dict:
         "abstained": abstained,
         "answered": evaluated - errored - abstained,
     }
+
+
+def _location(service) -> str:
+    """``model @ base_url`` for Config blocks — the same string the bare
+    services print for themselves."""
+    return f"{service.model} @ {service.base_url}" if service.base_url else service.model
+
+
+def log_pipeline_tree(phases: list[tuple[str, str, object, str]]) -> None:
+    """🔀 Pipeline: one branch per phase. HTTP requests partition the total;
+    claims, verdict tallies and failure notes are foreign numbers and ride
+    in the square bracket (output_conventions rule 1.4).
+
+    *phases* are (icon, name, PhaseStats-or-None, summary)."""
+    total = sum(s.http_requests for _, _, s, _ in phases if s)
+    branches = []
+    for icon, name, stats, summary in phases:
+        foreign = " · ".join([summary] + phase_failure_lines(stats))
+        branches.append((icon, stats.http_requests if stats else 0, name,
+                         f"[{foreign}]"))
+    log_mece_tree("🔀 Pipeline", total, "LLM requests", branches)
+    logger.info("")
+
+
+def verdict_summary(counts: dict) -> str:
+    """``72 verdicts · 🟢 17 · 🔴 1 · ⚪ 54`` (+ ``· ❓ n`` for null cells)."""
+    text = (f"{counts['total']} verdicts · 🟢 {counts['Entailment']}"
+            f" · 🔴 {counts['Contradiction']} · ⚪ {counts['Neutral']}")
+    if counts.get("unknown"):
+        text += f" · ❓ {counts['unknown']}"
+    return text
 
 
 def phase_failure_lines(stats) -> list[str]:

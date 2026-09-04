@@ -326,10 +326,10 @@ class AtomizationService(BaseService):
             return
         invalid = total - valid
         logger.info(" 📂 Validation")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         if invalid > 0:
-            logger.info("    ├─ dropped:  %d  (no '%s' key or empty)", invalid, self._source_kg_key)
-        logger.info("    └─ valid:  %d items", valid)
+            logger.info("     ├─ dropped:  %d  (no '%s' key or empty)", invalid, self._source_kg_key)
+        logger.info("     └─ valid:    %d items", valid)
         logger.info("")
 
     def _log_skip(self, valid: int, skipped: int, pending: int) -> None:
@@ -338,10 +338,10 @@ class AtomizationService(BaseService):
             return
         if skipped == 0:
             return
-        logger.info(" 🔄 Skip: items with existing atomization")
-        logger.info("    Total:      %d valid items", valid)
-        logger.info("    ├─ skipped: %d items (already atomized)", skipped)
-        logger.info("    └─ pending: %d items", pending)
+        logger.info(" 🔄 Skip")
+        logger.info("    Total:        %d valid items", valid)
+        logger.info("     ├─ skipped:  %d items  (already atomized)", skipped)
+        logger.info("     └─ pending:  %d items", pending)
         logger.info("")
 
     def _log_config(self) -> None:
@@ -393,7 +393,7 @@ class AtomizationService(BaseService):
         dups = stats["dups"]
         gross_new = stats["children"] - split  # claims splitting added (pre-dedup)
 
-        logger.info(" 📝 Atomization:")
+        logger.info(" 📝 Atomization")
         logger.info(
             "    %d input claims → %d output claims", stats["input"], stats["output"]
         )

@@ -29,15 +29,17 @@ from contextchecker.services.base import BaseService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.checking import CheckingService
 from contextchecker.pipelines.directions import (
+    _location,
     abstention_counts,
+    log_pipeline_tree,
+    verdict_summary,
     normalize_chunks,
-    phase_failure_lines,
     run_direction,
     unwrap_items,
 )
 from contextchecker.pipelines.ragchecker import _ENTAILMENT, _ratio, _row_entailed
-from contextchecker.stats import GLOBAL_STATS, log_mece_tree, log_rate_rows, log_token_stats, usage_since
-from contextchecker.utils import build_meta
+from contextchecker.stats import GLOBAL_STATS, format_headline, log_mece_tree, log_rate_rows, log_token_stats, usage_since
+from contextchecker.utils import build_meta, plural
 
 logger = settings.get_logger(__name__)
 
@@ -49,6 +51,8 @@ class FaithfulnessPipeline(BaseService):
 
     # Behavior carries only the abstention rate — the justified/
     # unjustified split is unknowable without GT.
+    _METRIC_DIRECTIONS = {"faithfulness": "higher is better",
+                          "abstention_rate": "distribution — no direction"}
     _VARIANCE_SECTIONS = {
         "metrics": [(None, ["faithfulness"])],
         "behavior": ["abstention_rate"],
@@ -325,11 +329,11 @@ class FaithfulnessPipeline(BaseService):
             return
         dropped = total - valid
         logger.info(" 📂 Validation")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         if dropped:
-            logger.info("    ├─ dropped:  %d  (missing/empty %s)",
+            logger.info("     ├─ dropped:  %d  (missing/empty %s)",
                         dropped, "/".join(REQUIRED_KEYS))
-        logger.info("    └─ valid:    %d items", valid)
+        logger.info("     └─ valid:    %d items", valid)
         logger.info("")
 
     def _log_skip(self, *args, **kwargs) -> None:
@@ -339,9 +343,11 @@ class FaithfulnessPipeline(BaseService):
         if self.verbosity != "full":
             return
         logger.info(" ⚙️  Config")
-        logger.info("    Extractor:   %s", self._extractor_model)
-        logger.info("    Checker:     %s", self._checker_model)
+        logger.info("    Extractor:   %s", _location(self._extract))
+        logger.info("    Checker:     %s", _location(self._check))
+        logger.info("    Mode:        %s", self._check.mode_label)
         logger.info("    Direction:   retrieved2response (no ground truth)")
+        logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
     def _log_results(self) -> None:
@@ -373,7 +379,6 @@ class FaithfulnessPipeline(BaseService):
         report = self.last_report
         results = report["results"]
 
-        logger.info("")
         logger.info(settings.section_rule("FAITHFULNESS RESULTS", char="═"))
         logger.info("")
 
@@ -390,31 +395,12 @@ class FaithfulnessPipeline(BaseService):
                         cells[verdict] += 1
                     else:
                         cells["unknown"] += 1
-        verdict_summary = (f"{cells['total']} verdicts "
-                           f"(🟢 {cells['Entailment']} · 🔴 {cells['Contradiction']}"
-                           f" · ⚪ {cells['Neutral']})")
-        if cells["unknown"]:
-            verdict_summary += f" · ❓ {cells['unknown']}"
-
-        phases = [
-            ("📝", "extract response", self._extract.last_stats, f"{claims} claims"),
-            ("🔎", "retrieved2response", self._check.last_stats, verdict_summary),
-        ]
-        total_requests = sum(s.http_requests for _, _, s, _ in phases if s)
-        logger.info(" 🔀 Pipeline")
-        logger.info("    %d LLM requests across %d phases", total_requests, len(phases))
-        for i, (icon, name, stats, summary) in enumerate(phases):
-            last = i == len(phases) - 1
-            prefix = "└─" if last else "├─"
-            requests = stats.http_requests if stats else 0
-            logger.info("    %s %s %-21s %2d reqs → %s",
-                        prefix, icon, name + ":", requests, summary)
-            continuation = "   " if last else "│ "
-            failure_lines = phase_failure_lines(stats)
-            for j, sub in enumerate(failure_lines):
-                sub_prefix = "└─" if j == len(failure_lines) - 1 else "├─"
-                logger.info("    %s      %s %s", continuation, sub_prefix, sub)
-        logger.info("")
+        log_pipeline_tree([
+            ("📝", "extract response", self._extract.last_stats,
+             f"{claims} {plural(claims, 'claim')}"),
+            ("🔎", "retrieved2response", self._check.last_stats,
+             verdict_summary(cells)),
+        ])
 
     def _log_metrics(self) -> None:
         """📊 Metrics: the faithfulness score + reliability."""
@@ -430,8 +416,10 @@ class FaithfulnessPipeline(BaseService):
         note = "response claims supported by the retrieved context"
         if support.get("faithfulness") is not None and support["faithfulness"] != n:
             note = f"{support['faithfulness']} of {n} items · {note}"
+        if faithfulness is not None:
+            note += f" · {self._METRIC_DIRECTIONS['faithfulness']}"
         logger.info(" 📊 Metrics  (macro over %d items)", n)
-        logger.info("    └─ faithfulness:  %s  (%s)", value, note)
+        logger.info("     └─ faithfulness:  %s  (%s)", value, note)
         logger.info("")
 
     def _log_abstention(self) -> None:
@@ -454,7 +442,7 @@ class FaithfulnessPipeline(BaseService):
             "⚪ Abstention Behavior", top, "evaluated items",
             [
                 ("🔬", ab["answered"], "answered",
-                 "claims extracted and scored"),
+                 "claims extracted — scored"),
                 ("⚪", ab["abstained"], "abstained",
                  "no ground truth — cannot judge justified vs not"),
             ],
@@ -486,9 +474,10 @@ class FaithfulnessPipeline(BaseService):
         if self.verbosity != "full":
             return
         report = self.last_report
-        logger.info(" ✅ Done: faithfulness-checked %d/%d items",
-                    report["_meta"]["evaluated_items"],
-                    report["_meta"]["total_items"])
+        n = report["_meta"]["evaluated_items"]
+        logger.info(" ✅ Done: %d %s · %s", n, plural(n, "item"),
+                    format_headline(report.get("overall_metrics", {}),
+                                    self._RUN_SUMMARY_KEYS))
 
 
 # ── Library facade (real-time, single item) ──────────────────────────────────

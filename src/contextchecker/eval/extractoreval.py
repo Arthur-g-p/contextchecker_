@@ -28,18 +28,20 @@ from contextchecker.stats import (
     usage_since,
     VarianceTracker,
     log_mece_tree,
+    format_headline,
     log_multi_run_hint,
     log_rate_rows,
     log_run_line,
     log_token_stats,
 )
 from contextchecker.utils import (
+    plural,
     build_meta,
     canonicalize_triplets,
     find_duplicate_triplets,
 )
 from contextchecker.services.base import BaseService
-from contextchecker.services.checking import CheckingService
+from contextchecker.services.checking import CheckingService, mode_label
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.services.atomization import AtomizationService
 
@@ -59,12 +61,14 @@ class _ItemBucket:
     """Post-extraction classification into five buckets.
 
     Abstention naming follows the ragcheck pipeline: an abstention is
-    justified when there was nothing to find, unjustified when there was.
+    Two response kinds × two extraction outcomes: an answering response is
+    extracted or missed entirely; an abstaining response (GT has no claims)
+    is recognized or misread into invented claims.
     """
     to_compare: list[dict]              # has GT + has predictions → normal matching
-    unwarranted_answer: list[dict]         # no GT but model predicted → precision penalty
-    unjustified_abstention: list[dict]  # has GT but no predictions → recall penalty
-    justified_abstention: list[dict]    # no GT, no predictions → correct silence
+    abstention_misread: list[dict]     # abstaining response, claims invented → precision penalty
+    answer_missed: list[dict]          # answering response, nothing extracted → recall penalty
+    abstention_recognized: list[dict]  # abstaining response, nothing extracted → correct
     # extraction failed (tooling) → excluded from ALL metrics, counted in
     # the error rate
     extraction_error: list[dict] = field(default_factory=list)
@@ -111,16 +115,33 @@ class ExtractorEvaluator:
     Returns (summary_doc, disagreements_doc) — CLI writes two files verbatim.
     """
 
-    _RUN_SUMMARY_KEYS = ("precision", "recall", "f1")
+    _RUN_SUMMARY_KEYS = ("recall", "precision", "f1")
 
     _VARIANCE_SECTIONS = {
         "metrics": [
-            ("Matching", ["precision", "recall", "f1"]),
-            ("Quality axes", ["atomicity_rate", "claim_density",
-                              "duplicate_rate"]),
+            ("Matching Quality", ["recall", "precision", "f1"]),
+            ("Atomicity", ["atomicity_rate", "claim_density"]),
+            ("Duplicates", ["duplicate_rate"]),
         ],
-        "behavior": ["justified_abstention_rate",
-                     "unjustified_abstention_rate", "unwarranted_answer_rate"],
+        "behavior": ["abstention_recognized_rate", "abstention_misread_rate",
+                     "answer_missed_rate"],
+        "behavior_title": "Abstention Handling",
+    }
+    _METRIC_DIRECTIONS = {
+        "recall": "higher is better", "precision": "higher is better", "f1": "higher is better",
+        "atomicity_rate": "higher is better",
+        "claim_density": "closer to 1.0 is better",
+        "duplicate_rate": "lower is better",
+        "abstention_recognized_rate": "higher is better",
+        "abstention_misread_rate": "lower is better",
+        "answer_missed_rate": "lower is better",
+    }
+    # Per-run lines that name their key (`→ atomicity_rate 1.000`) keep the
+    # key in the variance block — same name, rule set 1.1 / 2.2.
+    _VARIANCE_LABELS = {
+        "atomicity_rate": "atomicity_rate",
+        "claim_density": "claim_density",
+        "duplicate_rate": "duplicate_rate",
         "health": ["extraction_error_rate", "checker_failure_rate",
                    "atomization_failure_rate"],
     }
@@ -226,7 +247,13 @@ class ExtractorEvaluator:
         log_multi_run_hint(self._runs)
         summaries: list[dict] = []
         disagreements: list[dict] = []
-        tracker = VarianceTracker(self._VARIANCE_SECTIONS)
+        # Atomicity axis not run → its three keys are unmeasured, not 0/0.
+        unmeasured = ({k: self._atomizer_skip_reason for k in
+                       ("atomicity_rate", "claim_density", "atomization_failure_rate")}
+                      if self._atomizer_skip_reason else None)
+        tracker = VarianceTracker(self._VARIANCE_SECTIONS, labels=self._VARIANCE_LABELS,
+                                  unmeasured=unmeasured,
+                                  directions=self._METRIC_DIRECTIONS)
         for run in range(1, self._runs + 1):
             logger.info("")
             logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
@@ -317,8 +344,8 @@ class ExtractorEvaluator:
         if not buckets.to_compare:
             logger.warning(
                 "No items with both GT and predictions after extraction. "
-                "All %d items were unjustified abstentions.",
-                len(buckets.unjustified_abstention),
+                "All %d items were answers with nothing extracted.",
+                len(buckets.answer_missed),
             )
 
         # Step 5: Match to_compare items (LLM)
@@ -517,6 +544,7 @@ class ExtractorEvaluator:
                 self._dropped_missing_gt += 1
                 continue
             valid.append(item)
+        self._gt_empty = sum(1 for item in valid if not item[self._gt_key])
 
         if not valid:
             with_response = len(data) - self._dropped_missing_response
@@ -547,8 +575,8 @@ class ExtractorEvaluator:
         an empty prediction list after a crashed extraction says nothing
         about the extractor's willingness to answer.
         """
-        to_compare, unwarranted_answer = [], []
-        unjustified_abstention, justified_abstention = [], []
+        to_compare, abstention_misread = [], []
+        answer_missed, abstention_recognized = [], []
         extraction_error = []
 
         for item in data:
@@ -564,17 +592,17 @@ class ExtractorEvaluator:
             if has_gt and has_pred:
                 to_compare.append(item)
             elif not has_gt and has_pred:
-                unwarranted_answer.append(item)
+                abstention_misread.append(item)
             elif has_gt and not has_pred:
-                unjustified_abstention.append(item)
+                answer_missed.append(item)
             else:
-                justified_abstention.append(item)
+                abstention_recognized.append(item)
 
         return _ItemBucket(
             to_compare=to_compare,
-            unwarranted_answer=unwarranted_answer,
-            unjustified_abstention=unjustified_abstention,
-            justified_abstention=justified_abstention,
+            abstention_misread=abstention_misread,
+            answer_missed=answer_missed,
+            abstention_recognized=abstention_recognized,
             extraction_error=extraction_error,
         )
 
@@ -609,12 +637,12 @@ class ExtractorEvaluator:
 
         # Unjustified abstention: every GT triplet is an uncovered GT claim (FN)
         abstention_fn_penalty = sum(
-            len(item[self._gt_key]) for item in buckets.unjustified_abstention
+            len(item[self._gt_key]) for item in buckets.answer_missed
         )
 
         # Unwarranted answer: every predicted triplet is an unsupported prediction (FP)
         answer_fp_penalty = sum(
-            len(item[self._pred_key]) for item in buckets.unwarranted_answer
+            len(item[self._pred_key]) for item in buckets.abstention_misread
         )
 
         recall_den = covered + missed + abstention_fn_penalty
@@ -634,7 +662,7 @@ class ExtractorEvaluator:
             "total_gt_claims": recall_den + unjudged_gt,
             "covered": covered,
             "missed": missed,
-            "unjustified_abstention_penalty": abstention_fn_penalty,
+            "answer_missed_penalty": abstention_fn_penalty,
             "unjudged": unjudged_gt,
             "denominator": recall_den,
         }
@@ -642,7 +670,7 @@ class ExtractorEvaluator:
             "total_pred_claims": precision_den + unjudged_pred,
             "supported": supported,
             "unsupported": unsupported,
-            "unwarranted_answer_penalty": answer_fp_penalty,
+            "abstention_misread_penalty": answer_fp_penalty,
             "unjudged": unjudged_pred,
             "denominator": precision_den,
         }
@@ -667,23 +695,20 @@ class ExtractorEvaluator:
         # Extraction stats
         gt_triplets = sum(
             len(item[self._gt_key])
-            for item in buckets.to_compare + buckets.unjustified_abstention
+            for item in buckets.to_compare + buckets.answer_missed
         )
         pred_triplets = sum(
             len(item[self._pred_key])
-            for item in buckets.to_compare + buckets.unwarranted_answer
+            for item in buckets.to_compare + buckets.abstention_misread
         )
         to_compare_count = len(buckets.to_compare)
         gt_avg = gt_triplets / to_compare_count if to_compare_count > 0 else 0.0
         pred_avg = pred_triplets / to_compare_count if to_compare_count > 0 else 0.0
 
-        # Extraction error rate — tooling reliability, co-equal with P/R/F1
-        # but never mixed into it. Denominator: every item that went through
-        # the extraction step (all five buckets).
         error_items = buckets.extraction_error
         attempted = (
-            to_compare_count + len(buckets.unwarranted_answer)
-            + len(buckets.unjustified_abstention) + len(buckets.justified_abstention)
+            to_compare_count + len(buckets.abstention_misread)
+            + len(buckets.answer_missed) + len(buckets.abstention_recognized)
             + len(error_items)
         )
         by_cause: dict[str, int] = {}
@@ -697,9 +722,9 @@ class ExtractorEvaluator:
         }
 
         behavioral = attempted - len(error_items)
-        unanswerable = (len(buckets.justified_abstention)
-                        + len(buckets.unwarranted_answer))
-        answerable = to_compare_count + len(buckets.unjustified_abstention)
+        unanswerable = (len(buckets.abstention_recognized)
+                        + len(buckets.abstention_misread))
+        answerable = to_compare_count + len(buckets.answer_missed)
 
         return ExtractorEvalResult(
             precision=precision,
@@ -717,23 +742,24 @@ class ExtractorEvaluator:
                 "total_triplets": pred_triplets,
                 "avg_per_item": round(pred_avg, 2),
             },
-            abstentions={
-                "justified": len(buckets.justified_abstention),
-                "unjustified": len(buckets.unjustified_abstention),
-                "unwarranted_answer": len(buckets.unwarranted_answer),
+            abstention_handling={
+                "answers": answerable,
+                "answers_extracted": to_compare_count,
+                "answers_missed": len(buckets.answer_missed),
+                "abstentions": unanswerable,
+                "abstentions_recognized": len(buckets.abstention_recognized),
+                "abstentions_misread": len(buckets.abstention_misread),
             },
             checker_failures=checker_failures,
             atomicity=atomicity,
             duplicates=duplicates,
             extraction_errors=extraction_errors,
-            # justified and unwarranted are rates over the items with no GT;
-            # unjustified over the items with GT.
-            justified_abstention_rate=_bucket_rate(
-                len(buckets.justified_abstention), unanswerable),
-            unjustified_abstention_rate=_bucket_rate(
-                len(buckets.unjustified_abstention), answerable),
-            unwarranted_answer_rate=_bucket_rate(
-                len(buckets.unwarranted_answer), unanswerable),
+            abstention_recognized_rate=_bucket_rate(
+                len(buckets.abstention_recognized), unanswerable),
+            answer_missed_rate=_bucket_rate(
+                len(buckets.answer_missed), answerable),
+            abstention_misread_rate=_bucket_rate(
+                len(buckets.abstention_misread), unanswerable),
             atomicity_rate=atomicity["atomicity_rate"] if atomicity else None,
             claim_density=(atomicity["information_density"]
                            if atomicity else None),
@@ -760,9 +786,8 @@ class ExtractorEvaluator:
 
         Uses checker_prompt_eval_joint with {{response}} context.
         """
-        logger.info(settings.section_rule("Matching (LLM 2-pass)"))
-
-        # Build a CheckingService with the eval prompt
+        # Build a CheckingService with the eval prompt. Each pass is one
+        # phase with its own labeled section rule, like a pipeline direction.
         service = CheckingService(
             model=self._checker_model,
             extractor_model=_INTERNAL_EXT_MODEL,
@@ -772,12 +797,11 @@ class ExtractorEvaluator:
             joint_num=self._joint_num,
             max_words=self._max_words,
             verbosity="silent" if self._runs > 1 else "compact",
+            section_label="Matching pass 1: GT → Pred (recall)",
             joint_prompt_key="checker_prompt_eval_joint",
         )
 
         # ── Pass 1: GT → Pred (recall / FN detection) ──────────
-        logger.info("")
-        logger.info("  Pass 1: GT → Pred (recall)")
         pass1_items = self._build_pass_items(
             valid_items, claims_key=self._gt_key, ref_key=self._pred_key
         )
@@ -785,8 +809,6 @@ class ExtractorEvaluator:
         await service.run(pass1_items)
 
         # ── Pass 2: Pred → GT (precision / FP detection) ───────
-        logger.info("")
-        logger.info("  Pass 2: Pred → GT (precision)")
         pass2_items = self._build_pass_items(
             valid_items, claims_key=self._pred_key, ref_key=self._gt_key
         )
@@ -801,6 +823,7 @@ class ExtractorEvaluator:
             joint_num=self._joint_num,
             max_words=self._max_words,
             verbosity="silent" if self._runs > 1 else "compact",
+            section_label="Matching pass 2: Pred → GT (precision)",
             joint_prompt_key="checker_prompt_eval_joint",
         )
 
@@ -1022,14 +1045,14 @@ class ExtractorEvaluator:
                 "unjudged": unjudged,
             })
 
-        # Unwarranted answers — model predicted but shouldn't have
-        for i, item in enumerate(buckets.unwarranted_answer):
+        # Abstention misread — claims invented from a refusal
+        for i, item in enumerate(buckets.abstention_misread):
             pred_count = len(item[self._pred_key])
             disagreements.append({
-                "id": item.get("id", f"unwarranted-answer-{i}"),
+                "id": item.get("id", f"abstention-misread-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "error_type": "unwarranted_answer",
+                "error_type": "abstention_misread",
                 "tp": 0,
                 "fp": pred_count,
                 "fn": 0,
@@ -1041,21 +1064,21 @@ class ExtractorEvaluator:
                     {
                         "pred_triplet": self._triplet_to_str(t),
                         "verdict": "no comparison made.",
-                        "reason": "No GT — unwarranted answer",
+                        "reason": "Abstention misread — no GT claims, extracted anyway",
                     }
                     for t in item[self._pred_key]
                 ],
                 "false_negatives": [],
             })
 
-        # Unjustified abstentions — model missed everything
-        for i, item in enumerate(buckets.unjustified_abstention):
+        # Answer missed — nothing extracted from an answering response
+        for i, item in enumerate(buckets.answer_missed):
             gt_count = len(item[self._gt_key])
             disagreements.append({
-                "id": item.get("id", f"unjustified-abstention-{i}"),
+                "id": item.get("id", f"answer-missed-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "error_type": "unjustified_abstention",
+                "error_type": "answer_missed",
                 "tp": 0,
                 "fp": 0,
                 "fn": gt_count,
@@ -1068,7 +1091,7 @@ class ExtractorEvaluator:
                     {
                         "gt_triplet": self._triplet_to_str(t),
                         "verdict": "no comparison made.",
-                        "reason": "Unjustified abstention — all GT lost",
+                        "reason": "Answer missed — nothing extracted, all GT lost",
                     }
                     for t in item[self._gt_key]
                 ],
@@ -1083,15 +1106,18 @@ class ExtractorEvaluator:
     ) -> None:
         """Print 📂 Data section — pre-extraction validation summary."""
         logger.info(" 📂 Data")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         no_response = getattr(self, "_dropped_missing_response", dropped)
         no_gt = getattr(self, "_dropped_missing_gt", 0)
         if no_response > 0:
-            logger.info("    ├─ dropped:  %d  (missing response)", no_response)
+            logger.info("     ├─ dropped:  %d  (missing response)", no_response)
         if no_gt > 0:
-            logger.info("    ├─ dropped:  %d  (missing GT key '%s')",
+            logger.info("     ├─ dropped:  %d  (missing GT key '%s')",
                         no_gt, self._gt_key)
-        logger.info("    └─ to extract: %d items", valid)
+        gt_empty = getattr(self, "_gt_empty", 0)
+        logger.info("     └─ valid:    %d items  (%d with GT claims, %d %s)",
+                    valid, valid - gt_empty, gt_empty,
+                    plural(gt_empty, "abstention"))
         logger.info("")
 
     def _log_eval_config(self) -> None:
@@ -1108,6 +1134,8 @@ class ExtractorEvaluator:
         if self._checker_base_url:
             location += f" @ {self._checker_base_url}"
         logger.info("    Matching:    LLM 2-pass (%s)", location)
+        logger.info("    Mode:        %s",
+                    mode_label(True, self._joint_num, self._max_words))
 
         if self._atomization_service is not None:
             logger.info("    Atomicity:   %s", self._atomizer_model)
@@ -1119,29 +1147,33 @@ class ExtractorEvaluator:
 
     def _log_eval_results(self, result: ExtractorEvalResult) -> None:
         """Print ── EXTRACTOR EVAL ── section: P/R/F1, stats, abstentions."""
-        logger.info("")
-        logger.info(settings.section_rule("EXTRACTOR EVAL"))
-        logger.info("")
+        if self._runs > 1:
+            logger.info("")
+        else:
+            logger.info(settings.section_rule("EXTRACTOR EVAL", char="═"))
+            logger.info("")
 
         # ── Matching quality: one funnel per side. Every issued claim lands
         # in exactly one branch; the first three sum to the denominator, the
         # 💥 branch is explicitly outside it.
         rc = result.recall_counts
         pc = result.precision_counts
-        ab = result.abstentions
+        ah = result.abstention_handling
 
         logger.info(" 🔎 Matching Quality  (LLM 2-pass)")
         logger.info("    Recall — %d total GT claims", rc["total_gt_claims"])
         logger.info("     ├─ ✅ %d covered by predictions  (judged)", rc["covered"])
         logger.info("     ├─ ❌ %d missed  (judged)", rc["missed"])
-        if rc["unjustified_abstention_penalty"]:
+        if rc["answer_missed_penalty"]:
             logger.info(
-                "     ├─ ⚪ %d unjustified-abstention penalty  (%d items, 0 predictions for %d claims)",
-                rc["unjustified_abstention_penalty"], ab["unjustified"],
-                rc["unjustified_abstention_penalty"],
+                "     ├─ ⚪ %d answer-missed penalty  (%d %s, nothing extracted for %d %s)",
+                rc["answer_missed_penalty"],
+                ah["answers_missed"], plural(ah["answers_missed"], "item"),
+                rc["answer_missed_penalty"],
+                plural(rc["answer_missed_penalty"], "claim"),
             )
         else:
-            logger.info("     ├─ ⚪ 0 unjustified-abstention penalty")
+            logger.info("     ├─ ⚪ 0 answer-missed penalty")
         if rc["unjudged"]:
             logger.info(
                 "     ├─ 💥 %d unjudged by checker  (excluded from evaluation — no verdict returned)",
@@ -1156,14 +1188,16 @@ class ExtractorEvaluator:
         logger.info("    Precision — %d total predicted claims", pc["total_pred_claims"])
         logger.info("     ├─ ✅ %d supported by GT  (judged)", pc["supported"])
         logger.info("     ├─ ❌ %d unsupported  (judged)", pc["unsupported"])
-        if pc["unwarranted_answer_penalty"]:
+        if pc["abstention_misread_penalty"]:
             logger.info(
-                "     ├─ ⚪ %d unwarranted-answer penalty  (%d items, no GT for %d claims)",
-                pc["unwarranted_answer_penalty"], ab["unwarranted_answer"],
-                pc["unwarranted_answer_penalty"],
+                "     ├─ ⚪ %d abstention-misread penalty  (%d %s, no GT for %d %s)",
+                pc["abstention_misread_penalty"],
+                ah["abstentions_misread"], plural(ah["abstentions_misread"], "item"),
+                pc["abstention_misread_penalty"],
+                plural(pc["abstention_misread_penalty"], "claim"),
             )
         else:
-            logger.info("     ├─ ⚪ 0 unwarranted-answer penalty")
+            logger.info("     ├─ ⚪ 0 abstention-misread penalty")
         if pc["unjudged"]:
             logger.info(
                 "     ├─ 💥 %d unjudged by checker  (excluded from evaluation — no verdict returned)",
@@ -1175,7 +1209,7 @@ class ExtractorEvaluator:
             result.precision, pc["supported"], pc["denominator"],
             judged=bool(pc["unjudged"])))
 
-        logger.info("    F1: %s  (harmonic mean of recall · precision)",
+        logger.info("    f1: %s  (harmonic mean of recall · precision)",
                     "n/a" if result.f1 is None else f"{result.f1:.3f}")
 
         # ── Extraction stats
@@ -1198,36 +1232,35 @@ class ExtractorEvaluator:
             direction = "over-extraction" if delta > 0 else "under-extraction"
             logger.info("    Delta: %+.1f/item  (%s)", delta, direction)
 
-        # ── Abstention behavior (own dimension: item-level model
-        # behavior; tooling failures are excluded from this universe
-        # by _classify — one number, one home).
-        behavioral = (result.to_compare_items + ab["justified"]
-                      + ab["unjustified"] + ab["unwarranted_answer"])
+        # ── Abstention handling (own dimension: how the extractor treats
+        # each response kind; tooling failures are excluded from this
+        # universe by _classify — one number, one home).
         errored = (result.extraction_errors or {}).get("count", 0)
+        note = "abstention = the response asserts nothing, GT has no claims"
+        if errored:
+            note += f"; {errored} extraction-failed excluded — see 💥 Reliability"
         logger.info("")
         log_mece_tree(
-            "⚪ Abstention Behavior", behavioral, "evaluated items",
+            "⚪ Abstention Handling", ah["answers"] + ah["abstentions"],
+            "evaluated items",
             [
-                ("🔬", result.to_compare_items, "answered",
-                 "GT present, claims extracted — scored"),
-                ("✅", ab["justified"],
-                 f"justified abstention{'' if ab['justified'] == 1 else 's'}",
-                 "GT empty — no answer exists; abstention is justified"),
-                ("❌", ab["unjustified"],
-                 f"unjustified abstention{'' if ab['unjustified'] == 1 else 's'}",
-                 "GT present — an answer was expected; charged in recall"),
-                ("❌", ab["unwarranted_answer"],
-                 f"unwarranted answer{'' if ab['unwarranted_answer'] == 1 else 's'}",
-                 "GT empty — no answer exists, answered anyway; charged in precision"),
+                ("💬", ah["answers"], plural(ah["answers"], "answer"), None,
+                 [("extracted", ah["answers_extracted"],
+                   "compared in Matching Quality"),
+                  ("nothing extracted", ah["answers_missed"],
+                   "every GT claim missed — charged in recall")]),
+                ("🤐", ah["abstentions"], plural(ah["abstentions"], "abstention"), None,
+                 [("recognized", ah["abstentions_recognized"],
+                   "nothing extracted — correct"),
+                  ("misread", ah["abstentions_misread"],
+                   "claims invented from a refusal — charged in precision")]),
             ],
-            footer=[("justified", ab["justified"],
-                     ab["justified"] + ab["unwarranted_answer"], "unanswerable"),
-                    ("unjustified", ab["unjustified"],
-                     result.to_compare_items + ab["unjustified"], "answerable"),
-                    ("unwarranted", ab["unwarranted_answer"],
-                     ab["justified"] + ab["unwarranted_answer"], "unanswerable")],
-            header_note=(f"{errored} extraction-failed excluded — see 💥 Reliability"
-                         if errored else None),
+            footer=[("abstention recognized rate", ah["abstentions_recognized"],
+                     ah["abstentions"]),
+                    ("abstention misread rate", ah["abstentions_misread"],
+                     ah["abstentions"]),
+                    ("answer missed rate", ah["answers_missed"], ah["answers"])],
+            header_note=note,
         )
 
         # ── Reliability — the eval's own tooling, co-equal with P/R/F1 but
@@ -1235,6 +1268,7 @@ class ExtractorEvaluator:
         # unify under the canonical run-document later.
         ee = result.extraction_errors or {"count": 0, "rate": 0.0, "by_cause": {}}
         cf = result.checker_failures
+        behavioral = ah["answers"] + ah["abstentions"]
         rows = [
             ("📝", "Extraction (subject)", ee["count"], behavioral + ee["count"],
              "items failed", "extraction_error_rate", ee.get("by_cause") or None),
@@ -1274,8 +1308,8 @@ class ExtractorEvaluator:
                 "    Non-atomic:  %d  → atomicity_rate %.3f",
                 a["non_atomic"], a["atomicity_rate"],
             )
-            logger.info("    Claim density:  %.2f facts/claim",
-                        a["information_density"])
+            logger.info("    Claim density:  %.2f facts/claim  → claim_density %.2f",
+                        a["information_density"], a["information_density"])
 
         # ── Duplicates (orthogonal to coverage; read-only, never deduped here)
         d = result.duplicates
@@ -1293,20 +1327,8 @@ class ExtractorEvaluator:
                     logger.info("      • %s", triplet_str)
 
     def _log_done(self, result: ExtractorEvalResult) -> None:
-        """Print ✅ Done summary line."""
-        rc = result.recall_counts
-        pc = result.precision_counts
+        """Print ✅ Done summary line — items and the headline metrics."""
         logger.info("")
-        logger.info(
-            " ✅ Done: %d items compared"
-            " · recall %d/%d GT claims (%d missed, %d penalty)"
-            " · precision %d/%d predictions (%d unsupported, %d penalty)"
-            "%s",
-            result.to_compare_items,
-            rc["covered"], rc["denominator"],
-            rc["missed"], rc["unjustified_abstention_penalty"],
-            pc["supported"], pc["denominator"],
-            pc["unsupported"], pc["unwarranted_answer_penalty"],
-            (f" · 💥 {result.checker_failures['count']} unjudged excluded"
-             if result.checker_failures["count"] else ""),
-        )
+        logger.info(" ✅ Done: %d %s · %s", result.to_compare_items,
+                    plural(result.to_compare_items, "item"),
+                    format_headline(asdict(result), self._RUN_SUMMARY_KEYS))

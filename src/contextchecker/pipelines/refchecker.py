@@ -17,12 +17,17 @@ from datetime import datetime
 
 from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
-from contextchecker.pipelines.directions import unwrap_items
+from contextchecker.pipelines.directions import (
+    _location,
+    log_pipeline_tree,
+    unwrap_items,
+    verdict_summary,
+)
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
-from contextchecker.stats import GLOBAL_STATS, usage_since
-from contextchecker.utils import build_meta
+from contextchecker.stats import GLOBAL_STATS, log_token_stats, usage_since
+from contextchecker.utils import build_meta, plural
 
 logger = settings.get_logger(__name__)
 
@@ -47,6 +52,7 @@ class RefCheckerPipeline(BaseService):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
         self._init_verbosity(verbosity)
+        child_verbosity = "silent" if verbosity == "silent" else "compact"
         self.last_report: dict | None = None
 
         # Compose the two services. Each fail-fasts on its own API key here.
@@ -54,7 +60,8 @@ class RefCheckerPipeline(BaseService):
             model=extractor_model,
             base_url=extractor_base_url,
             concurrency=concurrency,
-            verbosity=verbosity,
+            verbosity=child_verbosity,
+            section_label="Extraction: response",
             dedup=dedup,
         )
         self._checking = CheckingService(
@@ -65,7 +72,8 @@ class RefCheckerPipeline(BaseService):
             joint=joint,
             joint_num=joint_num,
             max_words=max_words,
-            verbosity=verbosity,
+            verbosity=child_verbosity,
+            section_label="Checking: reference",
         )
 
     # -- Pipeline: the BaseService 7-step run() shape --
@@ -79,7 +87,7 @@ class RefCheckerPipeline(BaseService):
         4. Execute      - delegate to ExtractionService then CheckingService
         5. Serialize    - none in place (the services consolidated into data
                           already); the report lands on last_report
-        6. Log results  - done line
+        6. Log results  - results header, done line, token table once
         7. Return mutated data
 
         Raises InvalidInputError if no item carries both keys.
@@ -178,10 +186,10 @@ class RefCheckerPipeline(BaseService):
             return
         dropped = total - valid
         logger.info(" 📂 Validation")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         if dropped:
-            logger.info("    ├─ dropped:  %d  (missing response/reference)", dropped)
-        logger.info("    └─ valid:    %d items", valid)
+            logger.info("     ├─ dropped:  %d  (missing response/reference)", dropped)
+        logger.info("     └─ valid:    %d items", valid)
         logger.info("")
 
     def _log_skip(self, *args, **kwargs) -> None:
@@ -191,19 +199,52 @@ class RefCheckerPipeline(BaseService):
         if self.verbosity != "full":
             return
         logger.info(" ⚙️  Config")
-        logger.info("    Extractor:   %s", self._extractor_model)
-        logger.info("    Checker:     %s", self._checker_model)
+        logger.info("    Extractor:   %s", _location(self._extraction))
+        logger.info("    Checker:     %s", _location(self._checking))
+        logger.info("    Mode:        %s", self._checking.mode_label)
+        logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
     def _log_results(self, total: int, valid: int) -> None:
-        """Step 6: post-execution report. No BL for RefChecker; just the done line."""
+        """Step 6: consolidated results — header, done line, tokens once."""
         self._log_bl_results()
         self._log_done(total, valid)
+        if self.verbosity == "full":
+            log_token_stats()
 
     def _log_bl_results(self, *args, **kwargs) -> None:
-        pass
+        """══ REFCHECK RESULTS ══ rule + 🔀 Pipeline. Refcheck aggregates no
+        metric, so the plumbing tree is its whole results block."""
+        if self.verbosity != "full":
+            return
+        logger.info(settings.section_rule("REFCHECK RESULTS", char="═"))
+        logger.info("")
+        items = self.last_report["results"]
+        kg_key = self._extraction.kg_key
+        verdict_key = self._checking.verdict_key
+        claims = 0
+        counts = {"total": 0, "Entailment": 0, "Contradiction": 0,
+                  "Neutral": 0, "unknown": 0}
+        for item in items:
+            for triplet in item.get(kg_key) or []:
+                claims += 1
+                if verdict_key not in triplet:
+                    continue  # skipped or never checked — no verdict issued
+                counts["total"] += 1
+                verdict = triplet.get(verdict_key)
+                counts[verdict if verdict in counts else "unknown"] += 1
+        log_pipeline_tree([
+            ("📝", "extract response", self._extraction.last_stats,
+             f"{claims} {plural(claims, 'claim')}"),
+            ("🔎", "check reference", self._checking.last_stats,
+             verdict_summary(counts)),
+        ])
 
     def _log_done(self, total: int, valid: int) -> None:
         if self.verbosity != "full":
             return
-        logger.info(" ✅ Done: ref-checked %d/%d items", valid, total)
+        kg_key = self._extraction.kg_key
+        claims = sum(len(item.get(kg_key) or [])
+                     for item in self.last_report["results"])
+        logger.info(" ✅ Done: %d %s · %d %s", valid, plural(valid, "item"),
+                    claims, plural(claims, "claim"))

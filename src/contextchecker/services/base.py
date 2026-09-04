@@ -170,7 +170,8 @@ class BaseService(ABC):
         reports: list[dict] = []
         tracker = VarianceTracker(
             getattr(self, "_VARIANCE_SECTIONS", None),
-            labels=getattr(self, "_VARIANCE_LABELS", None))
+            labels=getattr(self, "_VARIANCE_LABELS", None),
+            directions=getattr(self, "_METRIC_DIRECTIONS", None))
         # Run 1 mutates *data* in place; a copy taken after it would carry
         # its results and the skip logic would no-op runs 2..N.
         pristine = copy.deepcopy(data)

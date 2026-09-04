@@ -19,9 +19,9 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError, FilterError
 from contextchecker.services.base import BaseService
 from contextchecker.models import ExtractionPayload
-from contextchecker.utils import deduplicate_triplets
+from contextchecker.utils import plural, deduplicate_triplets
 from contextchecker.workers.extractor import Extractor, Triplet
-from contextchecker.stats import PhaseStats, log_api_parsing, log_token_stats
+from contextchecker.stats import PhaseStats, log_api_parsing, log_mece_tree, log_token_stats
 
 logger = settings.get_logger(__name__)
 
@@ -122,6 +122,12 @@ class ExtractionService(BaseService):
         pipelines report per-phase requests/failures without reaching into
         the worker."""
         return self._extractor.last_stats
+
+    # ── Output contract (read by composing pipelines) ────────────
+
+    @property
+    def kg_key(self) -> str:
+        return self._kg_key
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -289,12 +295,12 @@ class ExtractionService(BaseService):
             return
         invalid = total - valid
         logger.info(" 📂 Validation")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
         if invalid > 0:
-            logger.info("    ├─ dropped:  %d  (no '%s' key)", invalid, self.source_key)
+            logger.info("     ├─ dropped:  %d  (no '%s' key)", invalid, self.source_key)
         if abstained > 0:
-            logger.info("    ├─ abstain:  %d  (heuristic: empty/refusal response)", abstained)
-        logger.info("    └─ valid:  %d items", valid - abstained)
+            logger.info("     ├─ abstain:  %d  (heuristic: empty/refusal response)", abstained)
+        logger.info("     └─ valid:    %d items", valid - abstained)
         logger.info("")
 
     def _log_skip(self, valid: int, skipped: int, pending: int) -> None:
@@ -303,10 +309,10 @@ class ExtractionService(BaseService):
             return
         if skipped == 0:
             return
-        logger.info(" 🔄 Skip: items with existing extraction (≥1 claim)")
-        logger.info("    Total:      %d valid items", valid)
-        logger.info("    ├─ skipped: %d items (already extracted)", skipped)
-        logger.info("    └─ pending: %d items", pending)
+        logger.info(" 🔄 Skip")
+        logger.info("    Total:        %d valid items", valid)
+        logger.info("     ├─ skipped:  %d items  (already extracted)", skipped)
+        logger.info("     └─ pending:  %d items", pending)
         logger.info("")
 
     def _log_config(self) -> None:
@@ -345,39 +351,34 @@ class ExtractionService(BaseService):
             logger.info("")
         log_api_parsing(pending_count, phase_stats)
         worker_empty = phase_stats.empty if phase_stats else 0
-        total_output = successful + worker_empty + abstained_count
         # Claims actually stored = raw extracted minus duplicates dropped.
         unique_claims = total_claims - dups_removed
         self._log_bl_results(
-            total_output, unique_claims, successful,
-            worker_empty + abstained_count, dups_removed,
+            successful, worker_empty + abstained_count, failed,
+            unique_claims, dups_removed,
         )
-        self._log_done(total, unique_claims, abstained_count, skipped, dups_removed)
+        self._log_done(pending_count, unique_claims, abstained_count, skipped, dups_removed)
         if self.verbosity == "full":
             log_token_stats()
 
     def _log_bl_results(
-        self, valid_items: int, claims: int, with_claims: int, empty_count: int,
-        dups_removed: int = 0,
+        self, with_claims: int, abstentions: int, failed: int,
+        claims: int, dups_removed: int = 0,
     ) -> None:
-        """Print 📝 Extraction summary.
-
-        Shows items with output: how many generated claims vs empty, and any
-        exact duplicates removed by the dedup pass.
-        """
-        logger.info(" 📝 Extraction:")
-        logger.info("    %d items with output", valid_items)
-        # Sub-lines after the 💎 line; the last one gets the └─ connector.
-        tail = []
-        if dups_removed > 0:
-            tail.append(("🔁", f"{dups_removed} exact duplicates removed"))
-        if empty_count > 0:
-            tail.append(("⚪", f"{empty_count} abstentions → 0 claims"))
-        prefix = "├─" if tail else "└─"
-        logger.info("     %s 💎 %d items → %d claims", prefix, with_claims, claims)
-        for i, (icon, text) in enumerate(tail):
-            prefix = "└─" if i == len(tail) - 1 else "├─"
-            logger.info("     %s %s %s", prefix, icon, text)
+        """Print the 📝 Extraction tree: every attempted item lands in
+        exactly one branch. Claim counts do not partition items, so they
+        ride on the 💎 branch in square brackets (foreign numbers)."""
+        foreign = f"{claims} {plural(claims, 'claim')}"
+        if dups_removed:
+            foreign += f", {dups_removed} exact {plural(dups_removed, 'duplicate')} removed"
+        log_mece_tree(
+            "📝 Extraction", with_claims + abstentions + failed, "items",
+            [
+                ("💎", with_claims, "with claims", f"[{foreign}]"),
+                ("⚪", abstentions, plural(abstentions, "abstention"), None),
+                ("💥", failed, "extraction failed", None),
+            ],
+        )
         logger.info("")
 
     def _log_done(
@@ -387,16 +388,11 @@ class ExtractionService(BaseService):
         """Print ✅ Done summary line (full only — pipelines own the done line)."""
         if self.verbosity != "full":
             return
-        parts = [f"{claims} claims"]
+        parts = [f"{total} {plural(total, 'item')}", f"{claims} {plural(claims, 'claim')}"]
         if dups_removed > 0:
-            parts.append(f"{dups_removed} dups removed")
+            parts.append(f"{dups_removed} {plural(dups_removed, 'dup')} removed")
         if abstentions > 0:
-            parts.append(f"{abstentions} abstentions")
+            parts.append(f"{abstentions} {plural(abstentions, 'abstention')}")
         if skipped > 0:
-            parts.append(f"{skipped} skipped")
-        logger.info(
-            " ✅ Done: %d items extracted → %s", total, ", ".join(parts)
-        )
-
-    # TODO: _run_validation pass (optional, percentage-based)
-    # TODO: _run_add_missing pass (optional, percentage-based)
+            parts.append(f"{skipped} {plural(skipped, 'item')} skipped")
+        logger.info(" ✅ Done: %s", " · ".join(parts))

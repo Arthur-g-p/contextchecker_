@@ -91,9 +91,10 @@ For scalar metric families (ragcheck / faithcheck 📊 Metrics).
    needed evidence`). Each group's branch glyphs close (`└─`); glyphs
    group, they never imply summation.
 3. **Labels are full plain English** — no underscores, no
-   abbreviations; the column widens before a word shortens. (The
-   variance block deliberately keeps raw JSON keys — there, the key is
-   the lineage.)
+   abbreviations; the column widens before a word shortens. The
+   variance block repeats each rate under exactly the name its per-run
+   line printed: plain label for tree and footer rates, raw key for
+   rate rows and `→ key value` lines.
 4. **A single-metric tree** is the degenerate case: one `└─` row, which
    may carry an inline interpretation in its bracket.
 
@@ -139,6 +140,6 @@ Contracts sketched, to be promoted to rule sets as each is unified:
 - **Headline scalar**: always with its fraction —
   `→ accuracy 0.803  (102 / 127)` — never bare. A derived scalar with
   no fraction (F1) names its inputs instead:
-  `F1: 0.940  (harmonic mean of recall · precision)`.
+  `f1: 0.940  (harmonic mean of recall · precision)`.
 - **Ordering**: findings blocks → `✅ Done` → `── Execution Stats ──`.
   The Done line closes the findings; the token table is the appendix.

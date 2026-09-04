@@ -172,7 +172,7 @@ def extract(
 
     # Write output
     output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Results written to %s", output_file)
+    logger.info("Written: %s", output_file)
 
 
 @app.command()
@@ -227,7 +227,7 @@ def check(
 
     # Write output
     output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Results written to %s", output_file)
+    logger.info("Written: %s", output_file)
 
 
 @app.command()
@@ -279,7 +279,7 @@ def atomize(
 
     # Write output
     output_file.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Results written to %s", output_file)
+    logger.info("Written: %s", output_file)
 
     # Write the decision trace artifact (one record per item: full input
     # triplets, every decision + reasoning + children, duplicates_removed).
@@ -288,7 +288,7 @@ def atomize(
         trace_file.write_text(
             json.dumps(service.last_trace, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        logger.info("Decision trace written to %s", trace_file)
+        logger.info("Written: %s", trace_file)
 
 
 @app.command()
@@ -348,7 +348,7 @@ def refcheck(
 
     report = {"_args": _capture_args("refcheck"), **report}
     output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Results written to %s", output_file)
+    logger.info("Written: %s", output_file)
 
 
 @app.command()
@@ -409,7 +409,7 @@ def ragcheck(
 
     report = {"_args": _capture_args("ragcheck"), **report}
     output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Report written to %s", output_file)
+    logger.info("Written: %s", output_file)
 
 
 @app.command()
@@ -470,7 +470,7 @@ def faithcheck(
 
     report = {"_args": _capture_args("faithcheck"), **report}
     output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Report written to %s", output_file)
+    logger.info("Written: %s", output_file)
 
 
 # ── Eval subcommand group ────────────────────────────────────────────────────
@@ -567,8 +567,8 @@ def eval_checker(
         encoding="utf-8"
     )
     logger.info("")
-    logger.info("Results written to %s", output_file)
-    logger.info("Disagreements written to %s", disagree_file)
+    logger.info("Written: %s", output_file)
+    logger.info("Written: %s", disagree_file)
 
 
 
@@ -678,8 +678,8 @@ def eval_extractor(
     )
 
     logger.info("")
-    logger.info("Results written to %s", output_file)
-    logger.info("Disagreements written to %s", disagree_file)
+    logger.info("Written: %s", output_file)
+    logger.info("Written: %s", disagree_file)
 
 
 if __name__ == "__main__":

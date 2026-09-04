@@ -30,13 +30,14 @@ from contextchecker.stats import (
     sum_usage,
     usage_since,
     VarianceTracker,
+    format_headline,
     log_mece_tree,
     log_multi_run_hint,
     log_rate_rows,
     log_run_line,
     log_token_stats,
 )
-from contextchecker.utils import build_meta, canonicalize_triplets
+from contextchecker.utils import build_meta, canonicalize_triplets, plural
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 
@@ -80,6 +81,18 @@ class CheckerEvaluator:
         ],
         "behavior": [],
         "health": ["checker_failure_rate"],
+    }
+    _METRIC_DIRECTIONS = {
+        "accuracy": "higher is better — read against the majority baseline",
+        "macro_f1": "higher is better", "entailment_f1": "higher is better",
+        "contradiction_f1": "higher is better", "neutral_f1": "higher is better",
+    }
+    # Same names as the Per-Label table cells they come from.
+    _VARIANCE_LABELS = {
+        "macro_f1": "macro avg f1",
+        "entailment_f1": "Entailment f1",
+        "contradiction_f1": "Contradiction f1",
+        "neutral_f1": "Neutral f1",
     }
 
     def __init__(
@@ -139,7 +152,8 @@ class CheckerEvaluator:
         log_multi_run_hint(self._runs)
         summaries: list[dict] = []
         disagreements: list[dict] = []
-        tracker = VarianceTracker(self._VARIANCE_SECTIONS)
+        tracker = VarianceTracker(self._VARIANCE_SECTIONS, labels=self._VARIANCE_LABELS,
+                                  directions=self._METRIC_DIRECTIONS)
         for run in range(1, self._runs + 1):
             logger.info("")
             logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
@@ -559,7 +573,7 @@ class CheckerEvaluator:
     ) -> None:
         """Print 📂 Data section — GT-specific validation summary."""
         logger.info(" 📂 Data")
-        logger.info("    Total:       %d items", total)
+        logger.info("    Total:        %d items", total)
 
         dropped_gt = skip_info["missing_gt"]
         dropped_ctx = skip_info["missing_context"]
@@ -568,23 +582,23 @@ class CheckerEvaluator:
 
         if dropped_gt > 0:
             logger.info(
-                "    ├─ dropped:  %d  (missing GT)", dropped_gt
+                "     ├─ dropped:  %d  (GT empty — no labeled claims to compare)", dropped_gt
             )
         if dropped_ctx > 0:
             logger.info(
-                "    ├─ dropped:  %d  (missing reference)", dropped_ctx
+                "     ├─ dropped:  %d  (missing reference)", dropped_ctx
             )
         if dropped_empty > 0:
             logger.info(
-                "    ├─ dropped:  %d  (empty GT after filtering)",
+                "     ├─ dropped:  %d  (empty GT after filtering)",
                 dropped_empty,
             )
         if unlabeled > 0:
             logger.info(
-                "    ├─ skipped:  %d claims  (no human_label)", unlabeled
+                "     ├─ skipped:  %d claims  (no human_label)", unlabeled
             )
         logger.info(
-            "    └─ valid:    %d items → %s labeled claims",
+            "     └─ valid:    %d items → %s labeled claims",
             evaluable_count,
             f"{total_claims:,}",
         )
@@ -600,14 +614,7 @@ class CheckerEvaluator:
         logger.info("    Checker:     %s", location)
         logger.info("    GT key:      %s", self._gt_key)
 
-        if self._service.joint:
-            logger.info(
-                "    Mode:        joint (max %d claims/call, %d max words)",
-                self._service.joint_num,
-                self._service.max_words or 0,
-            )
-        else:
-            logger.info("    Mode:        single")
+        logger.info("    Mode:        %s", self._service.mode_label)
 
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
@@ -619,9 +626,11 @@ class CheckerEvaluator:
         pred_flat: list[str],
     ) -> None:
         """Print ── CHECKER EVAL ── section: accuracy, report, matrix."""
-        logger.info("")
-        logger.info(settings.section_rule("CHECKER EVAL"))
-        logger.info("")
+        if self._runs > 1:
+            logger.info("")
+        else:
+            logger.info(settings.section_rule("CHECKER EVAL", char="═"))
+            logger.info("")
         correct = sum(g == p for g, p in zip(gt_flat, pred_flat))
         wrong = result.total_claims - correct
         labeled = result.total_claims + result.parse_errors
@@ -638,21 +647,10 @@ class CheckerEvaluator:
             footer=[("accuracy", correct, result.total_claims,
                      "judged" if result.parse_errors else "")],
         )
-        # Majority-class baseline: on an imbalanced slice a constant
-        # answer scores this — accuracy below it is worse than a rock.
-        if gt_flat:
-            counts = {label: gt_flat.count(label) for label in LABELS}
-            top_label = max(counts, key=counts.get)
-            logger.info(
-                "    ℹ️  majority baseline %.3f  (a constant '%s' checker"
-                " scores this)",
-                counts[top_label] / len(gt_flat), top_label,
-            )
-
         # ── Per-label report (from the stored sklearn dict; the accuracy
         # row stays out — it lives in the tree footer, one home)
         logger.info("")
-        logger.info(" 📊 Per-Label Report:")
+        logger.info(" 📊 Per-Label Report")
         col_rule = "    " + "─" * 52
         logger.info("    %-14s%10s%9s%9s%10s",
                     "label", "precision", "recall", "f1", "total")
@@ -674,6 +672,16 @@ class CheckerEvaluator:
             logger.info(
                 "    ⚠️  %s: 0 labeled claims — the zeros dilute the"
                 " macro avg", ", ".join(zero_support),
+            )
+        # Majority-class baseline: a property of the label distribution,
+        # so it lives with the table!
+        if gt_flat:
+            counts = {label: gt_flat.count(label) for label in LABELS}
+            top_label = max(counts, key=counts.get)
+            logger.info(
+                "    ℹ️  majority baseline %.3f — a constant '%s' checker"
+                " scores this accuracy",
+                counts[top_label] / len(gt_flat), top_label,
             )
 
         # ── Confusion matrix, with marginals. The grand total is the
@@ -710,13 +718,8 @@ class CheckerEvaluator:
         )
 
     def _log_done(self, result: CheckerEvalResult) -> None:
-        """Print ✅ Done summary line."""
-        total_skipped = sum(result.skipped.values())
+        """Print ✅ Done summary line — items and the headline metrics."""
         logger.info("")
-        logger.info(
-            " ✅ Done: %s claims evaluated (%d skipped, "
-            "%d unjudged)",
-            f"{result.total_claims:,}",
-            total_skipped,
-            result.parse_errors,
-        )
+        logger.info(" ✅ Done: %d %s · %s", result.total_claims,
+                    plural(result.total_claims, "claim"),
+                    format_headline(asdict(result), self._RUN_SUMMARY_KEYS))
