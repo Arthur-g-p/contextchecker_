@@ -23,6 +23,7 @@ from contextchecker.services.checking import (
     CONTEXT_BUDGET_RATIO,
 )
 from contextchecker.workers.checker import (
+    ClaimVerdict,
     Verdict,
     _format_reference,
     _reference_word_count,
@@ -200,7 +201,8 @@ class TestSerialize:
                 {"subject": "C", "predicate": "is", "object": "D"},
             ]},
         ]
-        verdicts_map = {0: {0: Verdict.ENTAILMENT, 1: Verdict.CONTRADICTION}}
+        verdicts_map = {0: {0: ClaimVerdict(verdict=Verdict.ENTAILMENT),
+                            1: ClaimVerdict(verdict=Verdict.CONTRADICTION)}}
         service._serialize(items, verdicts_map)
         assert items[0][KG_KEY][0]["checker-model_checker_verdict"] == "Entailment"
         assert items[0][KG_KEY][1]["checker-model_checker_verdict"] == "Contradiction"
@@ -215,7 +217,8 @@ class TestSerialize:
                 {"subject": "C", "predicate": "is", "object": "D"},
             ]},
         ]
-        verdicts_map = {0: {0: Verdict.ENTAILMENT, 1: None}}
+        verdicts_map = {0: {0: ClaimVerdict(verdict=Verdict.ENTAILMENT),
+                            1: ClaimVerdict(verdict=None)}}
         service._serialize(items, verdicts_map)
         assert items[0][KG_KEY][0]["checker-model_checker_verdict"] == "Entailment"
         assert items[0][KG_KEY][1]["checker-model_checker_verdict"] is None

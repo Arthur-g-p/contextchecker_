@@ -26,7 +26,7 @@ from contextchecker.models import CheckingPayload
 from contextchecker.utils import canonicalize_triplets
 from contextchecker.services.base import BaseService
 from contextchecker.workers.checker import (
-    Checker, Verdict, ClaimVerdict, _reference_word_count,
+    Checker, ClaimVerdict, _reference_word_count,
 )
 from contextchecker.stats import GLOBAL_STATS, log_api_parsing, log_token_stats
 
@@ -248,11 +248,7 @@ class CheckingService(BaseService):
 
         for item_idx, claim_verdicts in verdicts_map.items():
             for claim_idx, cv in claim_verdicts.items():
-                if isinstance(cv, ClaimVerdict):
-                    verdict_val = cv.verdict.value if cv.verdict else None
-                else:
-                    verdict_val = cv.value if cv else None
-
+                verdict_val = cv.verdict.value if cv.verdict else None
                 if verdict_val is not None:
                     total_triplets += 1
                     if verdict_val == "Entailment":
@@ -540,16 +536,11 @@ class CheckingService(BaseService):
                     continue
                 cv = item_verdicts[claim_idx]
                 triplet.pop(self._checker_error_key, None)
-                # Support both ClaimVerdict and bare Verdict/None values
-                if isinstance(cv, ClaimVerdict):
-                    triplet[self._verdict_key] = cv.verdict.value if cv.verdict else None
-                    triplet[self._explanation_key] = cv.explanation
-                    # Null verdict is never left uninterpretable: persist WHY
-                    if cv.verdict is None and cv.error:
-                        triplet[self._checker_error_key] = cv.error
-                else:
-                    triplet[self._verdict_key] = cv.value if cv else None
-                    triplet[self._explanation_key] = None
+                triplet[self._verdict_key] = cv.verdict.value if cv.verdict else None
+                triplet[self._explanation_key] = cv.explanation
+                # Null verdict is never left uninterpretable: persist WHY
+                if cv.verdict is None and cv.error:
+                    triplet[self._checker_error_key] = cv.error
 
     # ── Logging (service-owned sections) ─────────────────────────
 
