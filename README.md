@@ -168,10 +168,13 @@ spelled the same way in every command, so those are the ones worth learning.
 each step needs.
 
 The pipelines and evals (`ragcheck`, `faithcheck`, `refcheck`, `eval
-extractor`, `eval checker`) write a single self-contained JSON report: an
-`_args` block (what you asked for — every flag of the invocation), a `_meta`
-block (what the run turned out to be — counts, timings, derived keys),
-metrics where the command computes any, and per-claim verdicts. The building
+extractor`, `eval checker`) write two JSON files. The record holds everything: an `_args` block (what
+you asked for — every flag of the invocation), a `_meta` block (what the run
+turned out to be — counts, timings, derived keys), `metrics` where the command
+computes any, every count the console prints, and the complete per-item
+claim record — `--runs N` adds entries, it never reshapes. The
+`_findings.json` sibling is the review queue: only what went wrong, keyed by
+the console's own branch names, derived from the record. The building
 blocks (`extract`, `check`, `atomize`) instead emit the item list itself,
 enriched in place, so each one's output is the next one's input.
 `contextchecker --help` lists all commands and flags.
