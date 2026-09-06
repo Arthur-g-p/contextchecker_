@@ -32,6 +32,7 @@ from contextchecker.pipelines.directions import (
     _location,
     abstention_counts,
     log_pipeline_tree,
+    pipeline_counts,
     verdict_summary,
     normalize_chunks,
     run_direction,
@@ -39,7 +40,7 @@ from contextchecker.pipelines.directions import (
 )
 from contextchecker.pipelines.ragchecker import _ENTAILMENT, _ratio, _row_entailed
 from contextchecker.stats import GLOBAL_STATS, format_headline, log_mece_tree, log_rate_rows, log_token_stats, usage_since
-from contextchecker.utils import build_meta, plural
+from contextchecker.utils import build_meta, findings_view, plural
 
 logger = settings.get_logger(__name__)
 
@@ -81,7 +82,12 @@ class FaithfulnessPipeline(BaseService):
         child_verbosity = (
             "silent" if (verbosity == "silent" or self._runs > 1) else "compact"
         )
+        # The record and the findings, assembled by the base run loop from
+        # the per-run entries _run_once leaves on last_run / last_run_findings.
         self.last_report: dict | None = None
+        self.last_findings: dict | None = None
+        self.last_run: dict | None = None
+        self.last_run_findings: dict | None = None
 
         self._response_kg = f"{extractor_model}_response_kg"
         self._response_err = f"{extractor_model}_extraction_error"
@@ -119,9 +125,8 @@ class FaithfulnessPipeline(BaseService):
     # -- Pipeline: the BaseService 7-step run() shape --
 
     async def run(self, data: list[dict]) -> list[dict]:
-        """Run the pipeline; with runs > 1, repeat it and report variance."""
-        if self._runs <= 1:
-            return await self._run_once(data)
+        """Run the pipeline N times (N = --runs, default 1); the base loop
+        assembles last_report and last_findings."""
         return await self._run_repeated(data)
 
     async def _run_once(
@@ -134,7 +139,7 @@ class FaithfulnessPipeline(BaseService):
         2. Filter       - none (no skipping)
         3. Log pre-exec - validation + config
         4. Execute      - extraction, then the matrix direction
-        5. Serialize    - none in place; report goes to last_report
+        5. Serialize    - none in place; the run entry goes to last_run
         6. Log results  - consolidated results block
         7. Return mutated data
         """
@@ -154,7 +159,11 @@ class FaithfulnessPipeline(BaseService):
         await run_direction(self._check, valid, self._direction)
 
         self._serialize()
-        self.last_report = self.build_report(data)
+        self.last_run = self._build_run(data)
+        self.last_run_findings = {
+            "_meta": dict(self.last_run["_meta"]),
+            "findings": self._build_findings(self.last_run["items"]),
+        }
         if report:
             self._log_results()
         return data
@@ -198,9 +207,15 @@ class FaithfulnessPipeline(BaseService):
 
     # -- Report (the single output artifact) --
 
-    def build_report(self, data: list[dict]) -> dict:
-        """Project the mutated items into the faithfulness report."""
-        results = []
+    def _build_run(self, data: list[dict]) -> dict:
+        """One ``runs[]`` entry of the record: {_meta, metrics, counts, items}.
+
+        ``metrics`` are the varianced scalars (the console's Metrics roster),
+        ``counts`` every number the console blocks print, ``items`` the
+        complete per-item record. Pure projection of the mutated items —
+        loss-free, no LLM calls, safe to rebuild anytime.
+        """
+        items = []
         dropped = 0
         for item in data:
             if not isinstance(item, dict) or any(
@@ -208,23 +223,105 @@ class FaithfulnessPipeline(BaseService):
             ):
                 dropped += 1
                 continue
-            results.append(self._build_result_entry(item))
+            items.append(self._build_result_entry(item))
 
         timestamp, duration = self._run_timing()
-        return {
-            "_meta": build_meta(
-                "faithcheck",
-                timestamp=timestamp,
-                duration_seconds=duration,
-                total_items=len(data),
-                evaluated_items=len(results),
-                dropped_items=dropped,
-                request_strategies=GLOBAL_STATS.strategies(),
-                usage=usage_since(getattr(self, "_usage_at_start", None)),
-            ),
-            "overall_metrics": self._compute_overall(results),
-            "results": results,
+        meta = build_meta(
+            "faithcheck",
+            timestamp=timestamp,
+            duration_seconds=duration,
+            total_items=len(data),
+            evaluated_items=len(items),
+            dropped_items=dropped,
+            request_strategies=GLOBAL_STATS.strategies(),
+            usage=usage_since(getattr(self, "_usage_at_start", None)),
+        )
+        metrics, support = self._compute_metrics(items)
+        counts = {
+            # 📊 Metrics brackets
+            "support": support,
+            # 🔀 Pipeline
+            "pipeline": pipeline_counts(self._pipeline_phases(items)),
+            # ⚪ Abstention Behavior
+            "abstention": abstention_counts(items),
+            # 💥 Reliability
+            "reliability": self._reliability_counts(items),
         }
+        return {"_meta": meta, "metrics": metrics, "counts": counts, "items": items}
+
+    def _pipeline_phases(self, items: list[dict]) -> list[tuple]:
+        """The two phases, for the 🔀 tree and ``counts.pipeline`` alike:
+        (icon, name, PhaseStats, summary text, tallies)."""
+        claims = sum(len(e["response_claims"]) for e in items)
+        cells = {"total": 0, "Entailment": 0, "Contradiction": 0,
+                 "Neutral": 0, "unknown": 0}
+        for e in items:
+            for row in e["retrieved2response"]:
+                for cell in row:
+                    cells["total"] += 1
+                    verdict = cell.get("verdict")
+                    cells[verdict if verdict in cells else "unknown"] += 1
+        tally = {"verdicts": cells["total"], "Entailment": cells["Entailment"],
+                 "Contradiction": cells["Contradiction"], "Neutral": cells["Neutral"],
+                 "unjudged": cells["unknown"]}
+        return [
+            ("📝", "extract response", self._extract.last_stats,
+             f"{claims} {plural(claims, 'claim')}", {"claims": claims}),
+            ("🔎", "retrieved2response", self._check.last_stats,
+             verdict_summary(cells), tally),
+        ]
+
+    @staticmethod
+    def _reliability_counts(items: list[dict]) -> dict:
+        """The numbers behind the two 💥 rows."""
+        ab = abstention_counts(items)
+        total_cells, none_cells = _verdict_cell_counts(items)
+        return {
+            "extraction": {"failed": ab["errored"], "items": ab["evaluated"],
+                           "by_cause": {"response": ab["errored"]}},
+            "checking": {"unjudged": none_cells, "issued": total_cells},
+        }
+
+    @staticmethod
+    def _build_findings(items: list[dict]) -> dict:
+        """The review queue: the claim outcomes behind faithfulness plus the
+        ⚪ and 💥 branches, one list each — ``ungrounded`` (no chunk entails
+        the claim), ``contradicted`` (a chunk contradicts it; the strongest
+        signal, named with its explanation), ``undecidable`` (no chunk
+        entails it and at least one verdict is missing, so the score
+        excludes it), ``abstained``, ``extraction_failed``. A pure view over
+        the record's items."""
+        def classify(item: dict):
+            head = {"query_id": item["query_id"], "query": item["query"]}
+            if item.get("extraction_errors"):
+                yield "extraction_failed", {**head, "cause": item["extraction_errors"]["response"]}
+                return
+            if item.get("is_abstention"):
+                yield "abstained", {**head, "response": item["response"]}
+                return
+            doc_ids = [c["doc_id"] for c in item["retrieved_context"]]
+            for claim, row in zip(item["response_claims"], item["retrieved2response"]):
+                verdicts = [c.get("verdict") for c in row]
+                if _ENTAILMENT in verdicts:
+                    continue  # grounded — not a finding
+                text = f"{claim['subject']} {claim['predicate']} {claim['object']}"
+                contradictions = [(doc_ids[d], c.get("explanation"))
+                                  for d, c in enumerate(row) if c.get("verdict") == "Contradiction"]
+                tally = {v: verdicts.count(v) for v in ("Neutral", "Contradiction") if verdicts.count(v)}
+                if contradictions:
+                    for doc_id, explanation in contradictions:
+                        yield "contradicted", {**head, "claim": text, "doc_id": doc_id,
+                                               "explanation": explanation, "verdicts": tally}
+                elif None in verdicts:
+                    yield "undecidable", {**head, "claim": text, "verdicts": tally,
+                                          "unjudged": {doc_ids[d]: c.get("error", "checker_failure")
+                                                       for d, c in enumerate(row) if c.get("verdict") is None}}
+                else:
+                    yield "ungrounded", {**head, "claim": text, "chunks_checked": len(row)}
+
+        return findings_view(
+            ["ungrounded", "contradicted", "undecidable", "abstained", "extraction_failed"],
+            items, classify)
 
     def _run_timing(self) -> tuple[str, float]:
         """(timestamp, elapsed) for the report envelope; safe before a run."""
@@ -292,32 +389,34 @@ class FaithfulnessPipeline(BaseService):
         return {"faithfulness": _ratio(sum(known), len(known))}
 
     @staticmethod
-    def _compute_overall(results: list[dict]) -> dict:
-        """Macro faithfulness + the reliability rates."""
-        values = [e["metrics"]["faithfulness"] for e in results
+    @staticmethod
+    def _compute_metrics(items: list[dict]) -> tuple[dict, dict]:
+        """(metrics, support): macro faithfulness, the abstention rate and
+        the two reliability rates — exactly the variance roster."""
+        values = [e["metrics"]["faithfulness"] for e in items
                   if e["metrics"]["faithfulness"] is not None]
-        overall = {
+        metrics = {
             "faithfulness": round(sum(values) / len(values), 4) if values else None,
-            "support": {"faithfulness": len(values)},
+            "abstention_rate": None,
+            "extraction_error_rate": None,
+            "checker_failure_rate": None,
         }
-
-        evaluated = len(results)
+        support = {"faithfulness": len(values)}
+        evaluated = len(items)
         if evaluated == 0:
-            return overall
+            return metrics, support
 
-        ab = abstention_counts(results)
+        ab = abstention_counts(items)
         # No-results leave the denominator: the abstention rate is over items
         # the model actually got to answer. A tooling failure is charged
         # exactly once, in extraction_error_rate.
-        behavioral = evaluated - ab["errored"]
-        overall["abstention_rate"] = _ratio(ab["abstained"], behavioral)
-        overall["extraction_error_rate"] = _ratio(ab["errored"], evaluated)
+        metrics["abstention_rate"] = _ratio(ab["abstained"], evaluated - ab["errored"])
+        metrics["extraction_error_rate"] = _ratio(ab["errored"], evaluated)
+        total_cells, none_cells = _verdict_cell_counts(items)
+        metrics["checker_failure_rate"] = _ratio(none_cells, total_cells)
+        return metrics, support
 
-        total_cells, none_cells = _verdict_cell_counts(results)
-        overall["checker_failure_rate"] = _ratio(none_cells, total_cells)
-        return overall
-
-    # -- Serialization: none in place; last_report is the artifact --
+    # -- Serialization: none in place; last_run is the artifact --
 
     def _serialize(self, *args, **kwargs) -> None:
         pass
@@ -376,41 +475,19 @@ class FaithfulnessPipeline(BaseService):
         """══ RESULTS ══ rule + 🔀 Pipeline: where the requests went."""
         if self.verbosity != "full":
             return
-        report = self.last_report
-        results = report["results"]
-
         logger.info(settings.section_rule("FAITHFULNESS RESULTS", char="═"))
         logger.info("")
-
-        # ── 🔀 Pipeline
-        claims = sum(len(e["response_claims"]) for e in results)
-        cells = {"total": 0, "Entailment": 0, "Contradiction": 0,
-                 "Neutral": 0, "unknown": 0}
-        for e in results:
-            for row in e["retrieved2response"]:
-                for cell in row:
-                    cells["total"] += 1
-                    verdict = cell.get("verdict")
-                    if verdict in cells:
-                        cells[verdict] += 1
-                    else:
-                        cells["unknown"] += 1
-        log_pipeline_tree([
-            ("📝", "extract response", self._extract.last_stats,
-             f"{claims} {plural(claims, 'claim')}"),
-            ("🔎", "retrieved2response", self._check.last_stats,
-             verdict_summary(cells)),
-        ])
+        log_pipeline_tree(self._pipeline_phases(self.last_run["items"]))
 
     def _log_metrics(self) -> None:
         """📊 Metrics: the faithfulness score + reliability."""
         if self.verbosity != "full":
             return
-        report = self.last_report
-        om = report["overall_metrics"]
+        run = self.last_run
+        om = run["metrics"]
 
-        n = report["_meta"]["evaluated_items"]
-        support = om.get("support", {})
+        n = run["_meta"]["evaluated_items"]
+        support = run["counts"]["support"]
         faithfulness = om.get("faithfulness")
         value = "n/a" if faithfulness is None else f"{faithfulness:.3f}"
         note = "response claims supported by the retrieved context"
@@ -430,7 +507,7 @@ class FaithfulnessPipeline(BaseService):
         inside the rate denominator."""
         if self.verbosity != "full":
             return
-        ab = abstention_counts(self.last_report["results"])
+        ab = self.last_run["counts"]["abstention"]
         # Behavior only: extraction-failed items are out of the tree AND
         # out of the rate denominator (charged once, in 💥 Reliability).
         top = ab["evaluated"] - ab["errored"]
@@ -455,15 +532,14 @@ class FaithfulnessPipeline(BaseService):
         """💥 Reliability rate rows — harness health, always printed."""
         if self.verbosity != "full":
             return
-        report = self.last_report
-        ab = abstention_counts(report["results"])
-        total_cells, none_cells = _verdict_cell_counts(report["results"])
-        causes = {"response": ab["errored"]} if ab["errored"] else None
+        rel = self.last_run["counts"]["reliability"]
+        ext, chk = rel["extraction"], rel["checking"]
+        causes = {k: v for k, v in ext["by_cause"].items() if v} or None
         log_rate_rows(
             "💥 Reliability",
-            [("📝", "Extraction", ab["errored"], ab["evaluated"],
+            [("📝", "Extraction", ext["failed"], ext["items"],
               "items failed", "extraction_error_rate", causes),
-             ("🔎", "Checking", none_cells, total_cells,
+             ("🔎", "Checking", chk["unjudged"], chk["issued"],
               "verdicts unjudged", "checker_failure_rate", None)],
             header_note="tooling — excluded from all metrics,"
                         " counted once here",
@@ -473,11 +549,10 @@ class FaithfulnessPipeline(BaseService):
     def _log_done(self) -> None:
         if self.verbosity != "full":
             return
-        report = self.last_report
-        n = report["_meta"]["evaluated_items"]
+        run = self.last_run
+        n = run["_meta"]["evaluated_items"]
         logger.info(" ✅ Done: %d %s · %s", n, plural(n, "item"),
-                    format_headline(report.get("overall_metrics", {}),
-                                    self._RUN_SUMMARY_KEYS))
+                    format_headline(run["metrics"], self._RUN_SUMMARY_KEYS))
 
 
 # ── Library facade (real-time, single item) ──────────────────────────────────
@@ -520,4 +595,4 @@ def check_faithfulness(
         **pipeline_kwargs,
     )
     pipeline.run_sync([{"response": response, "retrieved_context": retrieved_context}])
-    return pipeline.last_report["results"][0]
+    return pipeline.last_report["runs"][0]["items"][0]

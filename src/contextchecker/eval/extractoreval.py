@@ -9,14 +9,13 @@ Architecture:
     - Matching mode: LLM (online, 2-pass checker).
     - Strict separation: _validate (fail-fast) → extract → _classify (bucket sort).
     - Owns: GT validation, matching orchestration, IR metric computation,
-      disagreement collection, and the ── EXTRACTOR EVAL ── logging section.
+      the record + findings documents, and the ── EXTRACTOR EVAL ── logging section.
     - Does NOT inherit BaseService — evaluators measure, services mutate.
 """
 
-import asyncio
 import copy
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from contextchecker import settings
@@ -24,22 +23,19 @@ from contextchecker.exceptions import InvalidInputError
 from contextchecker.models import ExtractorEvalResult
 from contextchecker.stats import (
     GLOBAL_STATS,
-    sum_usage,
     usage_since,
-    VarianceTracker,
     log_mece_tree,
     format_headline,
-    log_multi_run_hint,
     log_rate_rows,
-    log_run_line,
-    log_token_stats,
 )
 from contextchecker.utils import (
     plural,
     build_meta,
     canonicalize_triplets,
     find_duplicate_triplets,
+    findings_view,
 )
+from contextchecker.eval.base import Evaluator
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService, mode_label
 from contextchecker.services.extraction import ExtractionService
@@ -92,10 +88,14 @@ class _ItemMatchResult:
     tp_precision: int
     fp: int
     fn: int
-    false_positives: list[dict]     # disagreement detail per FP
-    false_negatives: list[dict]     # disagreement detail per FN
+    false_positives: list[dict]     # judged misses, pass 2 (one per FP)
+    false_negatives: list[dict]     # judged misses, pass 1 (one per FN)
     unjudged_gt: list[dict] = field(default_factory=list)    # pass 1 checker failures
     unjudged_pred: list[dict] = field(default_factory=list)  # pass 2 checker failures
+    # The complete record: every claim of each side with its verdict and
+    # explanation — what the per-item ``items`` entry is built from.
+    gt_claims: list[dict] = field(default_factory=list)
+    pred_claims: list[dict] = field(default_factory=list)
 
 
 def _bucket_rate(count: int, denominator: int) -> float | None:
@@ -103,7 +103,7 @@ def _bucket_rate(count: int, denominator: int) -> float | None:
     return round(count / denominator, 4) if denominator else None
 
 
-class ExtractorEvaluator:
+class ExtractorEvaluator(Evaluator):
     """Evaluates extraction quality by extracting live then matching against GT.
 
     Flow: validate → extract (API) → classify → match (LLM) → metrics.
@@ -112,7 +112,7 @@ class ExtractorEvaluator:
         - LLM: 2-pass batched checker with semantic equivalence prompt.
           Pass 1: GT→Pred (recall). Pass 2: Pred→GT (precision).
 
-    Returns (summary_doc, disagreements_doc) — CLI writes two files verbatim.
+    Returns (record, findings) — CLI writes two files verbatim.
     """
 
     _RUN_SUMMARY_KEYS = ("recall", "precision", "f1")
@@ -126,6 +126,8 @@ class ExtractorEvaluator:
         "behavior": ["abstention_recognized_rate", "abstention_misread_rate",
                      "answer_missed_rate"],
         "behavior_title": "Abstention Handling",
+        "health": ["extraction_error_rate", "checker_failure_rate",
+                   "atomization_failure_rate"],
     }
     _METRIC_DIRECTIONS = {
         "recall": "higher is better", "precision": "higher is better", "f1": "higher is better",
@@ -142,8 +144,6 @@ class ExtractorEvaluator:
         "atomicity_rate": "atomicity_rate",
         "claim_density": "claim_density",
         "duplicate_rate": "duplicate_rate",
-        "health": ["extraction_error_rate", "checker_failure_rate",
-                   "atomization_failure_rate"],
     }
 
     def __init__(
@@ -229,66 +229,6 @@ class ExtractorEvaluator:
 
     # ── Public API ───────────────────────────────────────────────
 
-    async def evaluate(self, data: list[dict]) -> tuple[dict, dict]:
-        """Run the eval; with runs > 1, repeat it and report variance.
-
-        Returns:
-            (summary_doc, disagreements_doc). Multi-run: the summary carries
-            flat means + variance sibling + runs = N complete normal
-            documents; the disagreements document mirrors with a runs array.
-        """
-        if self._runs <= 1:
-            return await self._evaluate_once(data)
-
-        # Variance mode. Evaluators narrate their result sections every run
-        # (evaluator verbosity levels are a later cleanup); Data/Config are
-        # announced once, and the VARIANCE block + token table land once at
-        # the end.
-        log_multi_run_hint(self._runs)
-        summaries: list[dict] = []
-        disagreements: list[dict] = []
-        # Atomicity axis not run → its three keys are unmeasured, not 0/0.
-        unmeasured = ({k: self._atomizer_skip_reason for k in
-                       ("atomicity_rate", "claim_density", "atomization_failure_rate")}
-                      if self._atomizer_skip_reason else None)
-        tracker = VarianceTracker(self._VARIANCE_SECTIONS, labels=self._VARIANCE_LABELS,
-                                  unmeasured=unmeasured,
-                                  directions=self._METRIC_DIRECTIONS)
-        for run in range(1, self._runs + 1):
-            logger.info("")
-            logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
-            started = time.perf_counter()
-            summary, disagreement = await self._evaluate_once(
-                copy.deepcopy(data), announce=(run == 1))
-            duration = round(time.perf_counter() - started, 1)
-            for doc in (summary, disagreement):
-                doc["_meta"]["run"] = run
-                doc["_meta"]["duration_seconds"] = duration
-            summaries.append(summary)
-            disagreements.append(disagreement)
-            tracker.add({k: v for k, v in summary.items() if k != "_meta"},
-                        duration)
-            logger.info("")
-            log_run_line(run, self._runs, duration,
-                         summary, self._RUN_SUMMARY_KEYS)
-
-        means, variance = tracker.finish(self._runs)
-        total = tracker.total_seconds
-
-        def _outer_meta(doc: dict) -> dict:
-            meta = {k: v for k, v in doc["_meta"].items()
-                    if k not in ("run", "duration_seconds")}
-            meta["runs"] = self._runs
-            meta["duration_seconds"] = total
-            meta["usage"] = sum_usage([d["_meta"].get("usage") for d in summaries])
-            return meta
-
-        summary_doc = {"_meta": _outer_meta(summaries[0]),
-                       **means, "variance": variance, "runs": summaries}
-        disagreements_doc = {"_meta": _outer_meta(disagreements[0]),
-                             "runs": disagreements}
-        return summary_doc, disagreements_doc
-
     async def _evaluate_once(
         self, data: list[dict], announce: bool = True,
     ) -> tuple[dict, dict]:
@@ -300,8 +240,9 @@ class ExtractorEvaluator:
                 in variance mode — they repeat run 1 verbatim).
 
         Returns:
-            (summary_doc, disagreements_doc) — two ready-to-write JSON
-            documents incl. _meta. The CLI only resolves paths and dumps.
+            (run_doc, run_findings): one ``runs[]`` entry of the record —
+            {_meta, metrics, counts, items} — and the matching findings
+            entry {_meta, findings}, derived from the items.
         """
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
@@ -357,65 +298,136 @@ class ExtractorEvaluator:
         # Step 6: Build result (encapsulated)
         result = self._build_result(item_results, buckets, len(data), atomicity, duplicates)
 
-        # Step 7: Build disagreement list
-        disagreements = self._build_disagreements(buckets, item_results)
-
-        # Step 8: Log eval results; the evaluator owns the token table,
-        # printed once per invocation — in variance mode it is the
-        # cumulative total and belongs after the VARIANCE block.
+        # Step 7: Log eval results (findings blocks). Done line and token
+        # table belong to the base loop — they print once per invocation.
         self._log_eval_results(result)
-        if self._runs <= 1:
-            self._log_done(result)
-            log_token_stats()
 
-        # Step 9: Assemble the two ready-to-write documents. The CLI only
-        # resolves paths and dumps JSON - it never composes content.
-        return self._assemble_documents(result, disagreements)
+        # Step 8: Assemble this run's documents. The CLI only resolves
+        # paths and dumps JSON — it never composes content.
+        return self._run_documents(result, buckets, item_results, len(data))
 
-    def run_sync(self, data: list[dict]) -> tuple[dict, dict]:
-        """Sync wrapper — same pattern as BaseService.run_sync."""
-        return asyncio.run(self.evaluate(data))
+    def _unmeasured(self) -> dict | None:
+        """Atomicity axis not run → its three keys are unmeasured, not 0/0."""
+        if not self._atomizer_skip_reason:
+            return None
+        return {k: self._atomizer_skip_reason for k in
+                ("atomicity_rate", "claim_density", "atomization_failure_rate")}
 
     # ── Output documents (serialization owned by the evaluator) ──
 
-    def _assemble_documents(
+    def _run_documents(
         self,
         result: ExtractorEvalResult,
-        disagreements: list[dict],
+        buckets: _ItemBucket,
+        item_results: list[_ItemMatchResult],
+        total_items: int,
     ) -> tuple[dict, dict]:
-        """Build the two output documents the CLI writes verbatim.
+        """One ``runs[]`` entry of the record plus its findings entry.
 
-        Split details are debug material: they move from the summary's
-        atomicity block into the disagreements document.
+        ``metrics`` are the varianced scalars (the console's Metrics roster),
+        ``counts`` every number the console blocks print — rates live in
+        metrics only — and ``items`` the complete per-item record, one entry
+        per attempted item in every bucket. Findings derive from the items.
         """
+        evaluated = (len(buckets.to_compare) + len(buckets.abstention_misread)
+                     + len(buckets.answer_missed) + len(buckets.abstention_recognized)
+                     + len(buckets.extraction_error))
         meta = build_meta(
             "extractor_eval",
             timestamp=self._started_at,
             duration_seconds=time.perf_counter() - self._started_perf,
-            total_items=result.total_items,
-            evaluated_items=result.to_compare_items,
-            dropped_items=result.total_items - result.to_compare_items,
+            total_items=total_items,
+            evaluated_items=evaluated,
+            dropped_items=total_items - evaluated,
             pred_key=self._pred_key,
             matching="llm-2-pass",
             request_strategies=GLOBAL_STATS.strategies(),
             usage=usage_since(getattr(self, "_usage_at_start", None)),
         )
-
-        summary_doc = {"_meta": meta, **asdict(result)}
-        atomicity_splits = None
-        if summary_doc.get("atomicity"):
-            # asdict() deep-copied — the dataclass keeps its splits.
-            atomicity_splits = summary_doc["atomicity"].pop("splits", None)
-
-        disagreements_doc = {
-            "_meta": meta,
-            "total_disagreements": len(disagreements),
-            "items": disagreements,
+        metrics = {
+            "recall": result.recall,
+            "precision": result.precision,
+            "f1": result.f1,
+            "atomicity_rate": result.atomicity_rate,
+            "claim_density": result.claim_density,
+            "duplicate_rate": result.duplicate_rate,
+            "abstention_recognized_rate": result.abstention_recognized_rate,
+            "abstention_misread_rate": result.abstention_misread_rate,
+            "answer_missed_rate": result.answer_missed_rate,
+            "extraction_error_rate": result.extraction_error_rate,
+            "checker_failure_rate": result.checker_failure_rate,
+            "atomization_failure_rate": result.atomization_failure_rate,
         }
-        if atomicity_splits:
-            disagreements_doc["atomicity_splits"] = atomicity_splits
 
-        return summary_doc, disagreements_doc
+        ee = result.extraction_errors or {"count": 0, "by_cause": {}}
+        cf = result.checker_failures
+        a = result.atomicity
+        d = result.duplicates
+        atomization = ({"measured": True, "failed": a["failed"],
+                        "claims": a["extracted_claims"]} if a else
+                       {"measured": False,
+                        "reason": self._atomizer_skip_reason or "no predictions to measure"})
+        counts = {
+            # 📂 Data
+            "data": {
+                "dropped_no_response": getattr(self, "_dropped_missing_response", 0),
+                "dropped_no_gt_key": getattr(self, "_dropped_missing_gt", 0),
+                "gt_empty": getattr(self, "_gt_empty", 0),
+            },
+            # 🔎 Matching Quality — the two funnels
+            "recall": result.recall_counts,
+            "precision": result.precision_counts,
+            # 📊 Extraction Stats
+            "extraction_stats": {
+                "gt": {"claims": result.gt_stats["total_triplets"],
+                       "avg_per_item": result.gt_stats["avg_per_item"]},
+                "pred": {"claims": result.pred_stats["total_triplets"],
+                         "avg_per_item": result.pred_stats["avg_per_item"]},
+            },
+            # ⚪ Abstention Handling
+            "abstention_handling": result.abstention_handling,
+            # 💥 Reliability — one entry per row
+            "reliability": {
+                "extraction": {"failed": ee["count"], "items": evaluated,
+                               "by_cause": ee.get("by_cause") or {}},
+                "matching_checker": {
+                    "unjudged": cf["count"], "issued": cf["issued_verdicts"],
+                    "items_affected": cf["items_affected"],
+                    "unjudged_gt": cf["unjudged_gt"],
+                    "unjudged_pred": cf["unjudged_pred"],
+                },
+                "atomization": atomization,
+            },
+            # 🧬 Atomicity (numbers only; splits ride on their items)
+            "atomicity": ({k: a[k] for k in ("extracted_claims", "evaluated_claims",
+                                             "atomic_units", "new_claims_from_splits",
+                                             "non_atomic")} if a else None),
+            # 🔁 Duplicates (numbers only; the duplicates ride on their items)
+            "duplicates": ({k: d[k] for k in ("predicted_claims", "unique_claims",
+                                              "duplicate_claims")} if d else None),
+        }
+        items = self._build_items(buckets, item_results)
+        self._attach_per_item_detail(items, a, d)
+        run_doc = {"_meta": meta, "metrics": metrics, "counts": counts,
+                   "items": items}
+        run_findings = {"_meta": dict(meta), "findings": self._build_findings(items)}
+        return run_doc, run_findings
+
+    @staticmethod
+    def _attach_per_item_detail(items: list[dict], atomicity: dict | None,
+                                duplicates: dict | None) -> None:
+        """Per-item detail of the orthogonal axes — split decisions and
+        duplicate claims — lands on the item it belongs to (matched by id)."""
+        by_id = {item["id"]: item for item in items}
+        for split in (atomicity or {}).get("splits", []):
+            item = by_id.get(split.get("id"))
+            if item is not None:
+                item.setdefault("atomicity_splits", []).append(
+                    {k: split[k] for k in ("original", "children", "reasoning")})
+        for entry in (duplicates or {}).get("items", []):
+            item = by_id.get(entry.get("id"))
+            if item is not None:
+                item["duplicate_claims"] = entry["duplicates"]
 
     # ── Atomicity axis (optional, orthogonal to coverage) ────────
 
@@ -450,8 +462,7 @@ class ExtractorEvaluator:
                 if dec == "split":
                     split += 1
                     atomic_units += len(d.get("children", []))
-                    # Full split detail — routed to the disagreements file by
-                    # the CLI so the summary JSON stays lean.
+                    # Full split detail — attached to its item in the record.
                     orig = d.get("original", {})
                     splits.append({
                         "id": item.get("id"),
@@ -861,6 +872,12 @@ class ExtractorEvaluator:
             #   precision side: pred triplets entailed by GT      (tp_from_precision)
             # FN/FP derive from the judged misses alone — unjudged claims
             # (checker failure) leave numerator and denominator entirely.
+            def judged(checked: list[dict], originals: list[dict]) -> list[dict]:
+                return [{"claim": self._triplet_to_str(o),
+                         "verdict": t.get(verdict_key),
+                         "explanation": t.get(explanation_key)}
+                        for t, o in zip(checked, originals)]
+
             results.append(_ItemMatchResult(
                 tp_recall=tp_from_recall,
                 tp_precision=tp_from_precision,
@@ -869,6 +886,8 @@ class ExtractorEvaluator:
                 false_negatives=fn_list,
                 unjudged_gt=unjudged_gt,
                 unjudged_pred=unjudged_pred,
+                gt_claims=judged(pass1_triplets, gt_triplets),
+                pred_claims=judged(pass2_triplets, pred_triplets),
             ))
 
         return results
@@ -994,110 +1013,83 @@ class ExtractorEvaluator:
 
     # ── Disagreement collection ──────────────────────────────────
 
-    def _build_disagreements(
+    def _build_items(
         self,
         buckets: _ItemBucket,
         item_results: list[_ItemMatchResult],
     ) -> list[dict]:
-        """Build the per-item disagreement list for error analysis.
+        """The per-item record: every attempted item with its bucket and
+        both claim lists. Compared items carry a verdict and explanation per
+        claim (pass 1 on GT claims, pass 2 on predictions); the other
+        buckets never reached the matcher, so their claims are bare."""
+        def bare(triplets: list[dict]) -> list[dict]:
+            return [{"claim": self._triplet_to_str(t)} for t in triplets]
 
-        Includes: valid items with FP/FN, unwarranted answers, unwarranted
-        abstentions, and extraction errors (so failed items are identifiable).
-        Skipped items and perfect matches are excluded.
-        """
-        disagreements = []
-
-        # Extraction errors — tooling failures, listed for identification only
-        for i, item in enumerate(buckets.extraction_error):
-            disagreements.append({
-                "id": item.get("id", f"extraction-error-{i}"),
+        def entry(item: dict, i: int, bucket: str, **extra) -> dict:
+            return {
+                "id": item.get("id", f"{bucket}-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "error_type": "extraction_error",
-                "cause": item.get(self._error_key, "unknown"),
-            })
+                "bucket": bucket,
+                **extra,
+            }
 
-        # to_compare items with disagreements — or with unjudged claims:
-        # a checker failure is not a disagreement, but the affected item
-        # must stay identifiable in this file.
+        items: list[dict] = []
         for i, (item, ir) in enumerate(zip(buckets.to_compare, item_results)):
-            unjudged = ir.unjudged_gt + ir.unjudged_pred
-            if ir.fp == 0 and ir.fn == 0 and not unjudged:
-                continue  # perfect match, no disagreement
-
-            disagreements.append({
-                "id": item.get("id", f"to-compare-{i}"),
-                "question": item.get("question", ""),
-                "response": item.get("response", ""),
-                "tp_recall": ir.tp_recall,
-                "tp_precision": ir.tp_precision,
-                "fp": ir.fp,
-                "fn": ir.fn,
-                "gt_triplets": [
-                    self._triplet_to_str(t) for t in item[self._gt_key]
-                ],
-                "pred_triplets": [
-                    self._triplet_to_str(t) for t in item[self._pred_key]
-                ],
-                "false_positives": ir.false_positives,
-                "false_negatives": ir.false_negatives,
-                # Checker failures on this item — excluded from fp/fn above.
-                "unjudged": unjudged,
-            })
-
-        # Abstention misread — claims invented from a refusal
-        for i, item in enumerate(buckets.abstention_misread):
-            pred_count = len(item[self._pred_key])
-            disagreements.append({
-                "id": item.get("id", f"abstention-misread-{i}"),
-                "question": item.get("question", ""),
-                "response": item.get("response", ""),
-                "error_type": "abstention_misread",
-                "tp": 0,
-                "fp": pred_count,
-                "fn": 0,
-                "gt_triplets": [],
-                "pred_triplets": [
-                    self._triplet_to_str(t) for t in item[self._pred_key]
-                ],
-                "false_positives": [
-                    {
-                        "pred_triplet": self._triplet_to_str(t),
-                        "verdict": "no comparison made.",
-                        "reason": "Abstention misread — no GT claims, extracted anyway",
-                    }
-                    for t in item[self._pred_key]
-                ],
-                "false_negatives": [],
-            })
-
-        # Answer missed — nothing extracted from an answering response
+            items.append(entry(item, i, "compared",
+                               gt_claims=ir.gt_claims, pred_claims=ir.pred_claims))
         for i, item in enumerate(buckets.answer_missed):
-            gt_count = len(item[self._gt_key])
-            disagreements.append({
-                "id": item.get("id", f"answer-missed-{i}"),
-                "question": item.get("question", ""),
-                "response": item.get("response", ""),
-                "error_type": "answer_missed",
-                "tp": 0,
-                "fp": 0,
-                "fn": gt_count,
-                "gt_triplets": [
-                    self._triplet_to_str(t) for t in item[self._gt_key]
-                ],
-                "pred_triplets": [],
-                "false_positives": [],
-                "false_negatives": [
-                    {
-                        "gt_triplet": self._triplet_to_str(t),
-                        "verdict": "no comparison made.",
-                        "reason": "Answer missed — nothing extracted, all GT lost",
-                    }
-                    for t in item[self._gt_key]
-                ],
-            })
+            items.append(entry(item, i, "answer_missed",
+                               gt_claims=bare(item[self._gt_key]), pred_claims=[]))
+        for i, item in enumerate(buckets.abstention_recognized):
+            items.append(entry(item, i, "abstention_recognized",
+                               gt_claims=[], pred_claims=[]))
+        for i, item in enumerate(buckets.abstention_misread):
+            items.append(entry(item, i, "abstention_misread",
+                               gt_claims=[], pred_claims=bare(item[self._pred_key])))
+        for i, item in enumerate(buckets.extraction_error):
+            items.append(entry(item, i, "extraction_error",
+                               gt_claims=bare(item.get(self._gt_key) or []),
+                               pred_claims=[],
+                               cause=item.get(self._error_key, "unknown")))
+        return items
 
-        return disagreements
+    @staticmethod
+    def _build_findings(items: list[dict]) -> dict:
+        """The review queue: the console branches opened up. Matching
+        Quality — ``missed`` (GT claim the predictions do not cover),
+        ``unsupported`` (prediction the GT does not support), ``unjudged``
+        (no verdict; ``side`` names the pass). Abstention Handling —
+        ``answer_missed`` (GT claims lost to an empty extraction),
+        ``abstention_misread`` (claims invented from a refusal).
+        Reliability — ``extraction_failed`` with its cause. A pure view
+        over the record's items."""
+        def classify(item: dict):
+            head = {"id": item["id"], "question": item["question"]}
+            bucket = item["bucket"]
+            if bucket == "compared":
+                for side, key, miss in (("gt", "gt_claims", "missed"),
+                                        ("pred", "pred_claims", "unsupported")):
+                    for c in item[key]:
+                        if c["verdict"] is None:
+                            yield "unjudged", {**head, "claim": c["claim"],
+                                               "side": side, "cause": "checker_failure"}
+                        elif c["verdict"] != "Entailment":
+                            yield miss, {**head, "claim": c["claim"],
+                                         "verdict": c["verdict"],
+                                         "explanation": c["explanation"]}
+            elif bucket == "answer_missed":
+                yield "answer_missed", {**head, "response": item["response"],
+                                        "claims": [c["claim"] for c in item["gt_claims"]]}
+            elif bucket == "abstention_misread":
+                yield "abstention_misread", {**head, "response": item["response"],
+                                             "claims": [c["claim"] for c in item["pred_claims"]]}
+            elif bucket == "extraction_error":
+                yield "extraction_failed", {**head, "cause": item["cause"]}
+
+        return findings_view(
+            ["missed", "unsupported", "answer_missed", "abstention_misread",
+             "unjudged", "extraction_failed"], items, classify)
 
     # ── Logging (evaluator-owned sections) ───────────────────────
 
@@ -1326,9 +1318,9 @@ class ExtractorEvaluator:
                 for triplet_str in entry["duplicates"]:
                     logger.info("      • %s", triplet_str)
 
-    def _log_done(self, result: ExtractorEvalResult) -> None:
-        """Print ✅ Done summary line — items and the headline metrics."""
+    def _log_done(self, run_doc: dict) -> None:
+        """Print ✅ Done summary line — compared items and the headline metrics."""
+        n = run_doc["counts"]["abstention_handling"]["answers_extracted"]
         logger.info("")
-        logger.info(" ✅ Done: %d %s · %s", result.to_compare_items,
-                    plural(result.to_compare_items, "item"),
-                    format_headline(asdict(result), self._RUN_SUMMARY_KEYS))
+        logger.info(" ✅ Done: %d %s · %s", n, plural(n, "item"),
+                    format_headline(run_doc["metrics"], self._RUN_SUMMARY_KEYS))

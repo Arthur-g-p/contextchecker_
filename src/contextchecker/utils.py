@@ -144,6 +144,18 @@ def prepare_plain_prompt(
     return format_prompt(template, {"schema": build_schema_shape(schema)})
 
 
+def findings_view(branches: list[str], items: list[dict], classify) -> dict:
+    """The review queue over a record's ``items``, keyed by the console's
+    own branch names: ``{branch: [entry, …]}``. *classify(item)* yields
+    ``(branch, entry)`` pairs; every entry names its item (``id`` /
+    ``query_id``) so it can be found. Every branch is present, an empty
+    one as ``[]`` — hidden is not zero. A pure view, never a source."""
+    out: dict[str, list[dict]] = {branch: [] for branch in branches}
+    for item in items:
+        for branch, entry in classify(item):
+            out[branch].append(entry)
+    return out
+
 def plural(n: int, word: str, plural_form: str | None = None) -> str:
     """The noun for *n*: ``plural(1, "item")`` → ``item``, ``plural(2, "item")``
     → ``items``. Log lines only — JSON keys never change number."""
@@ -233,7 +245,7 @@ def find_duplicate_triplets(
 
 # ── Report envelope ──────────────────────────────────────────────────────────
 
-REPORT_SCHEMA_VERSION = 4
+REPORT_SCHEMA_VERSION = 5
 
 
 def build_meta(

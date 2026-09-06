@@ -7,9 +7,12 @@ The caller-facing interface is identical, so it subclasses BaseService - there
 is no separate pipeline base (see the note in services/base.py).
 
 It talks to services only, never a worker. The two services consolidate their
-results into the shared data in place; this class wraps them in the report
-envelope (`_meta` + `results`) that every other report-producing command emits,
-and the controller (cli.py) persists it from `last_report`.
+results into the shared data in place; this class projects them into the
+record + findings documents every other report-producing command emits
+(architecture.md, "Output documents"), and the controller (cli.py) persists
+them from `last_report` / `last_findings`. RefChecker aggregates no metric,
+so its `metrics` and `variance` are empty — the skeleton holds, the roster
+is simply empty.
 """
 
 import time
@@ -20,6 +23,7 @@ from contextchecker.exceptions import InvalidInputError
 from contextchecker.pipelines.directions import (
     _location,
     log_pipeline_tree,
+    pipeline_counts,
     unwrap_items,
     verdict_summary,
 )
@@ -27,13 +31,18 @@ from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 from contextchecker.services.extraction import ExtractionService
 from contextchecker.stats import GLOBAL_STATS, log_token_stats, usage_since
-from contextchecker.utils import build_meta, plural
+from contextchecker.utils import build_meta, findings_view, plural
 
 logger = settings.get_logger(__name__)
+
+_VERDICTS = ("Entailment", "Contradiction", "Neutral")
 
 
 class RefCheckerPipeline(BaseService):
     """Extraction + checking composed into a single reference-checking run."""
+
+    # No aggregate metric: nothing to variance, no headline on the run line.
+    _RUN_SUMMARY_KEYS: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -52,8 +61,28 @@ class RefCheckerPipeline(BaseService):
         self._extractor_model = extractor_model
         self._checker_model = checker_model
         self._init_verbosity(verbosity)
+        # refcheck has no --runs; the base loop runs once and still assembles
+        # the record + findings skeleton.
+        self._runs = 1
+        # Children narrate compactly under the pipeline's labels; the
+        # pipeline owns the preamble, the results header, the done line and
+        # the one token table — same contract as ragcheck/faithcheck.
         child_verbosity = "silent" if verbosity == "silent" else "compact"
+        # The record and the findings, assembled by the base run loop from
+        # the per-run entries _run_once leaves on last_run / last_run_findings.
         self.last_report: dict | None = None
+        self.last_findings: dict | None = None
+        self.last_run: dict | None = None
+        self.last_run_findings: dict | None = None
+
+        # Working-document vocabulary (the services' defaults, spelled out
+        # here so the projection never reaches into the children).
+        self._response_kg = f"{extractor_model}_response_kg"
+        self._response_err = f"{extractor_model}_extraction_error"
+        namespace = f"{checker_model}_checker"
+        self._verdict_key = f"{namespace}_verdict"
+        self._explanation_key = f"{namespace}_explanation"
+        self._checker_error_key = f"{namespace}_error"
 
         # Compose the two services. Each fail-fasts on its own API key here.
         self._extraction = ExtractionService(
@@ -79,6 +108,13 @@ class RefCheckerPipeline(BaseService):
     # -- Pipeline: the BaseService 7-step run() shape --
 
     async def run(self, data: list[dict]) -> list[dict]:
+        """Run the pipeline once through the base loop, which assembles
+        last_report and last_findings."""
+        return await self._run_repeated(data)
+
+    async def _run_once(
+        self, data: list[dict], announce: bool = True, report: bool = True,
+    ) -> list[dict]:
         """Run extraction then checking over *data*, in place; return data.
 
         1. Validate     - drop items missing 'response' or 'reference'
@@ -86,8 +122,8 @@ class RefCheckerPipeline(BaseService):
         3. Log pre-exec - validation + config
         4. Execute      - delegate to ExtractionService then CheckingService
         5. Serialize    - none in place (the services consolidated into data
-                          already); the report lands on last_report
-        6. Log results  - results header, done line, token table once
+                          already); the run entry lands on last_run
+        6. Log results  - results header, pipeline tree, done line, tokens once
         7. Return mutated data
 
         Raises InvalidInputError if no item carries both keys.
@@ -98,16 +134,22 @@ class RefCheckerPipeline(BaseService):
         data = unwrap_items(data)                     # Step 0: accept a
         self._canonicalize_keys(data)                 # {"results": [...]} envelope
         valid = self._validate(data)                  # 1
-        #self._filter(valid)                          # 2 (no-op)
-        self._log_validation(len(data), len(valid))   # 3
-        self._log_config()
+        self._filter(valid)                           # 2 (no-op)
+        if announce:                                  # 3
+            self._log_validation(len(data), len(valid))
+            self._log_config()
 
         await self._extraction.run(valid)             # 4: writes {extractor_model}_response_kg
         await self._checking.run(valid)               #    writes verdicts onto each triplet
 
         self._serialize()                             # 5 (no-op)
-        self.last_report = self.build_report(data)    #    the single artifact
-        self._log_results(len(data), len(valid))      # 6
+        self.last_run = self._build_run(data)         #    this run's entry
+        self.last_run_findings = {
+            "_meta": dict(self.last_run["_meta"]),
+            "findings": self._build_findings(self.last_run["items"]),
+        }
+        if report:
+            self._log_results()                       # 6
         return data                                   # 7
 
     # -- Validation: drop items dynamically, like every service --
@@ -143,35 +185,124 @@ class RefCheckerPipeline(BaseService):
     def _serialize(self, *args, **kwargs) -> None:
         pass
 
-    # -- Report --
+    # -- Record --
 
-    def build_report(self, data: list[dict]) -> dict:
-        """The single output artifact: `_meta` + the checked items.
+    @staticmethod
+    def _is_valid(item) -> bool:
+        return isinstance(item, dict) and all(k in item for k in ("response", "reference"))
 
-        Pure projection - loss-free from the in-memory items, no LLM calls,
-        safe to rebuild anytime. Unlike ragcheck/faithcheck there are no
-        metrics to aggregate: refcheck produces claim-level verdicts, and the
-        items already carry them.
+    def _build_run(self, data: list[dict]) -> dict:
+        """One ``runs[]`` entry of the record: {_meta, metrics, counts, items}.
+
+        Pure projection of the mutated items - loss-free, no LLM calls, safe
+        to rebuild anytime. ``metrics`` is empty: refcheck produces claim-level
+        verdicts and no aggregate. ``counts`` holds the console's numbers
+        (🔀 Pipeline, 📝 Extraction, 🔎 Checking).
         """
-        dropped = sum(
-            1 for item in data
-            if not isinstance(item, dict)
-            or any(k not in item for k in ("response", "reference"))
-        )
+        items = [self._build_item(item, i) for i, item in enumerate(data)
+                 if self._is_valid(item)]
+        dropped = len(data) - len(items)
         timestamp, duration = self._run_timing()
-        return {
-            "_meta": build_meta(
-                "refcheck",
-                timestamp=timestamp,
-                duration_seconds=duration,
-                total_items=len(data),
-                evaluated_items=len(data) - dropped,
-                dropped_items=dropped,
-                request_strategies=GLOBAL_STATS.strategies(),
-                usage=usage_since(getattr(self, "_usage_at_start", None)),
-            ),
-            "results": data,
+        meta = build_meta(
+            "refcheck",
+            timestamp=timestamp,
+            duration_seconds=duration,
+            total_items=len(data),
+            evaluated_items=len(items),
+            dropped_items=dropped,
+            request_strategies=GLOBAL_STATS.strategies(),
+            usage=usage_since(getattr(self, "_usage_at_start", None)),
+        )
+        checking = self._verdict_counts(items)
+        counts = {
+            "pipeline": pipeline_counts(self._pipeline_phases(items)),
+            "extraction": {
+                "with_claims": sum(1 for it in items if it["claims"]),
+                "abstained": sum(1 for it in items
+                                 if not it["claims"] and "extraction_error" not in it),
+                "failed": sum(1 for it in items if "extraction_error" in it),
+            },
+            "checking": checking,
         }
+        return {"_meta": meta, "metrics": {}, "counts": counts, "items": items}
+
+    def _build_item(self, item: dict, index: int) -> dict:
+        """One item of the record: the input fields, the abstention flag and
+        every claim with its verdict, explanation and (sparse) error cause."""
+        claims = []
+        for triplet in item.get(self._response_kg) or []:
+            claim = {
+                "claim": f"{triplet.get('subject')} {triplet.get('predicate')} {triplet.get('object')}",
+                "verdict": triplet.get(self._verdict_key),
+                "explanation": triplet.get(self._explanation_key),
+            }
+            if triplet.get(self._checker_error_key):
+                claim["error"] = triplet[self._checker_error_key]
+            claims.append(claim)
+        entry = {
+            "id": str(item.get("id", index)),
+            "question": item.get("question", ""),
+            "response": item.get("response", ""),
+            "reference": item.get("reference"),
+            "is_abstention": bool(item.get("is_abstention", False)),
+            "claims": claims,
+        }
+        if self._response_err in item:
+            entry["extraction_error"] = item[self._response_err]
+        return entry
+
+    @staticmethod
+    def _verdict_counts(items: list[dict]) -> dict:
+        counts = {v: 0 for v in _VERDICTS}
+        counts["unjudged"] = 0
+        for item in items:
+            for c in item["claims"]:
+                counts[c["verdict"] if c["verdict"] in counts else "unjudged"] += 1
+        return counts
+
+    def _pipeline_phases(self, items: list[dict]) -> list[tuple]:
+        """The two phases, for the 🔀 tree and ``counts.pipeline`` alike:
+        (icon, name, PhaseStats, summary text, tallies)."""
+        claims = sum(len(it["claims"]) for it in items)
+        c = self._verdict_counts(items)
+        tally = {"total": sum(c.values()), **{k: c[k] for k in _VERDICTS},
+                 "unknown": c["unjudged"]}
+        return [
+            ("📝", "extract response", self._extraction.last_stats,
+             f"{claims} {plural(claims, 'claim')}", {"claims": claims}),
+            ("🔎", "check reference", self._checking.last_stats,
+             verdict_summary(tally),
+             {"verdicts": tally["total"], **{k: c[k] for k in _VERDICTS},
+              "unjudged": c["unjudged"]}),
+        ]
+
+    @staticmethod
+    def _build_findings(items: list[dict]) -> dict:
+        """The review queue: the 🔎 Checking branches opened up plus the
+        item-level outcomes — ``unsupported`` (Neutral: the reference does
+        not cover the claim), ``contradicted``, ``unjudged`` (no verdict, with
+        its cause), ``abstained``, ``extraction_failed``. A pure view over the
+        record's items."""
+        def classify(item: dict):
+            head = {"id": item["id"], "question": item["question"]}
+            if "extraction_error" in item:
+                yield "extraction_failed", {**head, "cause": item["extraction_error"]}
+                return
+            if item["is_abstention"]:
+                yield "abstained", {**head, "response": item["response"]}
+                return
+            for c in item["claims"]:
+                entry = {**head, "claim": c["claim"]}
+                if c["verdict"] is None:
+                    yield "unjudged", {**entry, "cause": c.get("error", "checker_failure")}
+                elif c["verdict"] == "Contradiction":
+                    yield "contradicted", {**entry, "explanation": c["explanation"]}
+                elif c["verdict"] == "Neutral":
+                    yield "unsupported", {**entry, "explanation": c["explanation"]}
+
+        return findings_view(
+            ["unsupported", "contradicted", "unjudged", "abstained", "extraction_failed"],
+            items, classify)
 
     def _run_timing(self) -> tuple[str, float]:
         """(timestamp, elapsed) for the report envelope; safe before a run."""
@@ -205,10 +336,11 @@ class RefCheckerPipeline(BaseService):
         logger.info("    Prompts:     %s", settings.PROMPT_PATH)
         logger.info("")
 
-    def _log_results(self, total: int, valid: int) -> None:
-        """Step 6: consolidated results — header, done line, tokens once."""
+    def _log_results(self) -> None:
+        """Step 6: consolidated results — header, pipeline tree, done line,
+        tokens once."""
         self._log_bl_results()
-        self._log_done(total, valid)
+        self._log_done()
         if self.verbosity == "full":
             log_token_stats()
 
@@ -219,32 +351,13 @@ class RefCheckerPipeline(BaseService):
             return
         logger.info(settings.section_rule("REFCHECK RESULTS", char="═"))
         logger.info("")
-        items = self.last_report["results"]
-        kg_key = self._extraction.kg_key
-        verdict_key = self._checking.verdict_key
-        claims = 0
-        counts = {"total": 0, "Entailment": 0, "Contradiction": 0,
-                  "Neutral": 0, "unknown": 0}
-        for item in items:
-            for triplet in item.get(kg_key) or []:
-                claims += 1
-                if verdict_key not in triplet:
-                    continue  # skipped or never checked — no verdict issued
-                counts["total"] += 1
-                verdict = triplet.get(verdict_key)
-                counts[verdict if verdict in counts else "unknown"] += 1
-        log_pipeline_tree([
-            ("📝", "extract response", self._extraction.last_stats,
-             f"{claims} {plural(claims, 'claim')}"),
-            ("🔎", "check reference", self._checking.last_stats,
-             verdict_summary(counts)),
-        ])
+        log_pipeline_tree(self._pipeline_phases(self.last_run["items"]))
 
-    def _log_done(self, total: int, valid: int) -> None:
+    def _log_done(self, *args, **kwargs) -> None:
         if self.verbosity != "full":
             return
-        kg_key = self._extraction.kg_key
-        claims = sum(len(item.get(kg_key) or [])
-                     for item in self.last_report["results"])
-        logger.info(" ✅ Done: %d %s · %d %s", valid, plural(valid, "item"),
+        run = self.last_run
+        n = run["_meta"]["evaluated_items"]
+        claims = sum(len(it["claims"]) for it in run["items"])
+        logger.info(" ✅ Done: %d %s · %d %s", n, plural(n, "item"),
                     claims, plural(claims, "claim"))

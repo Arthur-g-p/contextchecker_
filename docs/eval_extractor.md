@@ -83,7 +83,7 @@ axis is skipped and the console says why (`⏭️ Atomicity skipped (...)`); the
 
 - `atomicity_rate` — kept claims / evaluated claims (1.0 = every triplet atomic)
 - `information_density` — atomic units / evaluated claims (facts per triplet)
-- Full split detail goes to the disagreements file, not the summary.
+- Full split detail rides on its item in the record (`atomicity_splits`).
 
 ## Step 2c: Duplicate axis (orthogonal, read-only)
 
@@ -135,7 +135,7 @@ Each claim comes back as exactly one of:
 
 A claim nobody judged is not evidence about the extractor. Unjudged claims are
 excluded from both sides of the fraction, counted in `checker_failures`, and
-listed per item in the disagreements file under `unjudged`. This mirrors the
+listed per item in the findings file as `unjudged`. This mirrors the
 None-propagation rule `ragcheck` follows.
 
 Note the sampling bias this leaves behind: bundles do not fail at random, so a
@@ -239,7 +239,7 @@ contextchecker eval extractor eval_data/msmarco/msmarco_gpt4_5.json \
 Reads GT from `claude2_response_kg`, extracts live into
 `gemini-3.1_response_kg`, runs the 2-pass match, then writes
 `eval_data/msmarco/results/msmarco_gpt4_5_extractor_eval.json` plus its
-`_disagreements.json` sibling. Output always lands in a `results/` directory
+`_findings.json` sibling. Output always lands in a `results/` directory
 beside the input, so an input already inside `results/` nests one level deeper —
 pass `-o` to control this.
 
@@ -247,179 +247,114 @@ pass `-o` to control this.
 
 ## Output Format
 
-Two files are written. Both open with `_args` (what you asked for — every CLI
-parameter, plus `_explicit` naming the ones actually typed) and `_meta` (what
-the run turned out to be — derived keys, counts, timings).
+Two files are written. The **record** holds everything: metrics, every count
+the console prints, and the complete per-item claim lists. The **findings**
+file is the review queue — only what went wrong, each entry tagged with a
+`kind` — derived from the record's items and never a source of its own. Both
+open with `_args` (what you asked for) and `_meta` (what the run turned out
+to be; see docs/output_conventions.md).
 
-### Summary file (single run)
+The skeleton is the same at `--runs 1` and `--runs N`: `runs` is always a
+list, `metrics` is the mean over runs (the run's own values at N = 1), and
+`variance` the spread. `--runs` adds entries, it never reshapes.
 
-```json
-{
-  "_args": {
-    "command": "eval extractor",
-    "input_file": "eval_data/msmarco/msmarco_gpt4_5.json",
-    "extractor_model": "meta/muse-glimmer-30b",
-    "checker_model": "meta/muse-glimmer-30b",
-    "atomizer_model": "openai/gpt-5.6-luna",
-    "gt_key": "claude2_response_kg",
-    "joint_num": 10,
-    "runs": 1,
-    "concurrency": 10,
-    "_explicit": ["checker_model", "extractor_model", "input_file"]
-  },
-  "_meta": {
-    "schema_version": 4,
-    "report_type": "extractor_eval",
-    "contextchecker_version": "0.5.0",
-    "timestamp": "2026-08-19T17:15:05",
-    "duration_seconds": 89.8,
-    "total_items": 5,
-    "evaluated_items": 2,
-    "dropped_items": 3,
-    "pred_key": "meta/muse-glimmer-30b_response_kg",
-    "matching": "llm-2-pass"
-  },
-
-  "precision": 0.9474,
-  "recall": 0.5556,
-  "f1": 0.7,
-
-  "recall_counts": {
-    "total_gt_claims": 27,
-    "covered": 15,
-    "missed": 0,
-    "answer_missed_penalty": 12,
-    "unjudged": 0,
-    "denominator": 27
-  },
-  "precision_counts": {
-    "total_pred_claims": 19,
-    "supported": 18,
-    "unsupported": 0,
-    "abstention_misread_penalty": 1,
-    "unjudged": 0,
-    "denominator": 19
-  },
-
-  "total_items": 5,
-  "to_compare_items": 2,
-  "gt_stats":   { "total_triplets": 27, "avg_per_item": 13.5 },
-  "pred_stats": { "total_triplets": 19, "avg_per_item": 9.5 },
-
-  "abstention_handling": { "answers": 3, "answers_extracted": 2, "answers_missed": 1,
-                           "abstentions": 1, "abstentions_recognized": 0, "abstentions_misread": 1 },
-
-  "checker_failures": {
-    "count": 0,
-    "issued_verdicts": 33,
-    "rate": 0.0,
-    "items_affected": 0,
-    "unjudged_gt": 0,
-    "unjudged_pred": 0
-  },
-  "extraction_errors": { "count": 1, "rate": 0.2, "by_cause": { "parse_failure": 1 } },
-
-  "atomicity": {
-    "extracted_claims": 19, "evaluated_claims": 19, "atomic_units": 19,
-    "new_claims_from_splits": 0, "non_atomic": 0, "failed": 0,
-    "atomicity_rate": 1.0, "information_density": 1.0
-  },
-  "duplicates": {
-    "predicted_claims": 19, "unique_claims": 19, "duplicate_claims": 0,
-    "duplicate_rate": 0.0, "items": []
-  }
-}
-```
-
-`precision`, `recall` and `f1` are `float | null` (the null rule).
-`atomicity` is `null` when the axis was skipped. `duplicates` is `null` when
-there were no predictions at all.
-
-`_meta.dropped_items` counts items that never reached matching — note that this
-mixes two very different things (a tooling failure and a meaningful abstention);
-read `extraction_errors` and `abstentions` for the split.
-
-### Summary file (`--runs > 1`)
+### Record — `<filename>_extractor_eval[_N].json`
 
 ```json
 {
-  "_args": { "...": "...", "runs": 3 },
-  "_meta": { "...": "...", "runs": 3, "duration_seconds": 215.2 },
-
-  "precision": 0.9425,
-  "recall": 0.358,
-  "f1": 0.6841,
-
-  "variance": {
-    "precision": { "n": 3, "std": 0.0498, "min": 0.8947, "max": 1.0,
-                   "values": [0.9474, 0.8947, 1.0] }
+  "_args": { "...": "..." },
+  "_meta": { "...": "...", "pred_key": "gemini-3.1_response_kg", "matching": "llm-2-pass", "runs": 1 },
+  "metrics": {
+    "recall": 0.871, "precision": 0.991, "f1": 0.927,
+    "atomicity_rate": 1.0, "claim_density": 1.0, "duplicate_rate": 0.0,
+    "abstention_recognized_rate": 0.0, "abstention_misread_rate": 1.0, "answer_missed_rate": 0.0,
+    "extraction_error_rate": 0.0, "checker_failure_rate": 0.0, "atomization_failure_rate": 0.0
   },
-  "runs": [ { "...": "one complete, byte-normal single-run document" } ]
+  "variance": { "recall": { "n": 1, "std": 0.0, "min": 0.871, "max": 0.871, "values": [0.871] }, "...": "..." },
+  "runs": [
+    {
+      "_meta": { "...": "...", "run": 1, "duration_seconds": 90.6 },
+      "metrics": { "...same keys, this run's values..." },
+      "counts": {
+        "data":      { "dropped_no_response": 0, "dropped_no_gt_key": 0, "gt_empty": 1 },
+        "recall":    { "total_gt_claims": 116, "covered": 101, "missed": 15, "answer_missed_penalty": 0, "unjudged": 0, "denominator": 116 },
+        "precision": { "total_pred_claims": 105, "supported": 104, "unsupported": 0, "abstention_misread_penalty": 1, "unjudged": 0, "denominator": 105 },
+        "extraction_stats": { "gt": { "claims": 116, "avg_per_item": 4.83 }, "pred": { "claims": 105, "avg_per_item": 4.38 } },
+        "abstention_handling": { "answers": 24, "answers_extracted": 24, "answers_missed": 0,
+                                 "abstentions": 1, "abstentions_recognized": 0, "abstentions_misread": 1 },
+        "reliability": {
+          "extraction":       { "failed": 0, "items": 25, "by_cause": {} },
+          "matching_checker": { "unjudged": 0, "issued": 221, "items_affected": 0, "unjudged_gt": 0, "unjudged_pred": 0 },
+          "atomization":      { "measured": false, "reason": "no --atomizer-model" }
+        },
+        "atomicity":  null,
+        "duplicates": { "predicted_claims": 105, "unique_claims": 105, "duplicate_claims": 0 }
+      },
+      "items": [
+        { "id": "12345", "question": "...", "response": "...", "bucket": "compared",
+          "gt_claims":   [ { "claim": "...", "verdict": "Entailment", "explanation": "..." },
+                           { "claim": "...", "verdict": "Neutral",    "explanation": "..." } ],
+          "pred_claims": [ { "claim": "...", "verdict": "Entailment", "explanation": "..." } ] },
+        { "id": "1088355", "question": "...", "response": "The passages do not provide ...",
+          "bucket": "abstention_misread", "gt_claims": [], "pred_claims": [ { "claim": "..." } ] }
+      ]
+    }
+  ]
 }
 ```
 
-- Top-level metrics become **means**, so a variance-unaware reader parses a
-  multi-run file like a single-run one.
-- `variance` carries `{n, std, min, max, values}` per metric. `n` is how many
-  runs actually contributed — a metric that was `null` in some runs is averaged
-  over fewer, and `n` is where you see that. A metric that was `null` in *every*
-  run keeps its key with `mean: null` and `n: 0`; it never silently disappears.
-- `runs` holds N complete, normal single-run documents.
+- `metrics` is the variance roster: the numbers the console's Metrics
+  rows and the run line show. Rates live here and nowhere else.
+- `counts` mirrors the console blocks one to one: 📂 Data, the two
+  🔎 Matching Quality funnels, 📊 Extraction Stats, ⚪ Abstention Handling,
+  the three 💥 Reliability rows, 🧬 Atomicity and 🔁 Duplicates (numbers
+  only). An axis that did not run says so: `"measured": false` with the
+  reason, and `atomicity: null`.
+- `items` lists every attempted item with its `bucket` (`compared`,
+  `answer_missed`, `abstention_recognized`, `abstention_misread`,
+  `extraction_error`) and both claim lists. Compared items carry a verdict
+  and explanation per claim (pass 1 on GT claims, pass 2 on predictions);
+  the other buckets never reached the matcher, so their claims are bare.
+  Split decisions (`atomicity_splits`) and `duplicate_claims` ride on the
+  item they belong to; an errored item carries its `cause`.
 
-> **Known limitation.** Only top-level scalars are aggregated, so the multi-run
-> top level currently carries the three coverage metrics but not the orthogonal
-> rates (atomicity, duplicates, abstentions) or the tooling rates — those live
-> inside each entry of `runs`. `ragcheck` does not have this limitation because
-> it aggregates a flat `overall_metrics` dict. Unifying the two is planned.
+### Findings — `<filename>_extractor_eval[_N]_findings.json`
 
-### Disagreements file
+The console branches opened up: one list per branch, every entry names its
+item. Empty branches stay present — hidden is not zero.
 
 ```json
 {
   "_args": { "...": "..." },
   "_meta": { "...": "..." },
-  "total_disagreements": 3,
-  "items": [
-    {
-      "id": "857956",
-      "question": "...",
-      "response": "...",
-      "error_type": "extraction_error",
-      "cause": "parse_failure"
-    },
-    {
-      "id": "12345",
-      "question": "...", "response": "...",
-      "tp_recall": 6, "tp_precision": 4, "fp": 1, "fn": 2,
-      "gt_triplets": ["..."], "pred_triplets": ["..."],
-      "false_negatives": [
-        { "gt_triplet": "...", "verdict": "Neutral", "reason": "..." }
-      ],
-      "false_positives": [
-        { "pred_triplet": "...", "verdict": "Neutral", "reason": "..." }
-      ],
-      "unjudged": [
-        { "gt_triplet": "...", "cause": "checker_failure" }
-      ]
-    }
-  ],
-  "atomicity_splits": [
-    { "id": "...", "original": "...", "children": ["...", "..."], "reasoning": "..." }
+  "runs": [
+    { "_meta": { "...": "...", "run": 1 },
+      "findings": {
+        "missed":             [ { "id": "12345", "question": "...", "claim": "...", "verdict": "Neutral", "explanation": "..." } ],
+        "unsupported":        [ { "id": "12345", "question": "...", "claim": "...", "verdict": "Neutral", "explanation": "..." } ],
+        "answer_missed":      [ { "id": "77", "question": "...", "response": "...", "claims": ["..."] } ],
+        "abstention_misread": [ { "id": "1088355", "question": "...", "response": "...", "claims": ["..."] } ],
+        "unjudged":           [ { "id": "...", "question": "...", "claim": "...", "side": "gt", "cause": "checker_failure" } ],
+        "extraction_failed":  [ { "id": "857956", "question": "...", "cause": "parse_failure" } ]
+      } }
   ]
 }
 ```
 
-- `error_type` is present only on whole-item entries and is one of
-  `extraction_error`, `abstention_misread`, `answer_missed`.
-- `false_positives` / `false_negatives` contain **judged** misses only — every
-  entry carries a real verdict from the checker.
-- `unjudged` holds claims the checker never returned a verdict for. An item
-  whose *only* problem was a checker failure still appears here, so the failure
-  stays traceable.
-- `atomicity_splits` appears only when the atomicity axis ran and found
-  something to split.
-- With `--runs > 1` the document becomes `{_args, _meta, runs: [...]}`, mirroring
-  the summary.
+- `missed` / `unsupported` — the Matching Quality misses, each with the
+  **judged** verdict and the checker's explanation.
+- `unjudged` — a claim the checker never returned a verdict for (`side`
+  names the pass). Not a disagreement, but the item stays traceable.
+- `answer_missed` / `abstention_misread` — the ⚪ Abstention Handling
+  branches: the GT claims lost to an empty extraction, the claims invented
+  from a refusal.
+- `extraction_failed` — the 💥 row's items, with their cause.
+- `_meta` is a copy of the record's, so the two files identify each other.
+
+With `--runs N`, the variance block aggregates the twelve `metrics` keys as
+`mean ± std [min, max]` across runs (see docs/output_conventions.md rule
+set 4); `variance[key].n` says how many runs contributed, and an axis that
+never ran keeps its key with `n: 0`.
 
 ---
 

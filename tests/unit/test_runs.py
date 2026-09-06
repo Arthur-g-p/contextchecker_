@@ -107,7 +107,7 @@ class TestPipelineRuns:
         assert pipeline._extract_response.verbosity == "compact"
 
     def test_multi_run_document_shape(self, monkeypatch):
-        # silent: the fabricated last_report lacks the fields the per-run
+        # silent: the fabricated run entry lacks the fields the per-run
         # findings blocks print; this test asserts the document, not logs.
         pipeline = _pipeline(runs=3, verbosity="silent")
         seen = []
@@ -115,11 +115,12 @@ class TestPipelineRuns:
         async def fake_run_once(data, announce=True, report=True):
             seen.append(data)
             data[0]["mutated"] = True
-            pipeline.last_report = {
+            pipeline.last_run = {
                 "_meta": {"schema_version": 2, "extractor_model": EXT},
-                "overall_metrics": {"precision": 0.5 + 0.1 * len(seen)},
-                "results": [{"query_id": "0"}],
+                "metrics": {"precision": 0.5 + 0.1 * len(seen)},
+                "counts": {}, "items": [{"query_id": "0"}],
             }
+            pipeline.last_run_findings = {"_meta": {}, "findings": {}}
             return data
 
         monkeypatch.setattr(pipeline, "_run_once", fake_run_once)
@@ -127,7 +128,8 @@ class TestPipelineRuns:
         pipeline.run_sync(source)
         doc = pipeline.last_report
 
-        # A report is a report is a report: runs holds N normal documents
+        # One skeleton: runs holds N complete entries
+        assert list(doc) == ["_meta", "metrics", "variance", "runs"]
         assert doc["_meta"]["runs"] == 3
         assert "duration_seconds" in doc["_meta"]
         assert "run" not in doc["_meta"]           # outer meta has no run number
@@ -135,12 +137,14 @@ class TestPipelineRuns:
         assert doc["runs"][0]["_meta"]["run"] == 1
         assert doc["runs"][2]["_meta"]["run"] == 3
         assert all("duration_seconds" in r["_meta"] for r in doc["runs"])
-        assert doc["runs"][0]["results"] == [{"query_id": "0"}]
-        # No top-level results in a multi-run file — runs IS the content
-        assert "results" not in doc
+        assert doc["runs"][0]["items"] == [{"query_id": "0"}]
+        # items live inside the run entries, never at the top
+        assert "items" not in doc
+        # the findings document mirrors the runs
+        assert [f["_meta"]["run"] for f in pipeline.last_findings["runs"]] == [1, 2, 3]
 
-        # Aggregates: flat means + variance sibling (0.6, 0.7, 0.8)
-        assert doc["overall_metrics"]["precision"] == pytest.approx(0.7, abs=1e-4)
+        # Aggregates: means + variance (0.6, 0.7, 0.8)
+        assert doc["metrics"]["precision"] == pytest.approx(0.7, abs=1e-4)
         assert doc["variance"]["precision"]["min"] == 0.6
         assert doc["variance"]["precision"]["max"] == 0.8
 
@@ -155,9 +159,8 @@ class TestPipelineRuns:
             seen.append(data)
             mutated_at_entry.append("mutated" in data[0])
             data[0]["mutated"] = True
-            pipeline.last_report = {
-                "_meta": {}, "overall_metrics": {}, "results": [],
-            }
+            pipeline.last_run = {"_meta": {}, "metrics": {}, "counts": {}, "items": []}
+            pipeline.last_run_findings = {"_meta": {}, "findings": {}}
             return data
 
         monkeypatch.setattr(pipeline, "_run_once", fake_run_once)
@@ -171,17 +174,22 @@ class TestPipelineRuns:
         # entry — otherwise skip logic no-ops them and fakes zero variance.
         assert mutated_at_entry == [False, False, False]
 
-    def test_single_run_keeps_normal_report(self, monkeypatch):
-        pipeline = _pipeline(runs=1)
+    def test_single_run_has_the_same_skeleton(self, monkeypatch):
+        """--runs 1 is the N = 1 case of the same document: runs is a list
+        of one, metrics are that run's values, variance has n = 1."""
+        pipeline = _pipeline(runs=1, verbosity="silent")
 
         async def fake_run_once(data, announce=True, report=True):
-            pipeline.last_report = {"_meta": {}, "overall_metrics": {},
-                                    "results": [{"query_id": "0"}]}
+            pipeline.last_run = {"_meta": {}, "metrics": {"precision": 0.5},
+                                 "counts": {}, "items": [{"query_id": "0"}]}
+            pipeline.last_run_findings = {"_meta": {}, "findings": {}}
             return data
 
         monkeypatch.setattr(pipeline, "_run_once", fake_run_once)
         pipeline.run_sync([{"response": "x"}])
-        # No variance/runs keys with the default — byte-compatible document
-        assert "variance" not in pipeline.last_report
-        assert "runs" not in pipeline.last_report
-        assert pipeline.last_report["results"] == [{"query_id": "0"}]
+        doc = pipeline.last_report
+        assert list(doc) == ["_meta", "metrics", "variance", "runs"]
+        assert doc["_meta"]["runs"] == 1 and len(doc["runs"]) == 1
+        assert doc["metrics"]["precision"] == 0.5
+        assert doc["variance"]["precision"]["n"] == 1
+        assert doc["runs"][0]["items"] == [{"query_id": "0"}]

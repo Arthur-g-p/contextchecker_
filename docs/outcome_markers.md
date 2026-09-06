@@ -66,7 +66,7 @@ extracted". Concretely:
   the claim undecidable and excluded).
 - Extractor eval: errored items go to their own bucket (excluded from
   P/R/F1 and from the abstention buckets), reported as an error rate with a
-  per-cause breakdown, and listed in the disagreements file for
+  per-cause breakdown, and listed in the findings file for
   identification.
 - Checker skip stats: empty-kg items are reported as `abstained` vs
   `extraction_failed`, not lumped as "empty claims".

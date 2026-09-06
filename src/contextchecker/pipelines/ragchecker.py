@@ -16,7 +16,7 @@ Data flow:
     retrieved2answer:   gt claims       vs each chunk       (matrix)
 
 The mutated items are the in-memory working document; the only artifact
-the CLI writes is build_report() - RAGChecker's structure (results list +
+the CLI writes is the record from _build_run() - RAGChecker's structure (items list +
 four directional arrays) with modernized leaves (dict claims, verdict
 objects). Metrics are stubbed until the formulas are settled.
 """
@@ -34,13 +34,14 @@ from contextchecker.pipelines.directions import (
     _location,
     abstention_counts,
     log_pipeline_tree,
+    pipeline_counts,
     verdict_summary,
     normalize_chunks,
     run_direction,
     unwrap_items,
 )
 from contextchecker.stats import GLOBAL_STATS, format_headline, log_mece_tree, log_rate_rows, log_token_stats, usage_since
-from contextchecker.utils import build_meta, plural
+from contextchecker.utils import build_meta, findings_view, plural
 
 logger = settings.get_logger(__name__)
 
@@ -293,56 +294,62 @@ def _verdict_cell_counts(results: list[dict]) -> tuple[int, int]:
 
 
 def compute_overall_metrics(results: list[dict]) -> dict:
-    """Macro aggregation (per paper): average per-item values, skipping nulls.
-
-    'support' reports how many items actually contributed to each average -
-    exclusions shrink N invisibly otherwise. Adds the project's own rates:
-    abstention (with the justified/unjustified split from retrieval evidence),
-    extraction errors, and checker failures (None verdicts across all arrays).
+    """Macro aggregation (per paper): average per-item values, skipping nulls,
+    plus the project's own rates — the abstention split, extraction errors,
+    checker failures. Exactly the variance roster; the counts behind the
+    averages live in compute_overall_counts.
     """
     overall: dict = {}
-    support: dict = {}
     for name in METRIC_NAMES:
         values = [e["metrics"][name] for e in results
                   if e["metrics"].get(name) is not None]
-        support[name] = len(values)
         overall[name] = round(sum(values) / len(values), 4) if values else None
-    overall["support"] = support
 
     evaluated = len(results)
     if evaluated == 0:
         return overall
 
-    errored = [e for e in results if e.get("extraction_errors")]
+    errored = sum(1 for e in results if e.get("extraction_errors"))
     ab = _abstention_breakdown(results)
     # No-results leave the denominator: a tooling failure is charged exactly
     # once, in extraction_error_rate — never by diluting a behavior rate.
     # justified and unwarranted are rates over the items with no GT answer;
-    # unjustified over the items with one.
-    overall["abstention_rate"] = _ratio(ab["abstained"], evaluated - ab["errored"])
+    # unjustified over the items with one. (The plain abstention rate is
+    # not printed per run, so it is not a metric here — its numbers live in
+    # counts.abstention.)
     overall["justified_abstention_rate"] = _ratio(ab["justified"], ab["unanswerable"])
     overall["unjustified_abstention_rate"] = _ratio(ab["unjustified"], ab["answerable"])
     overall["unwarranted_answer_rate"] = _ratio(ab["unwarranted"], ab["unanswerable"])
-    overall["abstention_counts"] = {
-        k: ab[k] for k in ("answerable", "unanswerable", "justified",
-                           "unjustified", "unwarranted",
-                           "all_chunks_irrelevant", "relevant_chunk_present",
-                           "relevance_unknown")
-    }
-
-    overall["extraction_error_rate"] = _ratio(len(errored), evaluated)
-    overall["extraction_errors"] = {
-        "response": sum(1 for e in errored
-                        if e["extraction_errors"].get("response")),
-        "gt_answer": sum(1 for e in errored
-                         if e["extraction_errors"].get("gt_answer")),
-    }
+    overall["extraction_error_rate"] = _ratio(errored, evaluated)
 
     # Judge reliability: share of None verdicts across every issued check.
     total_cells, none_cells = _verdict_cell_counts(results)
     overall["checker_failure_rate"] = _ratio(none_cells, total_cells)
-
     return overall
+
+
+def compute_overall_counts(results: list[dict]) -> dict:
+    """The numbers behind the console blocks — never varianced: ``support``
+    (items behind each macro average), ``abstention`` (the ⚪ tree),
+    ``reliability`` (the 💥 rows)."""
+    support = {name: sum(1 for e in results if e["metrics"].get(name) is not None)
+               for name in METRIC_NAMES}
+    errored = [e for e in results if e.get("extraction_errors")]
+    total_cells, none_cells = _verdict_cell_counts(results)
+    return {
+        "support": support,
+        "abstention": _abstention_breakdown(results),
+        "reliability": {
+            "extraction": {
+                "failed": len(errored), "items": len(results),
+                "by_cause": {
+                    "response": sum(1 for e in errored if e["extraction_errors"].get("response")),
+                    "gt_answer": sum(1 for e in errored if e["extraction_errors"].get("gt_answer")),
+                },
+            },
+            "checking": {"unjudged": none_cells, "issued": total_cells},
+        },
+    }
 
 
 class RagCheckerPipeline(BaseService):
@@ -421,7 +428,12 @@ class RagCheckerPipeline(BaseService):
         )
         # The single output artifact, populated by run() — the CLI reads this
         # instead of calling the pipeline a second time (atomizer precedent).
+        # The record and the findings, assembled by the base run loop from
+        # the per-run entries _run_once leaves on last_run / last_run_findings.
         self.last_report: dict | None = None
+        self.last_findings: dict | None = None
+        self.last_run: dict | None = None
+        self.last_run_findings: dict | None = None
 
         # Working-document vocabulary. GT keys are separate so a failed GT
         # extraction can never masquerade as a response failure (or vice versa).
@@ -491,9 +503,8 @@ class RagCheckerPipeline(BaseService):
     # -- Pipeline: the BaseService 7-step run() shape --
 
     async def run(self, data: list[dict]) -> list[dict]:
-        """Run the pipeline; with runs > 1, repeat it and report variance."""
-        if self._runs <= 1:
-            return await self._run_once(data)
+        """Run the pipeline N times (N = --runs, default 1); the base loop
+        assembles last_report and last_findings."""
         return await self._run_repeated(data)
 
     async def _run_once(
@@ -509,7 +520,7 @@ class RagCheckerPipeline(BaseService):
                           mode after run 1 - they are run-invariant)
         4. Execute      - 2 extractions, then the 4 directions
         5. Serialize    - none in-place (services + runner already did);
-                          the report lands on last_report
+                          the run entry lands on last_run
         6. Log results  - consolidated results (report=False in variance
                           mode - the VARIANCE block reports instead)
         7. Return mutated data
@@ -535,7 +546,11 @@ class RagCheckerPipeline(BaseService):
             await run_direction(service, valid, direction)
 
         self._serialize()                             # 5 (no-op)
-        self.last_report = self.build_report(data)    # 6: the single artifact
+        self.last_run = self._build_run(data)         # 6: this run's entry
+        self.last_run_findings = {
+            "_meta": dict(self.last_run["_meta"]),
+            "findings": self._build_findings(self.last_run["items"]),
+        }
         if report:
             self._log_results()                       # 7: consolidated results
         return data
@@ -617,37 +632,146 @@ class RagCheckerPipeline(BaseService):
 
     # -- Report (the single output artifact) --
 
-    def build_report(self, data: list[dict]) -> dict:
-        """Project the mutated working data into the report document.
+    def _build_run(self, data: list[dict]) -> dict:
+        """One ``runs[]`` entry of the record: {_meta, metrics, counts, items}.
 
-        RAGChecker structure (results list + four directional arrays,
+        ``items`` keep the RAGChecker structure (four directional arrays
         parallel to the claims) with modernized leaves: claims as dicts,
-        verdict entries as objects. Pure projection - loss-free from the
+        verdict entries as objects. Pure projection — loss-free from the
         in-memory items, no LLM calls, safe to rebuild anytime.
         """
-        results = []
+        items = []
         dropped = 0
         for item in data:
             if _missing_keys(item):
                 dropped += 1
                 continue
-            results.append(self._build_result_entry(item))
+            items.append(self._build_result_entry(item))
 
         timestamp, duration = self._run_timing()
-        return {
-            "_meta": build_meta(
-                "ragcheck",
-                timestamp=timestamp,
-                duration_seconds=duration,
-                total_items=len(data),
-                evaluated_items=len(results),
-                dropped_items=dropped,
-                request_strategies=GLOBAL_STATS.strategies(),
-                usage=usage_since(getattr(self, "_usage_at_start", None)),
-            ),
-            "overall_metrics": compute_overall_metrics(results),
-            "results": results,
-        }
+        meta = build_meta(
+            "ragcheck",
+            timestamp=timestamp,
+            duration_seconds=duration,
+            total_items=len(data),
+            evaluated_items=len(items),
+            dropped_items=dropped,
+            request_strategies=GLOBAL_STATS.strategies(),
+            usage=usage_since(getattr(self, "_usage_at_start", None)),
+        )
+        counts = compute_overall_counts(items)
+        counts = {"support": counts["support"],
+                  "pipeline": pipeline_counts(self._pipeline_phases(items)),
+                  "abstention": counts["abstention"],
+                  "reliability": counts["reliability"]}
+        return {"_meta": meta, "metrics": compute_overall_metrics(items),
+                "counts": counts, "items": items}
+
+    def _pipeline_phases(self, items: list[dict]) -> list[tuple]:
+        """The six phases, for the 🔀 tree and ``counts.pipeline`` alike:
+        (icon, name, PhaseStats, summary text, tallies)."""
+        response_claims = sum(len(e["response_claims"]) for e in items)
+        gt_claims = sum(len(e["gt_answer_claims"]) for e in items)
+        phases: list[tuple] = [
+            ("📝", "extract response", self._extract_response.last_stats,
+             f"{response_claims} {plural(response_claims, 'claim')}",
+             {"claims": response_claims}),
+            ("📝", "extract gt_answer", self._extract_gt.last_stats,
+             f"{gt_claims} {plural(gt_claims, 'claim')}", {"claims": gt_claims}),
+        ]
+        for direction, service in self._directions:
+            c = self._verdict_counts(items, direction.name)
+            tally = {"verdicts": c["total"], "Entailment": c["Entailment"],
+                     "Contradiction": c["Contradiction"], "Neutral": c["Neutral"],
+                     "unjudged": c["unknown"]}
+            phases.append(("🔎", direction.name, service.last_stats,
+                           verdict_summary(c), tally))
+        return phases
+
+    @staticmethod
+    def _build_findings(items: list[dict]) -> dict:
+        """The review queue: the claims counted by each Generator metric, the
+        recall misses, and the ⚪ / 💥 branches — one list each.
+
+        Response claims: ``hallucination`` (wrong vs the GT answer and no
+        chunk grounds it), ``noise_sensitivity_in_relevant`` /
+        ``noise_sensitivity_in_irrelevant`` (wrong, but a chunk said so —
+        ``grounded_by`` names it), ``self_knowledge`` (right, ungrounded).
+        GT claims: ``recall_misses`` (the response never states it;
+        ``retrieved_in`` non-empty = the generator dropped retrieved evidence,
+        empty = the retriever never brought it). Items: ``unjustified_abstention``,
+        ``unwarranted_answer``, ``extraction_failed``; ``unjudged`` for any
+        missing verdict. A pure view over the record's items.
+        """
+        def text(claim: dict) -> str:
+            return f"{claim['subject']} {claim['predicate']} {claim['object']}"
+
+        def classify(item: dict):
+            head = {"query_id": item["query_id"], "query": item["query"]}
+            if item.get("extraction_errors"):
+                for side, cause in item["extraction_errors"].items():
+                    yield "extraction_failed", {**head, "side": side, "cause": cause}
+                return
+            doc_ids = [c["doc_id"] for c in item["retrieved_context"]]
+            relevant = set(item.get("relevant_chunks") or [])
+            if item.get("is_abstention"):
+                if not item.get("gt_no_answer"):
+                    yield "unjustified_abstention", {
+                        **head, "response": item["response"],
+                        "relevant_chunks": sorted(relevant)}
+                return  # recall 0 by non-delivery — the entry above says it
+            if item.get("gt_no_answer"):
+                yield "unwarranted_answer", {
+                    **head, "response": item["response"],
+                    "claims": [text(c) for c in item["response_claims"]]}
+                return  # precision 0 by necessity — no GT to judge against
+
+            for claim, a2r, row in zip(item["response_claims"],
+                                       item["answer2response"],
+                                       item["retrieved2response"]):
+                entry = {**head, "claim": text(claim)}
+                if a2r.get("verdict") is None:
+                    yield "unjudged", {**entry, "direction": "answer2response",
+                                       "cause": a2r.get("error", "checker_failure")}
+                    continue
+                verdicts = [c.get("verdict") for c in row]
+                grounded_by = [doc_ids[d] for d, v in enumerate(verdicts) if v == _ENTAILMENT]
+                correct = a2r["verdict"] == _ENTAILMENT
+                if grounded_by:
+                    if not correct:
+                        branch = ("noise_sensitivity_in_relevant"
+                                  if any(d in relevant for d in grounded_by)
+                                  else "noise_sensitivity_in_irrelevant")
+                        yield branch, {**entry, "gt_verdict": a2r["verdict"],
+                                       "explanation": a2r.get("explanation"),
+                                       "grounded_by": grounded_by}
+                elif None in verdicts:
+                    yield "unjudged", {**entry, "direction": "retrieved2response",
+                                       "cause": "checker_failure"}
+                elif correct:
+                    yield "self_knowledge", entry
+                else:
+                    yield "hallucination", {**entry, "gt_verdict": a2r["verdict"],
+                                            "explanation": a2r.get("explanation")}
+
+            for gt_claim, r2a, row in zip(item["gt_answer_claims"],
+                                          item["response2answer"],
+                                          item["retrieved2answer"]):
+                entry = {**head, "gt_claim": text(gt_claim)}
+                if r2a.get("verdict") is None:
+                    yield "unjudged", {**entry, "direction": "response2answer",
+                                       "cause": r2a.get("error", "checker_failure")}
+                elif r2a["verdict"] != _ENTAILMENT:
+                    yield "recall_misses", {
+                        **entry, "explanation": r2a.get("explanation"),
+                        "retrieved_in": [doc_ids[d] for d, c in enumerate(row)
+                                         if c.get("verdict") == _ENTAILMENT]}
+
+        return findings_view(
+            ["hallucination", "noise_sensitivity_in_relevant",
+             "noise_sensitivity_in_irrelevant", "self_knowledge", "recall_misses",
+             "unjustified_abstention", "unwarranted_answer", "extraction_failed",
+             "unjudged"], items, classify)
 
     def _run_timing(self) -> tuple[str, float]:
         """(timestamp, elapsed) for the report envelope; safe before a run."""
@@ -752,7 +876,7 @@ class RagCheckerPipeline(BaseService):
             row.append(cell)
         return row
 
-    # -- Serialization: none in place; build_report() is the artifact --
+    # -- Serialization: none in place; _build_run() is the artifact --
 
     def _serialize(self, *args, **kwargs) -> None:
         pass
@@ -835,37 +959,19 @@ class RagCheckerPipeline(BaseService):
         """══ RESULTS ══ rule + 🔀 Pipeline: where the requests went."""
         if self.verbosity != "full":
             return
-        report = self.last_report
-        results = report["results"]
-
         logger.info(settings.section_rule("RAGCHECK RESULTS", char="═"))
         logger.info("")
-
-        # ── 🔀 Pipeline: where the requests went
-        phases: list[tuple[str, str, object, str]] = []
-        response_claims = sum(len(e["response_claims"]) for e in results)
-        gt_claims = sum(len(e["gt_answer_claims"]) for e in results)
-        phases.append(("📝", "extract response",
-                       self._extract_response.last_stats,
-                       f"{response_claims} {plural(response_claims, 'claim')}"))
-        phases.append(("📝", "extract gt_answer",
-                       self._extract_gt.last_stats,
-                       f"{gt_claims} {plural(gt_claims, 'claim')}"))
-        for direction, service in self._directions:
-            c = self._verdict_counts(results, direction.name)
-            phases.append(("🔎", direction.name, service.last_stats,
-                           verdict_summary(c)))
-        log_pipeline_tree(phases)
+        log_pipeline_tree(self._pipeline_phases(self.last_run["items"]))
 
     def _log_metrics(self) -> None:
         """📊 Metrics: the first-impression overview (macro, from the report)."""
         if self.verbosity != "full":
             return
-        report = self.last_report
-        om = report["overall_metrics"]
+        run = self.last_run
+        om = run["metrics"]
 
-        n = report["_meta"]["evaluated_items"]
-        support = om.get("support", {})
+        n = run["_meta"]["evaluated_items"]
+        support = run["counts"]["support"]
 
         def fmt(name: str) -> str:
             value = om.get(name)
@@ -915,7 +1021,7 @@ class RagCheckerPipeline(BaseService):
         reconciliation."""
         if self.verbosity != "full":
             return
-        ab = _abstention_breakdown(self.last_report["results"])
+        ab = self.last_run["counts"]["abstention"]
         # Behavior only: extraction-failed items are out of the tree AND
         # out of the rate denominators (charged once, in 💥 Reliability).
         top = ab["evaluated"] - ab["errored"]
@@ -959,16 +1065,14 @@ class RagCheckerPipeline(BaseService):
         """💥 Reliability rate rows — harness health, always printed."""
         if self.verbosity != "full":
             return
-        report = self.last_report
-        ab = _abstention_breakdown(report["results"])
-        total_cells, none_cells = _verdict_cell_counts(report["results"])
-        sources = report["overall_metrics"].get("extraction_errors", {})
-        causes = {k: v for k, v in sources.items() if v} or None
+        rel = self.last_run["counts"]["reliability"]
+        ext, chk = rel["extraction"], rel["checking"]
+        causes = {k: v for k, v in ext["by_cause"].items() if v} or None
         log_rate_rows(
             "💥 Reliability",
-            [("📝", "Extraction", ab["errored"], ab["evaluated"],
+            [("📝", "Extraction", ext["failed"], ext["items"],
               "items failed", "extraction_error_rate", causes),
-             ("🔎", "Checking", none_cells, total_cells,
+             ("🔎", "Checking", chk["unjudged"], chk["issued"],
               "verdicts unjudged", "checker_failure_rate", None)],
             header_note="tooling — excluded from all metrics,"
                         " counted once here",
@@ -978,8 +1082,7 @@ class RagCheckerPipeline(BaseService):
     def _log_done(self) -> None:
         if self.verbosity != "full":
             return
-        report = self.last_report
-        n = report["_meta"]["evaluated_items"]
+        run = self.last_run
+        n = run["_meta"]["evaluated_items"]
         logger.info(" ✅ Done: %d %s · %s", n, plural(n, "item"),
-                    format_headline(report.get("overall_metrics", {}),
-                                    self._RUN_SUMMARY_KEYS))
+                    format_headline(run["metrics"], self._RUN_SUMMARY_KEYS))

@@ -68,60 +68,90 @@ Computes standard multi-class classification metrics, reported as:
   charged exactly once here (`N of M claims unjudged →
   checker_failure_rate`).
 
-Metrics and configuration are returned as a `CheckerEvalResult` and written as
-the summary file. Disagreements (claims whose predicted verdict did not match
-the human label) go to a `<filename>_disagreements.json` sibling for error
-analysis — and for reviewing the labels themselves: on a heavily skewed slice a
-handful of wrong human labels moves the accuracy more than the checker does.
+Two files are written. The **record** holds everything: metrics, every
+count the console prints, and the complete per-item claim list. The
+**findings** file is the review queue — only the claims worth a look, each
+tagged with a `kind` — derived from the record's items and never a source
+of its own. On a heavily skewed slice a handful of wrong human labels moves
+the accuracy more than the checker does, so the findings are also where the
+labels themselves get reviewed.
 
 ## Output Format
 
-Two files are written, both opening with `_args` and `_meta` (see
-docs/output_conventions.md). The summary carries `CheckerEvalResult` verbatim.
+Both files open with `_args` and `_meta` (see docs/output_conventions.md).
+The skeleton is the same at `--runs 1` and `--runs N`: `runs` is always a
+list, `metrics` is the mean over runs (the run's own values at N = 1), and
+`variance` the spread. `--runs` adds entries, it never reshapes.
 
-### Disagreements file
+### Record — `<filename>_checker_eval[_N].json`
 
 ```json
 {
   "_args": { "...": "..." },
-  "_meta": { "...": "..." },
-  "total_disagreements": 30,
-  "total_unjudged": 0,
-  "items": [
+  "_meta": { "...": "...", "runs": 1 },
+  "metrics":  { "accuracy": 0.845, "macro_f1": 0.388, "entailment_f1": 0.913,
+                "contradiction_f1": null, "neutral_f1": 0.25, "checker_failure_rate": 0.0 },
+  "variance": { "accuracy": { "n": 1, "std": 0.0, "min": 0.845, "max": 0.845, "values": [0.845] }, "...": "..." },
+  "runs": [
     {
-      "id": "1006506",
-      "question": "when did mount nyiragongo last erupted",
-      "response": "Mount Nyiragongo last erupted on January 17, 2002.",
-      "labeled": 1,
-      "correct": 0,
-      "wrong": [
-        {
-          "triplet": "Mount Nyiragongo last erupted on January 17, 2002",
-          "human_label": "Entailment",
-          "verdict": "Neutral",
-          "explanation": "The reference states that an eruption occurred in 2002 but ..."
-        }
-      ],
-      "unjudged": []
+      "_meta": { "...": "...", "run": 1, "duration_seconds": 13.5 },
+      "metrics": { "...same keys, this run's values..." },
+      "counts": {
+        "data":     { "dropped_no_gt_claims": 1, "dropped_no_reference": 0, "dropped_no_labels": 0, "unlabeled_claims": 0 },
+        "verdicts": { "labeled": 116, "correct": 98, "wrong": 18, "unjudged": 0 },
+        "labels":   { "Entailment": 113, "Contradiction": 0, "Neutral": 3 },
+        "per_label": { "Entailment": { "precision": 1.0, "recall": 0.841, "f1": 0.913, "total": 113 },
+                       "...": "...", "macro avg": { "..." }, "weighted avg": { "..." } },
+        "confusion_matrix": { "labels": ["Entailment", "Contradiction", "Neutral"], "matrix": [[95, 0, 18], [0, 0, 0], [0, 0, 3]] }
+      },
+      "items": [
+        { "id": "1006506", "question": "...", "response": "...",
+          "claims": [ { "claim": "Mount Nyiragongo last erupted on January 17, 2002",
+                        "human_label": "Entailment", "verdict": "Neutral",
+                        "explanation": "The reference states that an eruption occurred in 2002 but ..." } ] }
+      ]
     }
   ]
 }
 ```
 
-- `total_disagreements` counts wrong **claims** and reconciles with the ❌
-  row of the 🔎 Verdicts tree; `total_unjudged` with the 💥 row.
-- `items` lists only items with at least one wrong or unjudged claim.
-  `labeled` / `correct` give the item's own tally so a reader sees how much
-  of the item went right.
-- `wrong` entries carry the checker's own explanation — that is the text to
-  read when deciding whether the checker or the annotator erred.
-- `unjudged` holds claims the checker never returned a verdict for, with
-  the `cause` from the checker error marker. An item whose only problem was
-  a checker failure still appears, so the failure stays traceable.
+- `metrics` is the variance roster: the numbers the console's Metrics
+  rows and the run line show. Nothing else is varianced.
+- `counts` mirrors the console blocks one to one: 📂 Data, 🔎 Verdicts,
+  the label distribution (its largest share is the majority baseline), the
+  📊 Per-Label Report cell for cell, the 📉 Confusion Matrix.
+- `items` lists every evaluated item with every labeled claim. A claim
+  without a verdict carries `"error": <cause>`.
 - The reference is not repeated (it can be a full retrieved context per
   item); join back to the input on `id`.
-- With `--runs > 1` the document becomes `{_args, _meta, runs: [...]}`,
-  mirroring the summary.
+
+### Findings — `<filename>_checker_eval[_N]_findings.json`
+
+The 🔎 Verdicts branches opened up: one list per branch, every entry names
+its item. Empty branches stay present — hidden is not zero.
+
+```json
+{
+  "_args": { "...": "..." },
+  "_meta": { "...": "..." },
+  "runs": [
+    { "_meta": { "...": "...", "run": 1 },
+      "findings": {
+        "wrong":    [ { "id": "1006506", "question": "when did mount nyiragongo last erupted",
+                        "claim": "Mount Nyiragongo last erupted on January 17, 2002",
+                        "human_label": "Entailment", "verdict": "Neutral",
+                        "explanation": "The reference states that an eruption occurred in 2002 but ..." } ],
+        "unjudged": [ { "id": "...", "question": "...", "claim": "...", "human_label": "...", "cause": "timeout" } ]
+      } }
+  ]
+}
+```
+
+- `wrong` — the checker's explanation is the text to read when deciding
+  whether the checker or the annotator erred.
+- `unjudged` — no verdict; `cause` from the checker error marker. Not a
+  disagreement, but the item stays traceable.
+- `_meta` is a copy of the record's, so the two files identify each other.
 
 With `--runs N`, the variance block aggregates accuracy, macro F1, the
 per-label F1s, and `checker_failure_rate` as `mean ± std [min, max]`

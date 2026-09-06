@@ -32,7 +32,7 @@ from contextchecker import settings
 from contextchecker.exceptions import FilterError, InvalidInputError
 from contextchecker.models import Direction
 from contextchecker.services.checking import CheckingService
-from contextchecker.stats import log_mece_tree
+from contextchecker.stats import PhaseStats, log_mece_tree
 
 logger = settings.get_logger(__name__)
 
@@ -95,14 +95,44 @@ def log_pipeline_tree(phases: list[tuple[str, str, object, str]]) -> None:
     in the square bracket (output_conventions rule 1.4).
 
     *phases* are (icon, name, PhaseStats-or-None, summary)."""
-    total = sum(s.http_requests for _, _, s, _ in phases if s)
+    total = sum(p[2].http_requests for p in phases if p[2])
     branches = []
-    for icon, name, stats, summary in phases:
+    for icon, name, stats, summary in (p[:4] for p in phases):
         foreign = " · ".join([summary] + phase_failure_lines(stats))
         branches.append((icon, stats.http_requests if stats else 0, name,
                          f"[{foreign}]"))
     log_mece_tree("🔀 Pipeline", total, "LLM requests", branches)
     logger.info("")
+
+
+def phase_record(stats, **counts) -> dict:
+    """One ``counts.pipeline`` entry: the phase's requests plus its own
+    tallies (claims, verdicts), and the failure numbers behind the ♻️ / 💥
+    notes — only when something failed. *stats* is the worker's PhaseStats
+    (None before the phase ran)."""
+    live = isinstance(stats, PhaseStats)
+    record = {"requests": stats.http_requests if live else 0, **counts}
+    if live:
+        failures: dict = {}
+        if stats.parse_error:
+            failures["retryable"] = stats.parse_error
+            failures["recovered"] = sum(r.recovered for r in stats.rounds)
+        for cause in ("context_too_long", "content_policy",
+                      "finish_reason_length", "timeout"):
+            if getattr(stats, cause):
+                failures[cause] = getattr(stats, cause)
+        if stats.permanently_failed:
+            failures["exhausted_retries"] = stats.permanently_failed
+        if failures:
+            record["failures"] = failures
+    return record
+
+
+def pipeline_counts(phases: list[tuple]) -> dict:
+    """``counts.pipeline`` for the record from the same *phases* the 🔀 tree
+    prints: (icon, name, PhaseStats, summary, tallies)."""
+    return {name: phase_record(stats, **(tallies or {}))
+            for _, name, stats, _, tallies in phases}
 
 
 def verdict_summary(counts: dict) -> str:

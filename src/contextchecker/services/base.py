@@ -22,9 +22,9 @@ from contextchecker import settings
 from contextchecker.exceptions import InvalidInputError
 from contextchecker.stats import (
     VarianceTracker,
+    document_meta,
     log_multi_run_hint,
     log_run_line,
-    sum_usage,
 )
 
 logger = settings.get_logger(__name__)
@@ -144,7 +144,7 @@ class BaseService(ABC):
         return asyncio.run(self.run(data))
 
     # One-line run summary. Presence-filtered: only keys that exist in a
-    # pipeline's overall_metrics are shown. Override when a subclass's
+    # pipeline's metrics are shown. Override when a subclass's
     # headline metric is not listed.
     _RUN_SUMMARY_KEYS = ("precision", "recall", "f1", "faithfulness")
 
@@ -155,64 +155,61 @@ class BaseService(ABC):
         done line stay out of runs-mode."""
 
     async def _run_repeated(self, data: list[dict]) -> list[dict]:
-        """Repeat _run_once N times; aggregate the runs into last_report.
+        """Run _run_once N times (N = --runs, default 1) and assemble the two
+        documents the CLI writes:
 
-        Metric-agnostic: build_variance() discovers whatever numeric keys
-        the pipeline's overall_metrics carries — nothing here names one.
+            last_report    {_meta, metrics, variance, runs: [{_meta, metrics, counts, items}]}
+            last_findings  {_meta, runs: [{_meta, findings}]}
 
-        Subclass contract: async ``_run_once(data, announce, report)``,
-        ``last_report`` shaped {_meta, overall_metrics, results}, and
-        ``self._runs``. Produces {_meta, overall_metrics (means), variance,
-        runs (N complete normal reports)}.
+        The skeleton never changes with --runs: ``metrics`` is the mean over
+        runs (the run's own values at N = 1), ``variance`` the spread, ``runs``
+        one complete entry per run. Subclass contract: async
+        ``_run_once(data, announce, report)`` sets ``self.last_run`` and
+        ``self.last_run_findings`` (one run entry each) and reads
+        ``self._runs``. Metric-agnostic: the variance roster comes from the
+        subclass's ``_VARIANCE_SECTIONS``.
         """
-        if self.verbosity == "full":
-            log_multi_run_hint(self._runs)
-        reports: list[dict] = []
+        runs = self._runs
+        full = self.verbosity == "full"
+        if runs > 1 and full:
+            log_multi_run_hint(runs)
         tracker = VarianceTracker(
             getattr(self, "_VARIANCE_SECTIONS", None),
             labels=getattr(self, "_VARIANCE_LABELS", None),
             directions=getattr(self, "_METRIC_DIRECTIONS", None))
-        # Run 1 mutates *data* in place; a copy taken after it would carry
-        # its results and the skip logic would no-op runs 2..N.
-        pristine = copy.deepcopy(data)
+        # Run 1 mutates *data* in place (the run() contract); a copy taken
+        # after it would carry its results and the skip logic would no-op
+        # runs 2..N — so the pristine copy is taken before.
+        pristine = copy.deepcopy(data) if runs > 1 else None
+        run_docs: list[dict] = []
+        finding_docs: list[dict] = []
 
-        for run in range(1, self._runs + 1):
-            if self.verbosity == "full":
+        for run in range(1, runs + 1):
+            if runs > 1 and full:
                 logger.info("")
-                logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
+                logger.info(settings.section_rule(f"Run {run}/{runs}"))
             working = data if run == 1 else copy.deepcopy(pristine)
             started = time.perf_counter()
-            await self._run_once(working, announce=(run == 1), report=False)
-            self.last_report["_meta"]["run"] = run
-            self.last_report["_meta"]["duration_seconds"] = round(
-                time.perf_counter() - started, 1)
-            reports.append(self.last_report)
-            tracker.add(self.last_report.get("overall_metrics", {}),
-                        self.last_report["_meta"]["duration_seconds"])
-            if self.verbosity == "full":
+            # One run prints its full results block (report=True); in runs
+            # mode the findings hook + run line print instead.
+            await self._run_once(working, announce=(run == 1), report=(runs == 1))
+            duration = round(time.perf_counter() - started, 1)
+            for doc in (self.last_run, self.last_run_findings):
+                doc["_meta"]["run"] = run
+                doc["_meta"]["duration_seconds"] = duration
+            run_docs.append(self.last_run)
+            finding_docs.append(self.last_run_findings)
+            tracker.add(self.last_run["metrics"], duration)
+            if runs > 1 and full:
                 self._log_run_findings()
-                log_run_line(
-                    run, self._runs,
-                    self.last_report["_meta"]["duration_seconds"],
-                    self.last_report.get("overall_metrics", {}),
-                    self._RUN_SUMMARY_KEYS,
-                )
+                log_run_line(run, runs, duration, self.last_run["metrics"],
+                             self._RUN_SUMMARY_KEYS)
 
-        means, variance = tracker.finish(
-            self._runs, log=self.verbosity == "full")
-        total_seconds = tracker.total_seconds
-
-        outer_meta = {k: v for k, v in reports[0]["_meta"].items()
-                      if k not in ("run", "duration_seconds")}
-        outer_meta["runs"] = self._runs
-        outer_meta["duration_seconds"] = total_seconds
-        outer_meta["usage"] = sum_usage([r["_meta"].get("usage") for r in reports])
-        self.last_report = {
-            "_meta": outer_meta,
-            "overall_metrics": means,
-            "variance": variance,
-            "runs": reports,
-        }
+        means, variance = tracker.finish(runs, log=(runs > 1 and full))
+        meta = document_meta(run_docs, runs, tracker.total_seconds)
+        self.last_report = {"_meta": meta, "metrics": means,
+                            "variance": variance, "runs": run_docs}
+        self.last_findings = {"_meta": dict(meta), "runs": finding_docs}
         return data
 
     @staticmethod

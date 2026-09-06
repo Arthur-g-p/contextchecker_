@@ -294,7 +294,7 @@ def atomize(
 @app.command()
 def refcheck(
     input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'reference')."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_refcheck.json."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Output file path. Defaults to results/{input_stem}_refcheck.json. A *_findings.json sibling (the review queue) is written alongside."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for extraction; also the {model}_response_kg key prefix."),
     checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for checking."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
@@ -346,15 +346,23 @@ def refcheck(
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    report = {"_args": _capture_args("refcheck"), **report}
-    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    # The record is the source; the findings file is a view derived from it.
+    _args = _capture_args("refcheck")
+    findings_file = output_file.with_name(output_file.stem + "_findings.json")
+    output_file.write_text(
+        json.dumps({"_args": _args, **report}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    findings_file.write_text(
+        json.dumps({"_args": _args, **pipeline.last_findings}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
     logger.info("Written: %s", output_file)
+    logger.info("Written: %s", findings_file)
 
 
 @app.command()
 def ragcheck(
     input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'gt_answer' + 'retrieved_context')."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_ragcheck[_{runs}].json."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_ragcheck[_{runs}].json. A *_findings.json sibling (the review queue) is written alongside."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for both extractions (response + gt_answer)."),
     checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for all four checking directions."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
@@ -407,15 +415,23 @@ def ragcheck(
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    report = {"_args": _capture_args("ragcheck"), **report}
-    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    # The record is the source; the findings file is a view derived from it.
+    _args = _capture_args("ragcheck")
+    findings_file = output_file.with_name(output_file.stem + "_findings.json")
+    output_file.write_text(
+        json.dumps({"_args": _args, **report}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    findings_file.write_text(
+        json.dumps({"_args": _args, **pipeline.last_findings}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
     logger.info("Written: %s", output_file)
+    logger.info("Written: %s", findings_file)
 
 
 @app.command()
 def faithcheck(
     input_file: Path = typer.Argument(..., help="Path to JSON input file (needs 'response' + 'retrieved_context'; no ground truth)."),
-    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_faithcheck[_{runs}].json."),
+    output_file: Path = typer.Option(None, "--output", "-o", help="Report path. Defaults to results/{input_stem}_faithcheck[_{runs}].json. A *_findings.json sibling (the review queue) is written alongside."),
     extractor_model: str = typer.Option(..., "--extractor-model", "-e", help="Model for response claim extraction."),
     checker_model: str = typer.Option(..., "--checker-model", "-c", help="Model for the retrieved2response checks."),
     extractor_base_api: str = typer.Option(None, "--extractor-base-api", help="Optional base URL for the extractor LLM API."),
@@ -468,9 +484,17 @@ def faithcheck(
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    report = {"_args": _capture_args("faithcheck"), **report}
-    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    # The record is the source; the findings file is a view derived from it.
+    _args = _capture_args("faithcheck")
+    findings_file = output_file.with_name(output_file.stem + "_findings.json")
+    output_file.write_text(
+        json.dumps({"_args": _args, **report}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    findings_file.write_text(
+        json.dumps({"_args": _args, **pipeline.last_findings}, indent=2, ensure_ascii=False),
+        encoding="utf-8")
     logger.info("Written: %s", output_file)
+    logger.info("Written: %s", findings_file)
 
 
 # ── Eval subcommand group ────────────────────────────────────────────────────
@@ -489,7 +513,7 @@ def eval_checker(
         ..., help="Path to eval JSON with GT triplets + human_label."
     ),
     output_file: Path = typer.Option(
-        None, "--output", "-o", help="Output path. Defaults to results/{input_stem}_checker_eval[_{runs}].json. A *_disagreements.json sibling is written alongside."
+        None, "--output", "-o", help="Output path. Defaults to results/{input_stem}_checker_eval[_{runs}].json. A *_findings.json sibling (the review queue) is written alongside."
     ),
     checker_model: str = typer.Option(
         ..., "--checker-model", "-m", help="Model name for the checker LLM."
@@ -524,9 +548,7 @@ def eval_checker(
     _print_header("eval checker")
 
     output_file = _resolve_output(input_file, "checker_eval", output_file, runs=runs)
-    disagree_file = output_file.with_name(
-        output_file.stem + "_disagreements.json"
-    )
+    findings_file = output_file.with_name(output_file.stem + "_findings.json")
 
     # Load input
     try:
@@ -550,25 +572,26 @@ def eval_checker(
             max_words=max_words,
             runs=runs,
         )
-        summary_doc, disagreements_doc = evaluator.run_sync(data)
+        record, findings = evaluator.run_sync(data)
         _args = _capture_args("eval checker")
     except ContextCheckerError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write both documents verbatim — the evaluator assembled them.
+    # Write both documents verbatim — the evaluator assembled them. The
+    # record is the source; the findings file is a view derived from it.
     output_file.write_text(
-        json.dumps({"_args": _args, **summary_doc}, indent=2, ensure_ascii=False),
+        json.dumps({"_args": _args, **record}, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
-    disagree_file.write_text(
-        json.dumps({"_args": _args, **disagreements_doc}, indent=2, ensure_ascii=False),
+    findings_file.write_text(
+        json.dumps({"_args": _args, **findings}, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
     logger.info("")
     logger.info("Written: %s", output_file)
-    logger.info("Written: %s", disagree_file)
+    logger.info("Written: %s", findings_file)
 
 
 
@@ -631,9 +654,7 @@ def eval_extractor(
     _print_header("eval extractor")
 
     output_file = _resolve_output(input_file, "extractor_eval", output_file, runs=runs)
-    disagree_file = output_file.with_name(
-        output_file.stem + "_disagreements.json"
-    )
+    findings_file = output_file.with_name(output_file.stem + "_findings.json")
 
     # Load input
     try:
@@ -660,26 +681,27 @@ def eval_extractor(
             atomizer_base_url=atomizer_base_api,
             runs=runs,
         )
-        summary_doc, disagreements_doc = evaluator.run_sync(data)
+        record, findings = evaluator.run_sync(data)
         _args = _capture_args("eval extractor")
     except ContextCheckerError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
 
-    # Write both documents verbatim — the evaluator assembled them.
+    # Write both documents verbatim — the evaluator assembled them. The
+    # record is the source; the findings file is a view derived from it.
     output_file.write_text(
-        json.dumps({"_args": _args, **summary_doc}, indent=2, ensure_ascii=False),
+        json.dumps({"_args": _args, **record}, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
-    disagree_file.write_text(
-        json.dumps({"_args": _args, **disagreements_doc}, indent=2, ensure_ascii=False),
+    findings_file.write_text(
+        json.dumps({"_args": _args, **findings}, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
 
     logger.info("")
     logger.info("Written: %s", output_file)
-    logger.info("Written: %s", disagree_file)
+    logger.info("Written: %s", findings_file)
 
 
 if __name__ == "__main__":

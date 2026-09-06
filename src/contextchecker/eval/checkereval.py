@@ -7,14 +7,11 @@ the checker's predicted verdicts 1:1 against the human annotations.
 Architecture:
     - Delegates ALL checking to CheckingService (zero duplication).
     - Owns only: GT validation, verdict comparison, metric computation,
-      disagreement collection, and the ── CHECKER EVAL ── logging section.
+      the record + findings documents, and the ── CHECKER EVAL ── logging section.
     - Does NOT inherit BaseService — evaluators measure, services mutate.
 """
 
-import asyncio
-import copy
 import time
-from dataclasses import asdict
 from datetime import datetime
 
 from contextchecker import settings
@@ -27,17 +24,13 @@ from contextchecker.eval.metrics import (
 from contextchecker.models import CheckerEvalResult
 from contextchecker.stats import (
     GLOBAL_STATS,
-    sum_usage,
     usage_since,
-    VarianceTracker,
     format_headline,
     log_mece_tree,
-    log_multi_run_hint,
     log_rate_rows,
-    log_run_line,
-    log_token_stats,
 )
-from contextchecker.utils import build_meta, canonicalize_triplets, plural
+from contextchecker.utils import build_meta, canonicalize_triplets, findings_view, plural
+from contextchecker.eval.base import Evaluator
 from contextchecker.services.base import BaseService
 from contextchecker.services.checking import CheckingService
 
@@ -53,7 +46,7 @@ LABELS = ["Entailment", "Contradiction", "Neutral"]
 _INTERNAL_EXT_MODEL = "_gt_eval"
 
 
-class CheckerEvaluator:
+class CheckerEvaluator(Evaluator):
     """Evaluates checker quality by running GT triplets through CheckingService
     and comparing predicted verdicts against human_label annotations.
 
@@ -64,9 +57,9 @@ class CheckerEvaluator:
         4. Delegates checking to CheckingService (logs CHECKER RESULTS)
         5. Compares verdicts vs human_labels (1:1 zip)
         6. Computes and logs eval metrics (CHECKER EVAL section)
-        7. Collects disagreements (wrong + unjudged claims, per item)
+        7. Builds the per-item record and its findings view
 
-    Returns (summary_doc, disagreements_doc) — CLI writes two files verbatim.
+    Returns (record, findings) — CLI writes two files verbatim.
     """
 
     _RUN_SUMMARY_KEYS = ("accuracy", "macro_f1")
@@ -134,61 +127,6 @@ class CheckerEvaluator:
 
     # ── Public API ───────────────────────────────────────────────
 
-    async def evaluate(self, data: list[dict]) -> tuple[dict, dict]:
-        """Run the eval; with runs > 1, repeat it and report variance.
-
-        Returns:
-            (summary_doc, disagreements_doc). Multi-run: the summary carries
-            flat means + variance sibling + runs = N complete normal
-            documents; the disagreements document mirrors with a runs array.
-        """
-        if self._runs <= 1:
-            return await self._evaluate_once(data)
-
-        # Variance mode. Evaluators narrate their result sections every run
-        # (evaluator verbosity levels are a later cleanup); Data/Config are
-        # announced once, and the VARIANCE block + token table land once at
-        # the end.
-        log_multi_run_hint(self._runs)
-        summaries: list[dict] = []
-        disagreements: list[dict] = []
-        tracker = VarianceTracker(self._VARIANCE_SECTIONS, labels=self._VARIANCE_LABELS,
-                                  directions=self._METRIC_DIRECTIONS)
-        for run in range(1, self._runs + 1):
-            logger.info("")
-            logger.info(settings.section_rule(f"Run {run}/{self._runs}"))
-            started = time.perf_counter()
-            summary, disagreement = await self._evaluate_once(
-                copy.deepcopy(data), announce=(run == 1))
-            duration = round(time.perf_counter() - started, 1)
-            for doc in (summary, disagreement):
-                doc["_meta"]["run"] = run
-                doc["_meta"]["duration_seconds"] = duration
-            summaries.append(summary)
-            disagreements.append(disagreement)
-            tracker.add({k: v for k, v in summary.items() if k != "_meta"},
-                        duration)
-            logger.info("")
-            log_run_line(run, self._runs, duration,
-                         summary, self._RUN_SUMMARY_KEYS)
-
-        means, variance = tracker.finish(self._runs)
-        total_seconds = tracker.total_seconds
-
-        def _outer_meta(doc: dict) -> dict:
-            meta = {k: v for k, v in doc["_meta"].items()
-                    if k not in ("run", "duration_seconds")}
-            meta["runs"] = self._runs
-            meta["duration_seconds"] = total_seconds
-            meta["usage"] = sum_usage([d["_meta"].get("usage") for d in summaries])
-            return meta
-
-        summary_doc = {"_meta": _outer_meta(summaries[0]),
-                       **means, "variance": variance, "runs": summaries}
-        disagreements_doc = {"_meta": _outer_meta(disagreements[0]),
-                             "runs": disagreements}
-        return summary_doc, disagreements_doc
-
     async def _evaluate_once(
         self, data: list[dict], announce: bool = True
     ) -> tuple[dict, dict]:
@@ -200,10 +138,9 @@ class CheckerEvaluator:
                 in variance mode — they repeat run 1 verbatim).
 
         Returns:
-            (summary_doc, disagreements_doc) — two ready-to-write JSON
-            documents incl. _meta: accuracy, per-label report, confusion
-            matrix; and the wrong / unjudged claims per item. The CLI only
-            resolves paths and dumps.
+            (run_doc, run_findings): one ``runs[]`` entry of the record —
+            {_meta, metrics, counts, items} — and the matching findings
+            entry {_meta, findings}, derived from the items.
         """
         self._started_at = datetime.now().isoformat(timespec="seconds")
         self._started_perf = time.perf_counter()
@@ -232,7 +169,6 @@ class CheckerEvaluator:
         self._prepare_for_service(evaluable, gt_labels_map)
 
         # Step 4: Delegate to CheckingService
-        # This produces: ── Checking ──, ── CHECKER RESULTS ──
         await self._service.run(evaluable)
 
         # Step 5: Compare verdicts vs human labels
@@ -245,54 +181,86 @@ class CheckerEvaluator:
             gt_flat, pred_flat, parse_errors, len(evaluable), skip_info
         )
 
-        # Step 7: Collect disagreements — the claim-level detail behind
-        # the ❌ wrong count, for error analysis (and label review).
-        disagreements = self._build_disagreements(evaluable, gt_labels_map)
-
-        # Step 8: Log eval-specific results; the evaluator owns the token
-        # table, printed once per invocation — in variance mode it is the
-        # cumulative total and belongs after the VARIANCE block.
+        # Step 7: Log eval-specific results (findings blocks). Done line and
+        # token table belong to the caller — they print once per invocation.
         self._log_eval_results(result, gt_flat, pred_flat)
-        if self._runs <= 1:
-            self._log_done(result)
-            log_token_stats()
 
-        # Step 9: Assemble the ready-to-write documents. The CLI only
-        # resolves paths and dumps JSON - it never composes content.
-        return self._assemble_documents(result, disagreements)
+        # Step 8: Assemble this run's documents. The CLI only resolves
+        # paths and dumps JSON — it never composes content.
+        return self._run_documents(result, evaluable, gt_labels_map, len(data))
 
-    def run_sync(self, data: list[dict]) -> tuple[dict, dict]:
-        """Sync wrapper — same pattern as BaseService.run_sync."""
-        return asyncio.run(self.evaluate(data))
-
-    def _assemble_documents(
+    def _run_documents(
         self,
         result: CheckerEvalResult,
-        disagreements: list[dict],
+        evaluable: list[dict],
+        gt_labels_map: dict[int, dict[int, str]],
+        total_items: int,
     ) -> tuple[dict, dict]:
-        """Build the two output documents the CLI writes verbatim.
+        """One ``runs[]`` entry of the record plus its findings entry.
 
-        ``total_disagreements`` counts wrong *claims*, so it reconciles with
-        the ❌ row of the 🔎 Verdicts tree; ``total_unjudged`` with the 💥 row.
+        ``metrics`` are the varianced scalars (the console's Metrics roster),
+        ``counts`` every number the console trees and tables print, ``items``
+        the complete per-item record. Findings are derived from the items.
         """
+        sk = result.skipped
         meta = build_meta(
             "checker_eval",
             timestamp=self._started_at,
             duration_seconds=time.perf_counter() - self._started_perf,
-            total_items=result.total_items,
+            total_items=total_items,
             evaluated_items=result.total_items,
-            dropped_items=sum(result.skipped.values()),
+            dropped_items=sk["missing_gt"] + sk["missing_context"] + sk["empty_gt"],
             request_strategies=GLOBAL_STATS.strategies(),
             usage=usage_since(getattr(self, "_usage_at_start", None)),
         )
-        summary_doc = {"_meta": meta, **asdict(result)}
-        disagreements_doc = {
-            "_meta": meta,
-            "total_disagreements": sum(len(d["wrong"]) for d in disagreements),
-            "total_unjudged": sum(len(d["unjudged"]) for d in disagreements),
-            "items": disagreements,
+        items = self._build_items(evaluable, gt_labels_map)
+        claims = [c for item in items for c in item["claims"]]
+        judged = [c for c in claims if c["verdict"] is not None]
+        correct = sum(c["verdict"] == c["human_label"] for c in judged)
+
+        def row(name: str) -> dict:
+            d = result.report[name]
+            return {"precision": round(d["precision"], 4),
+                    "recall": round(d["recall"], 4),
+                    "f1": round(d["f1-score"], 4), "total": int(d["support"])}
+
+        metrics = {
+            "accuracy": result.accuracy,
+            "macro_f1": result.macro_f1,
+            "entailment_f1": result.entailment_f1,
+            "contradiction_f1": result.contradiction_f1,
+            "neutral_f1": result.neutral_f1,
+            "checker_failure_rate": result.checker_failure_rate,
         }
-        return summary_doc, disagreements_doc
+        counts = {
+            # 📂 Data
+            "data": {
+                "dropped_no_gt_claims": sk["missing_gt"],
+                "dropped_no_reference": sk["missing_context"],
+                "dropped_no_labels": sk["empty_gt"],
+                "unlabeled_claims": sk.get("unlabeled_claims", 0),
+            },
+            # 🔎 Verdicts tree
+            "verdicts": {
+                "labeled": len(claims),
+                "correct": correct,
+                "wrong": len(judged) - correct,
+                "unjudged": len(claims) - len(judged),
+            },
+            # label distribution of the judged claims (the majority
+            # baseline is its largest share)
+            "labels": {label: sum(c["human_label"] == label for c in judged)
+                       for label in LABELS},
+            # 📊 Per-Label Report, cell for cell
+            "per_label": {name: row(name)
+                          for name in [*LABELS, "macro avg", "weighted avg"]},
+            # 📉 Confusion Matrix
+            "confusion_matrix": result.confusion_matrix,
+        }
+        run_doc = {"_meta": meta, "metrics": metrics, "counts": counts,
+                   "items": items}
+        run_findings = {"_meta": dict(meta), "findings": self._build_findings(items)}
+        return run_doc, run_findings
 
     # ── Pipeline steps (private) ─────────────────────────────────
 
@@ -505,62 +473,62 @@ class CheckerEvaluator:
 
     @staticmethod
     def _triplet_to_str(triplet: dict) -> str:
-        """Human-readable form for the disagreements file."""
+        """Human-readable claim text for items and findings."""
         return (f"{triplet.get('subject', '')} {triplet.get('predicate', '')} "
                 f"{triplet.get('object', '')}")
 
-    def _build_disagreements(
+    def _build_items(
         self,
         evaluable: list[dict],
         gt_labels_map: dict[int, dict[int, str]],
     ) -> list[dict]:
-        """Per-item list of claims whose verdict differs from the human label.
-
-        Walks the same (item, labeled claim) pairs as _compare. Unjudged
-        claims (no verdict) are not disagreements — the checker said
-        nothing — but the affected item must stay identifiable, so they
-        ride along under ``unjudged`` with their cause. Items where every
-        labeled claim was judged correctly are excluded.
-        """
-        disagreements: list[dict] = []
-
+        """The per-item record: every labeled claim with its human label,
+        the checker's verdict and explanation, and the error cause when no
+        verdict came back. Walks the same (item, labeled claim) pairs as
+        _compare, so the counts reconcile with the Verdicts tree."""
+        items: list[dict] = []
         for i, item in enumerate(evaluable):
             labeled = gt_labels_map.get(i, {})
             triplets = item[self._service_kg_key]
-            wrong: list[dict] = []
-            unjudged: list[dict] = []
-
+            claims: list[dict] = []
             for claim_idx, label in labeled.items():
                 triplet = triplets[claim_idx]
-                verdict = triplet.get(self._verdict_key)
-                if verdict is None:
-                    unjudged.append({
-                        "triplet": self._triplet_to_str(triplet),
-                        "human_label": label,
-                        "cause": triplet.get(self._error_key, "checker_failure"),
-                    })
-                elif verdict != label:
-                    wrong.append({
-                        "triplet": self._triplet_to_str(triplet),
-                        "human_label": label,
-                        "verdict": verdict,
-                        "explanation": triplet.get(self._explanation_key, ""),
-                    })
-
-            if not wrong and not unjudged:
-                continue  # every labeled claim judged correctly
-
-            disagreements.append({
+                entry = {
+                    "claim": self._triplet_to_str(triplet),
+                    "human_label": label,
+                    "verdict": triplet.get(self._verdict_key),
+                    "explanation": triplet.get(self._explanation_key),
+                }
+                if entry["verdict"] is None:
+                    entry["error"] = triplet.get(self._error_key, "checker_failure")
+                claims.append(entry)
+            items.append({
                 "id": item.get("id", f"item-{i}"),
                 "question": item.get("question", ""),
                 "response": item.get("response", ""),
-                "labeled": len(labeled),
-                "correct": len(labeled) - len(wrong) - len(unjudged),
-                "wrong": wrong,
-                "unjudged": unjudged,
+                "claims": claims,
             })
+        return items
 
-        return disagreements
+    @staticmethod
+    def _build_findings(items: list[dict]) -> dict:
+        """The review queue: the 🔎 Verdicts branches opened up — ``wrong``
+        (verdict differs from the human label; the checker's explanation is
+        the text to read when deciding whether the checker or the annotator
+        erred) and ``unjudged`` (no verdict, with its cause — not a
+        disagreement, but the item must stay traceable). A pure view over
+        the record's items."""
+        def classify(item: dict):
+            for c in item["claims"]:
+                base = {"id": item["id"], "question": item["question"],
+                        "claim": c["claim"], "human_label": c["human_label"]}
+                if c["verdict"] is None:
+                    yield "unjudged", {**base, "cause": c.get("error")}
+                elif c["verdict"] != c["human_label"]:
+                    yield "wrong", {**base, "verdict": c["verdict"],
+                                    "explanation": c["explanation"]}
+
+        return findings_view(["wrong", "unjudged"], items, classify)
 
     # ── Logging (evaluator-owned sections) ───────────────────────
 
@@ -640,7 +608,7 @@ class CheckerEvaluator:
                 ("✅", correct, "correct",
                  "verdict matches the human label"),
                 ("❌", wrong, "wrong",
-                 "verdict differs — see disagreements file"),
+                 "verdict differs — see findings file"),
                 ("💥", result.parse_errors, "unjudged",
                  "no verdict — see 💥 Reliability"),
             ],
@@ -717,9 +685,9 @@ class CheckerEvaluator:
                         " counted once here",
         )
 
-    def _log_done(self, result: CheckerEvalResult) -> None:
-        """Print ✅ Done summary line — items and the headline metrics."""
+    def _log_done(self, run_doc: dict) -> None:
+        """Print ✅ Done summary line — claims and the headline metrics."""
+        labeled = run_doc["counts"]["verdicts"]["labeled"]
         logger.info("")
-        logger.info(" ✅ Done: %d %s · %s", result.total_claims,
-                    plural(result.total_claims, "claim"),
-                    format_headline(asdict(result), self._RUN_SUMMARY_KEYS))
+        logger.info(" ✅ Done: %d %s · %s", labeled, plural(labeled, "claim"),
+                    format_headline(run_doc["metrics"], self._RUN_SUMMARY_KEYS))

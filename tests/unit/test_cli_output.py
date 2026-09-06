@@ -112,6 +112,6 @@ class TestDisagreementsSibling:
 
     def test_sibling_follows_the_new_name(self, tmp_path):
         out = _resolve_output(tmp_path / "msmarco_5.json", "extractor_eval", runs=3)
-        sibling = out.with_name(out.stem + "_disagreements.json")
-        assert sibling.name == "msmarco_5_extractor_eval_3_disagreements.json"
+        sibling = out.with_name(out.stem + "_findings.json")
+        assert sibling.name == "msmarco_5_extractor_eval_3_findings.json"
         assert sibling.parent == out.parent

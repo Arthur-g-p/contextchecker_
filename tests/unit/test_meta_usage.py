@@ -107,8 +107,9 @@ class TestWiring:
         async def fake_run_once(data, announce=True, report=True):
             before = GLOBAL_STATS.snapshot()
             _bump("extract", 2, 50)
-            p.last_report = {"_meta": {"usage": usage_since(before)},
-                             "overall_metrics": {}, "results": []}
+            p.last_run = {"_meta": {"usage": usage_since(before)},
+                          "metrics": {}, "counts": {}, "items": []}
+            p.last_run_findings = {"_meta": {}, "findings": {}}
             return data
 
         monkeypatch.setattr(p, "_run_once", fake_run_once)

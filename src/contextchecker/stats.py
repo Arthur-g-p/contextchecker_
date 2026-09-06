@@ -247,6 +247,18 @@ def sum_usage(usages: list[dict | None]) -> dict:
     return total
 
 
+def document_meta(run_docs: list[dict], runs: int, total_seconds: float) -> dict:
+    """The document-level ``_meta`` of a record: run 1's core (timestamp,
+    counts, strategies), ``runs`` = N, the wall-clock total, usage summed
+    over runs. Identical at N = 1, where it mirrors the single run."""
+    meta = {k: v for k, v in run_docs[0]["_meta"].items()
+            if k not in ("run", "duration_seconds")}
+    meta["runs"] = runs
+    meta["duration_seconds"] = total_seconds
+    meta["usage"] = sum_usage([d["_meta"].get("usage") for d in run_docs])
+    return meta
+
+
 # ───────────────────────────────────────────────────────────────
 #  SHARED LOGGING — reusable across all services
 # ───────────────────────────────────────────────────────────────

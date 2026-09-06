@@ -24,7 +24,7 @@ CLI (controllers)  →  Pipelines / Services (orchestration)  →  Workers (exec
 | **Services** (`services/`) | Validation (dropping), filtering (skipping), payload construction, serialization into the data, delegation to one worker | File I/O, network calls |
 | **Pipelines** (`pipelines/`) | Use cases composing *services* (never workers); report assembly | Direct LLM access |
 | **Workers** (`workers/`) | Single-task async LLM execution, response parsing, retry rounds, per-item error classification | Orchestration, validation |
-| **Evaluators** (`eval/`) | Measurement: run services on prepared data, compare against ground truth, compute metrics, assemble output documents | Mutation semantics of BaseService (they do not inherit it) |
+| **Evaluators** (`eval/`) | Measurement: run services on prepared data, compare against ground truth, compute metrics, assemble output documents. Share `eval/base.Evaluator` (the --runs loop and document assembly; see "Evaluator contract") | Mutation semantics of BaseService (they do not inherit it) |
 
 ### Foundation modules (leaf dependencies — import nothing from contextchecker)
 
@@ -116,6 +116,71 @@ the original RAGChecker `{"results": [...]}` envelope), `normalize_chunks`
 (chunk dicts or bare strings → `{doc_id, text}`), and `phase_failure_lines`
 (log formatting from PhaseStats).
 
+## Evaluator contract (`eval/base.Evaluator`)
+
+Evaluators measure a component against labels; they never mutate user data,
+so they do not inherit `BaseService`. What they share — the `--runs` loop,
+variance tracking, the placement of the Done line and token table, and the
+assembly of the two output documents — lives in `eval/base.Evaluator`. It is
+choreography only: no measurement, no printing of findings.
+
+A new evaluator is a class that inherits `Evaluator` and provides:
+
+| member | what it is |
+| --- | --- |
+| `_runs` | the `--runs` count (constructor argument, ≥ 1) |
+| `_RUN_SUMMARY_KEYS` | headline metric keys for the run line and the Done line, a subset of the Metrics roster |
+| `_VARIANCE_SECTIONS` | the roster and its console grouping (docs/output_conventions.md rule set 4) |
+| `_VARIANCE_LABELS`, `_METRIC_DIRECTIONS` | optional: per-key display label, per-key "higher is better"-style aid |
+| `async _evaluate_once(data, announce) -> (run_doc, run_findings)` | one measurement pass; prints the findings blocks; returns one `runs[]` entry `{_meta, metrics, counts, items}` and its `{_meta, findings}` twin |
+| `_log_done(run_doc)` | the single-run `✅ Done` line |
+| `_unmeasured()` | optional: `{metric key: reason}` for axes this invocation did not run (printed as "not measured", never "not computable") |
+
+`evaluate(data)` returns `(record, findings)`; `run_sync` wraps it. The CLI
+writes both verbatim, adding `_args`. Children services run `compact` at
+`--runs 1` and `silent` in runs mode (the evaluator passes that down).
+
+## Output documents (`schema_version` 5)
+
+`refcheck`, `ragcheck`, `faithcheck`, `eval checker` and `eval extractor`
+write the same two documents (`refcheck` has no aggregate, so its `metrics`
+and `variance` are empty objects — the skeleton still holds); `extract`,
+`check` and `atomize` emit the enriched item list and are out of this
+contract.
+
+```
+record    <stem>_<command>[_N].json           {_args, _meta, metrics, variance, runs: [{_meta, metrics, counts, items}]}
+findings  <stem>_<command>[_N]_findings.json  {_args, _meta, runs: [{_meta, findings}]}
+```
+
+Rules, in force for every command in the contract:
+
+1. **`--runs` adds entries, never reshapes.** `runs` is a list at N = 1 too.
+   `metrics` holds the mean over runs (the run's own values at N = 1),
+   `variance` the spread per key `{n, std, min, max, values}`.
+2. **Everything the console prints is in the file.** `metrics` is exactly
+   the variance roster (what the Metrics rows, footers and rate rows show).
+   `counts` holds every tree, table and row number, one sub-object per
+   console block, and is never varianced. `items` is the complete per-item
+   record.
+3. **Every number once.** Rates live in `metrics` only; counts in `counts`
+   only; per-item detail in `items` only.
+4. **Findings are a view.** `findings` is one object keyed by the console's
+   own branch names, each a flat list; every entry names its item; empty
+   branches are present as `[]`. Derived from `items`, never a source.
+   `_meta` is a copy of the record's, so the two files identify each other.
+5. **`_meta` is finished.** Document level: run 1's core plus `runs` and the
+   total `duration_seconds`, usage summed. Run level: adds `run` and the
+   run's `duration_seconds`.
+6. **Versioning.** Adding a key anywhere never bumps `schema_version`;
+   renaming, moving or removing one does. Readers ignore unknown keys.
+
+Pipelines produce the same skeleton through `BaseService._run_repeated`
+(one run entry per `_run_once`, left on `last_run` / `last_run_findings`);
+evaluators through `Evaluator.evaluate`. Both call `stats.document_meta` and
+`utils.findings_view`; pipelines build `counts.pipeline` with
+`directions.pipeline_counts` from the same phases the 🔀 tree prints.
+
 ## The data contract
 
 Everything operates on one `list[dict]`, mutated in place, with
@@ -144,9 +209,9 @@ input-only.
 
 - The CLI calls the app **once**. BaseService family: `run_sync(data)` plus a
   `last_*` attribute for derived artifacts (`AtomizationService.last_trace`,
-  `RagCheckerPipeline.last_report`, `FaithfulnessPipeline.last_report`).
-  Evaluator family: a returned ready-to-write document (tuple of two at most —
-  both evals return `(summary_doc, disagreements_doc)`).
+  `RagCheckerPipeline.last_report` + `last_findings`, likewise
+  `FaithfulnessPipeline`). Evaluator family: a returned document pair
+  `(record, findings)`. Both shapes are defined under "Output documents".
 - The CLI never composes output content — evaluators/pipelines assemble the
   full documents including `_meta`; the CLI resolves paths and dumps JSON.
 - Commands: `extract`, `check`, `atomize`, `refcheck`, `ragcheck`,

@@ -613,9 +613,9 @@ class TestBuildResult:
         assert result.checker_failures["issued_verdicts"] == 7
 
 
-class TestUnjudgedInDisagreements:
+class TestUnjudgedInFindings:
     """Checker failures are not disagreements, but affected items must stay
-    identifiable in the disagreements file with their unjudged claims."""
+    identifiable in the findings with their unjudged claims."""
 
     def test_item_with_only_unjudged_appears(self):
         ev = _evaluator()
@@ -630,15 +630,16 @@ class TestUnjudgedInDisagreements:
             tp_recall=0, tp_precision=1, fp=0, fn=0,
             false_positives=[], false_negatives=[],
             unjudged_gt=[{"gt_triplet": "a b c", "cause": "checker_failure"}],
+            gt_claims=[{"claim": "a b c", "verdict": None, "explanation": None}],
+            pred_claims=[{"claim": "a b c", "verdict": "Entailment", "explanation": "e"}],
         )]
-        disagreements = ev._build_disagreements(buckets, item_results)
-        assert len(disagreements) == 1
-        assert disagreements[0]["id"] == "u1"
-        assert disagreements[0]["false_negatives"] == []
-        assert disagreements[0]["unjudged"] == [
-            {"gt_triplet": "a b c", "cause": "checker_failure"}]
+        items = ev._build_items(buckets, item_results)
+        findings = ev._build_findings(items)
+        assert findings["unjudged"] == [
+            {"id": "u1", "question": "q", "claim": "a b c", "side": "gt", "cause": "checker_failure"}]
+        assert findings["missed"] == [] and findings["unsupported"] == []
 
-    def test_perfect_match_still_excluded(self):
+    def test_perfect_match_is_in_items_but_not_in_findings(self):
         ev = _evaluator()
         item = _make_item(gt_triplets=[_make_canonical_triplet("a", "b", "c")],
                           pred_triplets=[_make_canonical_triplet("a", "b", "c")])
@@ -649,8 +650,13 @@ class TestUnjudgedInDisagreements:
         item_results = [_ItemMatchResult(
             tp_recall=1, tp_precision=1, fp=0, fn=0,
             false_positives=[], false_negatives=[],
+            gt_claims=[{"claim": "a b c", "verdict": "Entailment", "explanation": "e"}],
+            pred_claims=[{"claim": "a b c", "verdict": "Entailment", "explanation": "e"}],
         )]
-        assert ev._build_disagreements(buckets, item_results) == []
+        items = ev._build_items(buckets, item_results)
+        assert [i["bucket"] for i in items] == ["compared"]
+        assert all(v == [] for v in ev._build_findings(items).values())
+
 
 
 # ── Test extraction-error handling (tooling failures, never abstentions) ─────
@@ -699,7 +705,7 @@ class TestExtractionErrors:
             "by_cause": {"parse_failure": 1},
         }
 
-    def test_errored_items_listed_in_disagreements(self):
+    def test_errored_items_listed_in_findings(self):
         ev = _evaluator()
         errored = _make_item(item_id="broken-1")
         errored[ERROR_KEY] = "context_too_long"
@@ -707,52 +713,62 @@ class TestExtractionErrors:
             to_compare=[], abstention_misread=[], answer_missed=[],
             abstention_recognized=[], extraction_error=[errored],
         )
-        disagreements = ev._build_disagreements(buckets, [])
-        assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "extraction_error"
-        assert disagreements[0]["cause"] == "context_too_long"
-        assert disagreements[0]["id"] == "broken-1"
+        items = ev._build_items(buckets, [])
+        assert items[0]["bucket"] == "extraction_error"
+        assert items[0]["cause"] == "context_too_long"
+        findings = ev._build_findings(items)
+        assert findings["extraction_failed"] == [
+            {"id": "broken-1", "question": "q", "cause": "context_too_long"}]
 
 
-# ── Test _build_disagreements ────────────────────────────────────────────────
+# ── Test _build_items / _build_findings ────────────────────────────────────────────────
 
-class TestBuildDisagreements:
-    def test_perfect_match_excluded(self):
+class TestItemsAndFindings:
+    """items = the complete record (every bucket); findings = the review
+    queue derived from it, each entry tagged with a kind."""
+
+    def test_perfect_match_excluded_from_findings(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[_make_item(
                 gt_triplets=[_make_triplet("a", "b", "c")],
                 pred_triplets=[_make_canonical_triplet("a", "b", "c")],
             )],
-            abstention_misread=[],
-            answer_missed=[],
-            abstention_recognized=[],
+            abstention_misread=[], answer_missed=[], abstention_recognized=[],
         )
-        results = [_ItemMatchResult(tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[])]
-        disagreements = ev._build_disagreements(buckets, results)
-        assert len(disagreements) == 0
+        results = [_ItemMatchResult(
+            tp_recall=1, tp_precision=1, fp=0, fn=0, false_positives=[], false_negatives=[],
+            gt_claims=[{"claim": "a b c", "verdict": "Entailment", "explanation": "e"}],
+            pred_claims=[{"claim": "a b c", "verdict": "Entailment", "explanation": "e"}])]
+        items = ev._build_items(buckets, results)
+        assert len(items) == 1
+        assert all(v == [] for v in ev._build_findings(items).values())
 
-    def test_fp_produces_disagreement(self):
+    def test_fp_and_fn_become_findings(self):
         ev = _evaluator()
-        fp_detail = {"pred_triplet": {"subject": "x"}, "verdict": "no comparison made.", "reason": "No match"}
         buckets = _ItemBucket(
             to_compare=[_make_item(
                 gt_triplets=[_make_canonical_triplet("a", "b", "c")],
                 pred_triplets=[_make_canonical_triplet("x", "y", "z")],
             )],
-            abstention_misread=[],
-            answer_missed=[],
-            abstention_recognized=[],
+            abstention_misread=[], answer_missed=[], abstention_recognized=[],
         )
-        results = [_ItemMatchResult(tp_recall=0, tp_precision=0, fp=1, fn=1,
-                                     false_positives=[fp_detail],
-                                     false_negatives=[])]
-        disagreements = ev._build_disagreements(buckets, results)
-        assert len(disagreements) == 1
-        assert "error_type" not in disagreements[0]
-        assert disagreements[0]["fp"] == 1
+        results = [_ItemMatchResult(
+            tp_recall=0, tp_precision=0, fp=1, fn=1,
+            false_positives=[{"pred_triplet": "x y z", "verdict": "Neutral", "reason": "r"}],
+            false_negatives=[{"gt_triplet": "a b c", "verdict": "Neutral", "reason": "r"}],
+            gt_claims=[{"claim": "a b c", "verdict": "Neutral", "explanation": "no match"}],
+            pred_claims=[{"claim": "x y z", "verdict": "Neutral", "explanation": "no match"}])]
+        items = ev._build_items(buckets, results)
+        findings = ev._build_findings(items)
+        assert list(findings) == ["missed", "unsupported", "answer_missed",
+                                  "abstention_misread", "unjudged", "extraction_failed"]
+        assert findings["missed"] == [
+            {"id": "test", "question": "q", "claim": "a b c", "verdict": "Neutral", "explanation": "no match"}]
+        assert findings["unsupported"] == [
+            {"id": "test", "question": "q", "claim": "x y z", "verdict": "Neutral", "explanation": "no match"}]
 
-    def test_abstention_misread_in_disagreements(self):
+    def test_abstention_misread_findings(self):
         ev = _evaluator()
         buckets = _ItemBucket(
             to_compare=[],
@@ -760,30 +776,41 @@ class TestBuildDisagreements:
                 gt_triplets=None,
                 pred_triplets=[_make_canonical_triplet("a", "b", "c")],
             )],
-            answer_missed=[],
-            abstention_recognized=[],
+            answer_missed=[], abstention_recognized=[],
         )
-        disagreements = ev._build_disagreements(buckets, [])
-        assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "abstention_misread"
-        assert disagreements[0]["false_positives"][0]["verdict"] == "no comparison made."
+        items = ev._build_items(buckets, [])
+        assert items[0]["bucket"] == "abstention_misread"
+        assert items[0]["pred_claims"] == [{"claim": "a b c"}]
+        findings = ev._build_findings(items)
+        assert findings["abstention_misread"] == [
+            {"id": "test", "question": "q", "response": "r", "claims": ["a b c"]}]
 
-    def test_answer_missed_in_disagreements(self):
+    def test_answer_missed_findings(self):
         ev = _evaluator()
         buckets = _ItemBucket(
-            to_compare=[],
-            abstention_misread=[],
+            to_compare=[], abstention_misread=[],
             answer_missed=[_make_item(
                 gt_triplets=[_make_canonical_triplet("a", "b", "c"), _make_canonical_triplet("d", "e", "f")],
                 pred_triplets=None,
             )],
             abstention_recognized=[],
         )
-        disagreements = ev._build_disagreements(buckets, [])
-        assert len(disagreements) == 1
-        assert disagreements[0]["error_type"] == "answer_missed"
-        assert disagreements[0]["fn"] == 2
-        assert disagreements[0]["false_negatives"][0]["verdict"] == "no comparison made."
+        items = ev._build_items(buckets, [])
+        findings = ev._build_findings(items)
+        assert findings["answer_missed"] == [
+            {"id": "test", "question": "q", "response": "r", "claims": ["a b c", "d e f"]}]
+
+    def test_recognized_abstention_is_in_items_only(self):
+        ev = _evaluator()
+        buckets = _ItemBucket(
+            to_compare=[], abstention_misread=[], answer_missed=[],
+            abstention_recognized=[_make_item(gt_triplets=[], pred_triplets=[], item_id="ok")],
+        )
+        items = ev._build_items(buckets, [])
+        assert items == [{"id": "ok", "question": "q", "response": "r",
+                          "bucket": "abstention_recognized", "gt_claims": [], "pred_claims": []}]
+        assert all(v == [] for v in ev._build_findings(items).values())
+
 
 
 # ── Integration-lite tests ───────────────────────────────────────────────────
@@ -817,13 +844,18 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_eval_config"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
-            summary_doc, disagreements_doc = ev.run_sync(data)
+            record, findings = ev.run_sync(data)
 
-        assert summary_doc["precision"] == 1.0
-        assert summary_doc["recall"] == 1.0
-        assert summary_doc["f1"] == 1.0
-        assert summary_doc["_meta"]["report_type"] == "extractor_eval"
-        assert disagreements_doc["total_disagreements"] == 0
+        assert list(record) == ["_meta", "metrics", "variance", "runs"]
+        assert record["metrics"]["precision"] == 1.0
+        assert record["metrics"]["recall"] == 1.0
+        assert record["metrics"]["f1"] == 1.0
+        assert record["_meta"]["report_type"] == "extractor_eval"
+        assert record["_meta"]["runs"] == 1 and len(record["runs"]) == 1
+        run = record["runs"][0]
+        assert list(run) == ["_meta", "metrics", "counts", "items"]
+        assert run["counts"]["recall"]["covered"] == 1
+        assert all(v == [] for v in findings["runs"][0]["findings"].values())
 
     def test_answer_missed_from_extraction(self):
         """Extraction produces empty results → unjustified abstention."""
@@ -847,16 +879,18 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_eval_config"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
-            summary_doc, disagreements_doc = ev.run_sync(data)
+            record, findings = ev.run_sync(data)
 
-        assert summary_doc["recall"] == 0.0  # measured: 0 of 2 GT claims covered
-        assert summary_doc["recall_counts"]["covered"] == 0
-        assert summary_doc["recall_counts"]["answer_missed_penalty"] == 2
-        assert summary_doc["recall_counts"]["denominator"] == 2
-        assert summary_doc["precision"] is None  # no predictions → nothing to judge
-        assert summary_doc["abstention_handling"]["answers_missed"] == 1
-        assert disagreements_doc["total_disagreements"] == 1
-        assert disagreements_doc["items"][0]["error_type"] == "answer_missed"
+        run = record["runs"][0]
+        assert record["metrics"]["recall"] == 0.0  # measured: 0 of 2 GT claims covered
+        assert run["counts"]["recall"]["covered"] == 0
+        assert run["counts"]["recall"]["answer_missed_penalty"] == 2
+        assert run["counts"]["recall"]["denominator"] == 2
+        assert record["metrics"]["precision"] is None  # no predictions → nothing to judge
+        assert run["counts"]["abstention_handling"]["answers_missed"] == 1
+        queue = findings["runs"][0]["findings"]
+        assert queue["answer_missed"] == [
+            {"id": "1", "question": "q", "response": "r", "claims": ["a b c", "d e f"]}]
 
     def test_abstention_misread_from_extraction(self):
         """GT is an explicit empty list (nothing to extract) but extraction
@@ -888,14 +922,17 @@ class TestEvaluateIntegration:
              patch.object(ev, "_log_eval_config"), \
              patch.object(ev, "_log_eval_results"), \
              patch.object(ev, "_log_done"):
-            summary_doc, disagreements_doc = ev.run_sync(data)
+            record, findings = ev.run_sync(data)
 
-        assert summary_doc["abstention_handling"]["abstentions_misread"] == 1
-        assert summary_doc["precision_counts"]["abstention_misread_penalty"] == 1
-        assert summary_doc["precision"] == 0.0  # measured: 1 penalty claim, 0 supported
-        assert disagreements_doc["total_disagreements"] == 1
-        assert disagreements_doc["items"][0]["error_type"] == "abstention_misread"
-        assert disagreements_doc["items"][0]["false_positives"][0]["verdict"] == "no comparison made."
+        run = record["runs"][0]
+        assert run["counts"]["abstention_handling"]["abstentions_misread"] == 1
+        assert run["counts"]["precision"]["abstention_misread_penalty"] == 1
+        assert record["metrics"]["precision"] == 0.0  # measured: 1 penalty claim, 0 supported
+        # both no-GT items are in the record; only the misread one is a finding
+        assert sorted(i["bucket"] for i in run["items"]) == ["abstention_misread", "abstention_recognized"]
+        queue = findings["runs"][0]["findings"]
+        assert queue["abstention_misread"] == [
+            {"id": "1", "question": "q", "response": "r", "claims": ["x y z"]}]
 
 
 # ── Smoke: the full EXTRACTOR EVAL print path ────────────────────────────────
@@ -913,7 +950,7 @@ class TestLogEvalResultsSmoke:
             ],
             abstention_misread=[_make_item(
                 gt_triplets=[], pred_triplets=[_make_canonical_triplet("x", "y", "z")])],
-            answer_missed=[_make_item(gt_triplets=[_make_triplet("d", "e", "f")],
+            answer_missed=[_make_item(gt_triplets=[_make_canonical_triplet("d", "e", "f")],
                                       pred_triplets=[])],
             abstention_recognized=[_make_item(gt_triplets=[], pred_triplets=[])],
         )
@@ -921,4 +958,11 @@ class TestLogEvalResultsSmoke:
                                          false_positives=[], false_negatives=[])]
         result = ev._build_result(item_results, buckets, total_items=4)
         ev._log_eval_results(result)   # must not raise
-        ev._log_done(result)
+        import time
+        ev._started_at, ev._started_perf = "2026-01-01T00:00:00", time.perf_counter()
+        run_doc, run_findings = ev._run_documents(result, buckets, item_results, 4)
+        ev._log_done(run_doc)
+        assert {i["bucket"] for i in run_doc["items"]} == {
+            "compared", "abstention_misread", "answer_missed", "abstention_recognized"}
+        assert run_doc["counts"]["reliability"]["atomization"] == {
+            "measured": False, "reason": "no --atomizer-model"}

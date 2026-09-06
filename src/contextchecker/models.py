@@ -130,7 +130,8 @@ class CheckerEvalResult:
 class ExtractorEvalResult:
     """Result of an extractor evaluation run.
 
-    Returned by ExtractorEvaluator.evaluate() alongside a disagreement list.
+    The evaluator's internal computation result; the record and findings
+    documents are built from it.
     Uses IR metrics (Precision/Recall/F1) rather than classification metrics.
 
     Metrics are None (never 0.0) when their denominator is empty: a zero

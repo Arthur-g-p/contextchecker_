@@ -98,12 +98,12 @@ def _checked_item():
     })
 
 
-class TestBuildReport:
+class TestBuildRun:
 
     def test_entry_shape_and_metric(self, pipeline):
-        report = pipeline.build_report([_checked_item()])
+        report = pipeline._build_run([_checked_item()])
         assert report["_meta"]["report_type"] == "faithcheck"
-        entry = report["results"][0]
+        entry = report["items"][0]
         assert entry["response_claims"] == [
             {"subject": "Nile", "predicate": "is", "object": "longest river"},
             {"subject": "Nile", "predicate": "has", "object": "5M inhabitants"},
@@ -118,12 +118,12 @@ class TestBuildReport:
         assert entry["metrics"]["faithfulness"] == 0.5
 
     def test_claim_support_attribution(self, pipeline):
-        entry = pipeline.build_report([_checked_item()])["results"][0]
+        entry = pipeline._build_run([_checked_item()])["items"][0]
         assert entry["claim_support"] == [["000"], []]
 
     def test_abstention_is_null(self, pipeline):
         item = _full_item(**{RESPONSE_KG: [], "is_abstention": True})
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["is_abstention"] is True
         assert entry["metrics"]["faithfulness"] is None
 
@@ -132,7 +132,7 @@ class TestBuildReport:
             RESPONSE_KG: [],
             f"{EXT}_extraction_error": "parse_failure",
         })
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["extraction_errors"] == {"response": "parse_failure"}
         assert entry["metrics"]["faithfulness"] is None
 
@@ -146,18 +146,35 @@ class TestBuildReport:
                  f"{NAMESPACE}_verdicts": {0: "Neutral", 1: None}},
             ],
         })
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         # Claim 1 decided (Entailment beats unknown); claim 2 excluded.
         assert entry["metrics"]["faithfulness"] == 1.0
 
-    def test_overall_metrics(self, pipeline):
+    def test_run_entry_metrics_and_counts(self, pipeline):
         abstained = _full_item(**{RESPONSE_KG: [], "is_abstention": True})
-        report = pipeline.build_report([_checked_item(), abstained])
-        om = report["overall_metrics"]
-        assert om["faithfulness"] == 0.5
-        assert om["support"]["faithfulness"] == 1
-        assert om["abstention_rate"] == 0.5
-        assert om["extraction_error_rate"] == 0.0
+        run = pipeline._build_run([_checked_item(), abstained])
+        assert list(run) == ["_meta", "metrics", "counts", "items"]
+        assert run["metrics"] == {"faithfulness": 0.5, "abstention_rate": 0.5,
+                                  "extraction_error_rate": 0.0, "checker_failure_rate": 0.0}
+        counts = run["counts"]
+        assert counts["support"] == {"faithfulness": 1}
+        assert counts["abstention"] == {"evaluated": 2, "errored": 0, "abstained": 1, "answered": 1}
+        assert counts["reliability"]["checking"] == {"unjudged": 0, "issued": 4}
+        assert counts["pipeline"]["retrieved2response"]["verdicts"] == 4
+
+    def test_findings_open_the_branches(self, pipeline):
+        abstained = _full_item(**{RESPONSE_KG: [], "is_abstention": True})
+        run = pipeline._build_run([_checked_item(), abstained])
+        findings = pipeline._build_findings(run["items"])
+        assert list(findings) == ["ungrounded", "contradicted", "undecidable",
+                                  "abstained", "extraction_failed"]
+        # claim 2 of the checked item has no Entailment anywhere
+        assert findings["ungrounded"] == [
+            {"query_id": "0", "query": "", "claim": "Nile has 5M inhabitants",
+             "chunks_checked": 2}]
+        assert findings["contradicted"] == [] and findings["undecidable"] == []
+        assert findings["abstained"][0]["query_id"] == "0"
+        assert findings["extraction_failed"] == []
 
 
 # ── Facade ───────────────────────────────────────────────────────────────────
@@ -165,7 +182,7 @@ class TestBuildReport:
 class TestFacade:
 
     def test_check_faithfulness_returns_single_entry(self):
-        fake_report = {"results": [{"metrics": {"faithfulness": 0.75}}]}
+        fake_report = {"runs": [{"items": [{"metrics": {"faithfulness": 0.75}}]}]}
 
         with patch("contextchecker.pipelines.faithfulness.FaithfulnessPipeline") as cls:
             instance = cls.return_value
@@ -175,7 +192,7 @@ class TestFacade:
                 extractor_model=EXT, checker_model=CHK,
             )
 
-        assert entry == fake_report["results"][0]
+        assert entry == fake_report["runs"][0]["items"][0]
         cls.assert_called_once()
         # Facade forces silence — it is a library call, not a CLI run
         assert cls.call_args.kwargs["verbosity"] == "silent"

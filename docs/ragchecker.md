@@ -52,26 +52,47 @@ There is no item-level skipping in v1 (planned for 2.0 together with
 report re-ingestion for manually corrected ground truth). A run that dies
 part-way is re-run from the start.
 
-## Output: the report (single artifact)
+## Output: record and findings
 
-The CLI writes exactly one file (default
-`results/{input_stem}_ragcheck[_{runs}].json`, the suffix only for
-`--runs > 1`) from `pipeline.last_report`. The
-report preserves the original RAGChecker *structure* (results list, four
-directional arrays parallel to the claims) with modernized leaves:
+The CLI writes two files from `pipeline.last_report` and
+`pipeline.last_findings` (default `results/{input_stem}_ragcheck[_{runs}].json`
+and its `_findings.json` sibling). One skeleton, shared with `faithcheck`,
+`eval checker` and `eval extractor`:
 
-- claims are `{subject, predicate, object}` dicts (never `[s, p, o]` arrays),
-- verdict entries are objects: `{"verdict": ..., "explanation": ...}` in the
-  flat directions, `{"verdict": ...}` in the matrices (explanations in the
-  matrices are claims x chunks output tokens and are deliberately omitted),
-- `is_abstention` is explicit per item (sparse in the working data, explicit
-  in the report — a report is a view for humans and frontends),
-- `relevant_chunks` lists the doc_ids that entail at least one gt claim
-  (the load-bearing intermediate for context_utilization and noise
-  sensitivity, exposed so consumers never re-derive it from the matrix),
-- `extraction_errors` appears only on items where tooling failed,
-- `metrics` per item plus `overall_metrics` at the top, `_meta` with
-  `schema_version: 3`.
+```
+record    {_args, _meta, metrics, variance, runs: [{_meta, metrics, counts, items}]}
+findings  {_args, _meta, runs: [{_meta, findings}]}
+```
+
+`runs` is a list at `--runs 1` too: `metrics` holds the mean over runs (the
+run's own values at N = 1), `variance` the spread, `runs` one complete entry
+per run. `--runs N` adds entries and reshapes nothing.
+
+- `metrics` — the 13 paper metrics plus `justified_abstention_rate`,
+  `unjustified_abstention_rate`, `unwarranted_answer_rate`,
+  `extraction_error_rate`, `checker_failure_rate`: exactly the variance
+  roster. Rates live here and nowhere else.
+- `counts` — every number the console prints: `support` (items behind each
+  macro average), `pipeline` (requests and tallies per phase, failure
+  numbers when something failed), `abstention` (the ⚪ tree incl. the cause
+  split), `reliability` (the 💥 rows: extraction failed / items / by side,
+  verdicts unjudged / issued).
+- `items` — the RAGChecker structure per item: `{subject, predicate, object}`
+  claims, four directional arrays parallel to the claims with verdict
+  objects `{"verdict", "explanation"}` (plus a sparse `error` cause),
+  explicit `is_abstention` and `gt_no_answer`, `relevant_chunks` (the
+  doc_ids that entail at least one gt claim — exposed so consumers never
+  re-derive it from the matrix), sparse `extraction_errors`, per-item
+  `metrics`.
+- `findings` — the review queue, one list per branch: the claims counted by
+  `hallucination`, `noise_sensitivity_in_relevant`,
+  `noise_sensitivity_in_irrelevant` and `self_knowledge` (each with the GT
+  verdict, the checker's explanation and, for noise, `grounded_by`),
+  `recall_misses` (GT claims the response never states; `retrieved_in`
+  non-empty = the generator dropped retrieved evidence, empty = the
+  retriever never brought it), `unjustified_abstention`,
+  `unwarranted_answer`, `extraction_failed`, `unjudged`. Empty branches stay
+  present.
 
 Consumers reading both old paper outputs and these reports need one
 canonicalization rule: string verdict entry = old format, object = new;
@@ -120,7 +141,7 @@ Identity (enforced by a shared denominator and asserted in tests):
   context_precision) are still computed — `retrieved2answer` does not
   involve the response, and an abstention says nothing about the retriever.
 - **Aggregation is macro** (per paper): per-item metrics averaged over
-  contributing items, nulls skipped. `overall_metrics.support` reports how
+  contributing items, nulls skipped. `counts.support` reports how
   many items actually contributed to each average — exclusions shrink N
   invisibly otherwise. Micro aggregation is recomputable from the report
   (all verdict arrays are preserved) without any LLM calls.
@@ -175,16 +196,16 @@ parameter) — the CLI only passes the number through. Mechanics:
   `--runs 1` only; validation + config print once (they are run-invariant).
   One VARIANCE block and one cumulative token table land at the end.
 
-The multi-run file (default `--runs 1` keeps today's document, byte-identical):
+The multi-run file is the single-run file with more entries:
 
-- `_meta` gains `runs` and total `duration_seconds`;
-- `overall_metrics` stays **flat and means-valued** — variance-unaware
-  readers parse a multi-run report like a single-run one;
-- `variance` (new sibling): per metric `{std, min, max, values}`;
-- `runs` (new sibling, the content): N complete, byte-normal N=1 reports —
-  "a report is a report is a report", one parser reads everything, per-item
-  run-vs-run comparison is the consumer's business and fully possible.
-  There is no top-level `results` in a multi-run file.
+- `_meta.runs` = N and `duration_seconds` the wall-clock total, usage summed;
+- `metrics` holds the **means** — a variance-unaware reader parses a
+  multi-run record exactly like a single-run one;
+- `variance` per metric `{n, std, min, max, values}` — `n` says how many
+  runs contributed, a metric that was `null` in every run keeps its key
+  with `n: 0`;
+- `runs` holds N complete entries `{_meta, metrics, counts, items}`; the
+  findings document mirrors them one to one.
 
 ## Known methodology limitations (documented, not hidden)
 

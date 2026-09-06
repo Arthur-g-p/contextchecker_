@@ -163,32 +163,47 @@ class TestRun:
             p.run_sync([{"id": "bad"}])
 
 
-# ── Report envelope: _meta + results, like every other report producer ───────
+# ── Record + findings: the same skeleton as every report producer ────────────
 
-class TestReport:
+class TestRecord:
 
-    def test_run_populates_last_report(self):
+    def test_run_populates_the_record(self):
         p = _running_pipeline()
         p.run_sync([_item()])
-        assert list(p.last_report) == ["_meta", "results"]
-        assert p.last_report["_meta"]["report_type"] == "refcheck"
+        doc = p.last_report
+        assert list(doc) == ["_meta", "metrics", "variance", "runs"]
+        assert doc["_meta"]["report_type"] == "refcheck"
+        assert doc["_meta"]["runs"] == 1 and len(doc["runs"]) == 1
+        # no aggregate metric → the roster is empty, the skeleton holds
+        assert doc["metrics"] == {} and doc["variance"] == {}
+        run = doc["runs"][0]
+        assert list(run) == ["_meta", "metrics", "counts", "items"]
 
-    def test_results_carry_the_checked_items(self):
+    def test_items_carry_the_checked_claims(self):
         p = _running_pipeline()
-        data = [_item()]
-        p.run_sync(data)
-        results = p.last_report["results"]
-        assert results is data
-        assert results[0][KG_KEY][0][VERDICT_KEY] == "Entailment"
+        p.run_sync([_item()])
+        items = p.last_report["runs"][0]["items"]
+        assert items[0]["id"] == "1"
+        assert items[0]["claims"] == [
+            {"claim": "s p o", "verdict": "Entailment", "explanation": None}]
+        assert items[0]["is_abstention"] is False
+
+    def test_counts_mirror_the_console(self):
+        p = _running_pipeline()
+        p.run_sync([_item()])
+        counts = p.last_report["runs"][0]["counts"]
+        assert counts["extraction"] == {"with_claims": 1, "abstained": 0, "failed": 0}
+        assert counts["checking"] == {"Entailment": 1, "Contradiction": 0, "Neutral": 0, "unjudged": 0}
+        assert counts["pipeline"]["check reference"]["verdicts"] == 1
 
     def test_meta_counts_dropped_items(self):
-        """Invalid items stay in results but are counted, not evaluated."""
+        """Invalid items are counted, not evaluated, and never in items."""
         p = _running_pipeline()
         p.run_sync([_item(item_id="good"), {"id": "bad"}])
         meta = p.last_report["_meta"]
         assert (meta["total_items"], meta["evaluated_items"],
                 meta["dropped_items"]) == (2, 1, 1)
-        assert len(p.last_report["results"]) == 2
+        assert [it["id"] for it in p.last_report["runs"][0]["items"]] == ["good"]
 
     def test_no_arguments_leak_into_meta(self):
         """Models are given, not discovered — they belong in _args."""
@@ -199,13 +214,46 @@ class TestReport:
 
     def test_last_report_is_none_before_a_run(self):
         assert _pipeline().last_report is None
+        assert _pipeline().last_findings is None
 
-    def test_build_report_is_pure_projection(self):
+    def test_build_run_is_pure_projection(self):
         """Rebuildable anytime, no LLM calls, same content."""
         p = _running_pipeline()
         data = [_item()]
         p.run_sync(data)
-        assert p.build_report(data)["results"] == p.last_report["results"]
+        assert p._build_run(data)["items"] == p.last_report["runs"][0]["items"]
+
+
+class TestFindings:
+
+    def _items(self):
+        return [
+            {"id": "a", "question": "q", "response": "r", "reference": ["x"], "is_abstention": False,
+             "claims": [{"claim": "s p o", "verdict": "Entailment", "explanation": "e1"},
+                        {"claim": "s q o", "verdict": "Neutral", "explanation": "not covered"},
+                        {"claim": "s r o", "verdict": "Contradiction", "explanation": "opposite"},
+                        {"claim": "s t o", "verdict": None, "explanation": None, "error": "timeout"}]},
+            {"id": "b", "question": "q", "response": "I don't know.", "reference": ["x"],
+             "is_abstention": True, "claims": []},
+            {"id": "c", "question": "q", "response": "r", "reference": ["x"], "is_abstention": False,
+             "claims": [], "extraction_error": "parse_failure"},
+        ]
+
+    def test_branches_open_the_checking_tree(self):
+        f = RefCheckerPipeline._build_findings(self._items())
+        assert list(f) == ["unsupported", "contradicted", "unjudged", "abstained", "extraction_failed"]
+        assert f["unsupported"] == [{"id": "a", "question": "q", "claim": "s q o", "explanation": "not covered"}]
+        assert f["contradicted"] == [{"id": "a", "question": "q", "claim": "s r o", "explanation": "opposite"}]
+        assert f["unjudged"] == [{"id": "a", "question": "q", "claim": "s t o", "cause": "timeout"}]
+        assert f["abstained"] == [{"id": "b", "question": "q", "response": "I don't know."}]
+        assert f["extraction_failed"] == [{"id": "c", "question": "q", "cause": "parse_failure"}]
+
+    def test_run_produces_the_findings_document(self):
+        p = _running_pipeline()
+        p.run_sync([_item()])
+        f = p.last_findings
+        assert list(f) == ["_meta", "runs"]
+        assert all(v == [] for v in f["runs"][0]["findings"].values())
 
 
 # ── Envelope input: {"results": [...]} accepted, like ragcheck/faithcheck ────
@@ -215,7 +263,7 @@ class TestEnvelopeInput:
     def test_results_envelope_is_unwrapped(self):
         p = _running_pipeline()
         p.run_sync({"results": [_item()]})
-        assert p.last_report["results"][0][KG_KEY][0][VERDICT_KEY] == "Entailment"
+        assert p.last_report["runs"][0]["items"][0]["claims"][0]["verdict"] == "Entailment"
 
     def test_bare_list_still_accepted(self):
         p = _running_pipeline()

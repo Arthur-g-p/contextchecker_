@@ -11,6 +11,7 @@ from contextchecker.pipelines.ragchecker import (
     METRIC_NAMES,
     RagCheckerPipeline,
     compute_item_metrics,
+    compute_overall_counts,
     compute_overall_metrics,
 )
 
@@ -145,26 +146,26 @@ def _checked_item():
 class TestBuildReport:
 
     def test_structure_and_meta(self, pipeline):
-        report = pipeline.build_report([_checked_item()])
+        report = pipeline._build_run([_checked_item()])
         meta = report["_meta"]
-        assert meta["schema_version"] == 4
+        assert meta["schema_version"] == 5
         assert meta["report_type"] == "ragcheck"
         assert meta["evaluated_items"] == 1
         assert meta["dropped_items"] == 0
         # Models are arguments, not discovered facts — they live in _args now.
         assert "extractor_model" not in meta
-        assert "overall_metrics" in report
-        assert len(report["results"]) == 1
+        assert list(report) == ["_meta", "metrics", "counts", "items"]
+        assert len(report["items"]) == 1
 
     def test_claims_projected_clean(self, pipeline):
         """Report claims are pure s/p/o — verdict keys stay out of them."""
-        entry = pipeline.build_report([_checked_item()])["results"][0]
+        entry = pipeline._build_run([_checked_item()])["items"][0]
         assert entry["response_claims"] == [
             {"subject": "Nile", "predicate": "is", "object": "longest river"}
         ]
 
     def test_flat_arrays_parallel_to_claims(self, pipeline):
-        entry = pipeline.build_report([_checked_item()])["results"][0]
+        entry = pipeline._build_run([_checked_item()])["items"][0]
         assert entry["answer2response"] == [
             {"verdict": "Entailment", "explanation": "stated in gt"}
         ]
@@ -173,7 +174,7 @@ class TestBuildReport:
         ]
 
     def test_matrix_rows_in_chunk_order(self, pipeline):
-        entry = pipeline.build_report([_checked_item()])["results"][0]
+        entry = pipeline._build_run([_checked_item()])["items"][0]
         assert entry["retrieved2response"] == [
             [{"verdict": "Entailment", "explanation": None},
              {"verdict": "Neutral", "explanation": None}]
@@ -185,7 +186,7 @@ class TestBuildReport:
 
     def test_is_abstention_explicit_false(self, pipeline):
         """Sparse in the working data, explicit in the report view."""
-        entry = pipeline.build_report([_checked_item()])["results"][0]
+        entry = pipeline._build_run([_checked_item()])["items"][0]
         assert entry["is_abstention"] is False
 
     def test_abstained_item(self, pipeline):
@@ -193,7 +194,7 @@ class TestBuildReport:
             RESPONSE_KG: [], GT_KG: [],
             "is_abstention": True, "abstention_source": "heuristic",
         })
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["is_abstention"] is True
         assert entry["response_claims"] == []
         assert entry["answer2response"] == []
@@ -204,29 +205,29 @@ class TestBuildReport:
             f"{EXT}_extraction_error": "parse_failure",
             GT_KG: [{"subject": "a", "predicate": "b", "object": "c"}],
         })
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["extraction_errors"] == {"response": "parse_failure"}
         # Healthy items carry no error key at all
-        clean = pipeline.build_report([_checked_item()])["results"][0]
+        clean = pipeline._build_run([_checked_item()])["items"][0]
         assert "extraction_errors" not in clean
 
     def test_dropped_items_counted_not_listed(self, pipeline):
-        report = pipeline.build_report([_checked_item(), {"response": "no gt"}])
+        report = pipeline._build_run([_checked_item(), {"response": "no gt"}])
         assert report["_meta"]["dropped_items"] == 1
-        assert len(report["results"]) == 1
+        assert len(report["items"]) == 1
 
     def test_query_id_falls_back_to_id(self, pipeline):
         item = _checked_item()
         del item["query_id"]
         item["id"] = "42"
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["query_id"] == "42"
 
     def test_missing_matrix_verdict_is_null_cell(self, pipeline):
         """A doc_id absent from the fold (e.g. failed chunk) → verdict None."""
         item = _checked_item()
         del item[RESPONSE_KG][0][f"{CHK}_retrieved2response_verdicts"]
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["retrieved2response"] == [
             [{"verdict": None, "explanation": None},
              {"verdict": None, "explanation": None}]
@@ -234,7 +235,7 @@ class TestBuildReport:
 
     def test_relevant_chunks_exposed(self, pipeline):
         """Chunks entailing >=1 gt claim are listed by doc_id."""
-        entry = pipeline.build_report([_checked_item()])["results"][0]
+        entry = pipeline._build_run([_checked_item()])["items"][0]
         # gt claim's retrieved2answer: {0: "Neutral", 1: "Entailment"}
         assert entry["relevant_chunks"] == ["001"]
 
@@ -244,7 +245,7 @@ class TestBuildReport:
         triplet = item[RESPONSE_KG][0]
         triplet[f"{CHK}_answer2response_verdict"] = None
         triplet[f"{CHK}_answer2response_error"] = "parse_failure"
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         assert entry["answer2response"][0]["verdict"] is None
         assert entry["answer2response"][0]["error"] == "parse_failure"
         # Healthy cells carry no error key
@@ -255,7 +256,7 @@ class TestBuildReport:
         triplet = item[RESPONSE_KG][0]
         triplet[f"{CHK}_retrieved2response_verdicts"] = {0: "Entailment", 1: None}
         triplet[f"{CHK}_retrieved2response_errors"] = {1: "context_too_long"}
-        entry = pipeline.build_report([item])["results"][0]
+        entry = pipeline._build_run([item])["items"][0]
         row = entry["retrieved2response"][0]
         assert row[0] == {"verdict": "Entailment", "explanation": None}
         assert row[1] == {"verdict": None, "explanation": None,
@@ -423,11 +424,12 @@ class TestOverallMetrics:
 
     def test_macro_average_with_support(self):
         overall = compute_overall_metrics(self._results())
+        support = compute_overall_counts(self._results())["support"]
         # Only the full item contributes to precision
-        assert overall["support"]["precision"] == 1
+        assert support["precision"] == 1
         assert overall["precision"] == pytest.approx(8 / 11, abs=1e-3)
         # claim_recall averages the full item and the abstained item
-        assert overall["support"]["claim_recall"] == 2
+        assert support["claim_recall"] == 2
         assert overall["claim_recall"] == pytest.approx(
             (0.2273 + 0.0) / 2, abs=1e-3)
 
@@ -437,18 +439,21 @@ class TestOverallMetrics:
         abstention is unjustified — its cause: no chunk entailed a GT
         claim. No unanswerable items → the NoAns rates are n/a, never 0."""
         overall = compute_overall_metrics(self._results())
-        assert overall["abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
+        counts = compute_overall_counts(self._results())["abstention"]
+        # the plain abstention rate is not a printed metric — its numbers are counts
+        assert "abstention_rate" not in overall
+        assert counts["abstained"] == 1 and counts["evaluated"] - counts["errored"] == 2
         assert overall["unjustified_abstention_rate"] == pytest.approx(1 / 2, abs=1e-3)
         assert overall["justified_abstention_rate"] is None
         assert overall["unwarranted_answer_rate"] is None
-        assert overall["abstention_counts"]["all_chunks_irrelevant"] == 1
+        assert counts["all_chunks_irrelevant"] == 1
 
     def test_unjustified_abstention_with_evidence_detected(self):
         abstained = _metrics_entry([], [N], [], [[E]], 1, is_abstention=True)
         abstained["metrics"] = compute_item_metrics(abstained)
         overall = compute_overall_metrics([abstained])
         assert overall["unjustified_abstention_rate"] == 1.0
-        assert overall["abstention_counts"]["relevant_chunk_present"] == 1
+        assert compute_overall_counts([abstained])["abstention"]["relevant_chunk_present"] == 1
         assert overall["justified_abstention_rate"] is None
 
     def test_no_answer_items_split_justified_and_unwarranted(self):
@@ -469,7 +474,8 @@ class TestOverallMetrics:
     def test_error_rate_and_counts(self):
         overall = compute_overall_metrics(self._results())
         assert overall["extraction_error_rate"] == pytest.approx(1 / 3, abs=1e-3)
-        assert overall["extraction_errors"] == {"response": 1, "gt_answer": 0}
+        rel = compute_overall_counts(self._results())["reliability"]["extraction"]
+        assert rel == {"failed": 1, "items": 3, "by_cause": {"response": 1, "gt_answer": 0}}
 
     def test_checker_failure_rate(self):
         entry = _metrics_entry([E, None], [E], [[E], [None]], [[E]], 1)
@@ -545,14 +551,15 @@ class TestRefusalCalibration:
         for e in entries:
             e["metrics"] = compute_item_metrics(e)
         overall = compute_overall_metrics(entries)
-        counts = overall["abstention_counts"]
+        all_counts = compute_overall_counts(entries)
+        counts = all_counts["abstention"]
 
-        assert overall["support"]["answers_with_relevant_context"] == 3
+        assert all_counts["support"]["answers_with_relevant_context"] == 3
         assert overall["answers_with_relevant_context"] == pytest.approx(2 / 3, abs=1e-3)
         refused_with_evidence = round((1 - overall["answers_with_relevant_context"]) * 3)
         assert refused_with_evidence == counts["relevant_chunk_present"] == 1
 
-        assert overall["support"]["abstains_without_relevant_context"] == 2
+        assert all_counts["support"]["abstains_without_relevant_context"] == 2
         assert overall["abstains_without_relevant_context"] == 0.5
         assert counts["all_chunks_irrelevant"] == 1
         assert counts["relevance_unknown"] == 1
@@ -592,7 +599,7 @@ class TestPrefillKnownVerdicts:
         assert triplet[f"{CHK}_answer2response_verdict"] == "Neutral"
         assert "not sent to the checker" in triplet[f"{CHK}_answer2response_explanation"]
         # precision 0, never null: the unwarranted answer is charged
-        entry = pipeline.build_report([blank_gt])["results"][0]
+        entry = pipeline._build_run([blank_gt])["items"][0]
         assert entry["metrics"]["precision"] == 0.0
 
     def test_empty_response_prefills_response2answer_neutral(self, pipeline):
@@ -600,7 +607,7 @@ class TestPrefillKnownVerdicts:
         triplet = empty_response[GT_KG][0]
         assert triplet[f"{CHK}_response2answer_verdict"] == "Neutral"
         # recall 0 (non-delivery), not null (unjudged): docs/abstention.md §4
-        entry = pipeline.build_report([empty_response])["results"][0]
+        entry = pipeline._build_run([empty_response])["items"][0]
         assert entry["metrics"]["recall"] == 0.0
         assert entry["metrics"]["f1"] == 0.0
 
@@ -636,10 +643,11 @@ class TestConsoleBlocks:
         ]
         for e in entries:
             e["metrics"] = compute_item_metrics(e)
-        pipeline.last_report = {
+        pipeline.last_run = {
             "_meta": {"evaluated_items": len(entries)},
-            "overall_metrics": compute_overall_metrics(entries),
-            "results": entries,
+            "metrics": compute_overall_metrics(entries),
+            "counts": compute_overall_counts(entries),
+            "items": entries,
         }
 
     def test_abstention_tree(self, pipeline, caplog):
@@ -687,3 +695,76 @@ class TestConsoleBlocks:
         labels = RagCheckerPipeline._VARIANCE_LABELS
         assert labels["answers_with_relevant_context"] == "answers when context is relevant"
         assert labels["abstains_without_relevant_context"] == "abstains when context is irrelevant"
+
+
+# ── Findings: the review queue over the run's items ──────────────────────────
+
+class TestFindings:
+    """Branch-keyed lists mirroring the console; every entry names its item."""
+
+    @staticmethod
+    def _cell(v, ex=None):
+        return {"verdict": v, "explanation": ex}
+
+    @staticmethod
+    def _spo(s, p, o):
+        return {"subject": s, "predicate": p, "object": o}
+
+    def _items(self):
+        c, spo = self._cell, self._spo
+        return [
+            {"query_id": "k6", "query": "composition?", "response": "rocky, two moons",
+             "gt_answer": "unknown", "is_abstention": False, "gt_no_answer": False,
+             "retrieved_context": [{"doc_id": "d0"}, {"doc_id": "d1"}],
+             "response_claims": [spo("k", "has", "rocky surface"), spo("k", "has", "two moons"),
+                                 spo("k", "is", "an exoplanet")],
+             "gt_answer_claims": [spo("k", "may be", "ocean-covered")],
+             "answer2response": [c("Contradiction", "gt says unknown"), c("Neutral", "no moons in gt"),
+                                 c("Entailment", "both say exoplanet")],
+             "response2answer": [c("Neutral", "no ocean in response")],
+             "retrieved2response": [[c("Entailment"), c("Neutral")], [c("Neutral"), c("Neutral")],
+                                    [c("Neutral"), c("Neutral")]],
+             "retrieved2answer": [[c("Neutral"), c("Entailment")]],
+             "relevant_chunks": ["d1"], "metrics": {}},
+            {"query_id": "k8", "query": "star?", "response": "I cannot say.", "gt_answer": "G-type",
+             "is_abstention": True, "gt_no_answer": False,
+             "retrieved_context": [{"doc_id": "d0"}], "response_claims": [],
+             "gt_answer_claims": [spo("k", "orbits", "G-type")],
+             "answer2response": [], "response2answer": [c("Neutral")],
+             "retrieved2response": [], "retrieved2answer": [[c("Entailment")]],
+             "relevant_chunks": ["d0"], "metrics": {}},
+            {"query_id": "k9", "query": "?", "response": "?", "gt_answer": "?", "is_abstention": False,
+             "gt_no_answer": False, "retrieved_context": [], "response_claims": [], "gt_answer_claims": [],
+             "answer2response": [], "response2answer": [], "retrieved2response": [], "retrieved2answer": [],
+             "relevant_chunks": [], "metrics": {}, "extraction_errors": {"gt_answer": "parse_failure"}},
+        ]
+
+    def test_branches_and_attribution(self):
+        f = RagCheckerPipeline._build_findings(self._items())
+        assert list(f) == ["hallucination", "noise_sensitivity_in_relevant",
+                           "noise_sensitivity_in_irrelevant", "self_knowledge", "recall_misses",
+                           "unjustified_abstention", "unwarranted_answer", "extraction_failed",
+                           "unjudged"]
+        assert [e["claim"] for e in f["hallucination"]] == ["k has two moons"]
+        # wrong but grounded by an irrelevant chunk → noise, chunk named
+        assert f["noise_sensitivity_in_irrelevant"][0]["grounded_by"] == ["d0"]
+        assert f["noise_sensitivity_in_relevant"] == []
+        assert [e["claim"] for e in f["self_knowledge"]] == ["k is an exoplanet"]
+        # the GT claim the response never states — and the retriever had it
+        assert f["recall_misses"] == [{"query_id": "k6", "query": "composition?",
+                                       "gt_claim": "k may be ocean-covered",
+                                       "explanation": "no ocean in response", "retrieved_in": ["d1"]}]
+        # abstained items: one entry, no per-claim recall misses
+        assert f["unjustified_abstention"] == [{"query_id": "k8", "query": "star?",
+                                                "response": "I cannot say.", "relevant_chunks": ["d0"]}]
+        assert f["extraction_failed"] == [{"query_id": "k9", "query": "?", "side": "gt_answer",
+                                           "cause": "parse_failure"}]
+        assert f["unwarranted_answer"] == [] and f["unjudged"] == []
+
+    def test_unwarranted_answer_lists_its_claims(self):
+        item = self._items()[0]
+        item.update(gt_no_answer=True, gt_answer_claims=[], response2answer=[], retrieved2answer=[])
+        f = RagCheckerPipeline._build_findings([item])
+        assert f["unwarranted_answer"][0]["claims"] == [
+            "k has rocky surface", "k has two moons", "k is an exoplanet"]
+        assert f["hallucination"] == [] and f["recall_misses"] == []

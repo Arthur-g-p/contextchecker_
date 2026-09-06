@@ -53,14 +53,29 @@ notebooks, known minor issue for embedded use.
 
 ## Report
 
-Same conventions as the ragcheck report (`schema_version: 2`,
-`report_type: "faithfulness"`): dict claims, verdict-object matrix,
-explicit `is_abstention`, sparse `extraction_errors`, per-item `metrics`
-plus `overall_metrics`. Additional field:
+Two files, the same skeleton as `ragcheck` and the evals (see
+docs/ragchecker.md, "Output"): the **record**
+`{_args, _meta, metrics, variance, runs: [{_meta, metrics, counts, items}]}`
+and the **findings** `{_args, _meta, runs: [{_meta, findings}]}`. `runs` is a
+list at `--runs 1` too; `--runs N` adds entries and reshapes nothing.
 
-- `claim_support` — parallel to `response_claims`: for each claim, the list
-  of doc_ids whose chunk entails it. The per-claim attribution answer to
-  "which retrieved document grounds this statement?".
+- `metrics` — `faithfulness`, `abstention_rate`, `extraction_error_rate`,
+  `checker_failure_rate`: the variance roster, means over runs at the top,
+  the run's own values inside each run entry.
+- `counts` — `support` (items behind the macro average), `pipeline` (requests
+  and tallies per phase), `abstention` (evaluated / errored / abstained /
+  answered), `reliability` (the two 💥 rows).
+- `items` — one entry per evaluated item: dict claims, the
+  `retrieved2response` verdict-object matrix, explicit `is_abstention`,
+  sparse `extraction_errors`, per-item `metrics`, and `claim_support` —
+  parallel to `response_claims`, for each claim the list of doc_ids whose
+  chunk entails it: the per-claim attribution answer to "which retrieved
+  document grounds this statement?".
+- `findings` — the review queue, one list per branch: `ungrounded` (no chunk
+  entails the claim), `contradicted` (a chunk contradicts it, named with
+  its explanation), `undecidable` (no chunk entails it and a verdict is
+  missing, so the score excludes it), `abstained`, `extraction_failed`.
+  Empty branches stay present.
 
 ## Metrics
 
