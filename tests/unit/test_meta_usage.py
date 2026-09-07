@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from contextchecker.stats import GLOBAL_STATS, sum_usage, usage_since
+from claimlens.stats import GLOBAL_STATS, sum_usage, usage_since
 
 
 def _bump(phase: str, requests: int, tokens_in: int, tokens_out: int = 1, answered: bool = True):
@@ -71,12 +71,12 @@ class TestSum:
 class TestWiring:
 
     def test_refcheck_meta_bills_only_its_own_run(self):
-        from contextchecker.pipelines.refchecker import RefCheckerPipeline
+        from claimlens.pipelines.refchecker import RefCheckerPipeline
 
         _bump("extract", 7, 100)            # earlier work in the same process
 
-        with patch("contextchecker.pipelines.refchecker.ExtractionService"), \
-             patch("contextchecker.pipelines.refchecker.CheckingService"):
+        with patch("claimlens.pipelines.refchecker.ExtractionService"), \
+             patch("claimlens.pipelines.refchecker.CheckingService"):
             p = RefCheckerPipeline(extractor_model="ext-model",
                                    checker_model="chk-model", verbosity="silent")
 
@@ -97,10 +97,10 @@ class TestWiring:
         assert u["phases"]["check"]["requests"] == 1
 
     def test_runs_wrapper_sums_the_run_docs(self, monkeypatch):
-        from contextchecker.pipelines.ragchecker import RagCheckerPipeline
+        from claimlens.pipelines.ragchecker import RagCheckerPipeline
 
-        with patch("contextchecker.services.extraction.Extractor"), \
-             patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.extraction.Extractor"), \
+             patch("claimlens.services.checking.Checker"):
             p = RagCheckerPipeline(extractor_model="ext-model", checker_model="chk-model",
                                    runs=3, verbosity="silent")
 

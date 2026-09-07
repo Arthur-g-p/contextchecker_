@@ -14,25 +14,25 @@ Architecture:
 import time
 from datetime import datetime
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.eval.metrics import (
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError
+from claimlens.eval.metrics import (
     accuracy_score,
     classification_report,
     confusion_matrix,
 )
-from contextchecker.models import CheckerEvalResult
-from contextchecker.stats import (
+from claimlens.models import CheckerEvalResult
+from claimlens.stats import (
     GLOBAL_STATS,
     usage_since,
     format_headline,
     log_mece_tree,
     log_rate_rows,
 )
-from contextchecker.utils import build_meta, canonicalize_triplets, findings_view, plural
-from contextchecker.eval.base import Evaluator
-from contextchecker.services.base import BaseService
-from contextchecker.services.checking import CheckingService
+from claimlens.utils import build_meta, canonicalize_triplets, findings_view, plural
+from claimlens.eval.base import Evaluator
+from claimlens.services.base import BaseService
+from claimlens.services.checking import CheckingService
 
 logger = settings.get_logger(__name__)
 

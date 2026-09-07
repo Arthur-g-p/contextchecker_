@@ -17,13 +17,13 @@ from pathlib import Path
 
 import typer
 
-from contextchecker import settings
-from contextchecker.exceptions import ContextCheckerError
+from claimlens import settings
+from claimlens.exceptions import ClaimLensError
 
 logger = settings.get_logger(__name__)
 
 app = typer.Typer(
-    name="contextchecker",
+    name="claimlens",
     help="Claim-level evaluation for LLM outputs: extract atomic claims, then verify each against a reference.",
     no_args_is_help=True,
 )
@@ -31,7 +31,7 @@ app = typer.Typer(
 
 def _print_header(command: str) -> None:
     """Print the branded box header."""
-    title = f"  ContextChecker · {command}"
+    title = f"  ClaimLens · {command}"
     width = max(len(title) + 2, 50)
     logger.info("╭" + "─" * width + "╮")
     logger.info("│" + title.ljust(width) + "│")
@@ -142,7 +142,7 @@ def extract(
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run the extraction pipeline on a JSON dataset."""
-    from contextchecker.services.extraction import ExtractionService
+    from claimlens.services.extraction import ExtractionService
 
     # Activate logging (pretty by default, debug if --debug)
     settings.enable_logging(debug=debug)
@@ -165,7 +165,7 @@ def extract(
     try:
         service = ExtractionService(model=model, base_url=extractor_base_api, dedup=dedup, concurrency=concurrency)
         result = service.run_sync(data)
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -189,7 +189,7 @@ def check(
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Check extracted claims against reference passages."""
-    from contextchecker.services.checking import CheckingService
+    from claimlens.services.checking import CheckingService
 
     # Activate logging
     settings.enable_logging(debug=debug)
@@ -220,7 +220,7 @@ def check(
             max_words=max_words,
         )
         result = service.run_sync(data)
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -243,7 +243,7 @@ def atomize(
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Atomize compound triplets into atomic facts."""
-    from contextchecker.services.atomization import AtomizationService
+    from claimlens.services.atomization import AtomizationService
 
     # Activate logging
     settings.enable_logging(debug=debug)
@@ -272,7 +272,7 @@ def atomize(
             dedup=dedup,
         )
         result = service.run_sync(data)
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -307,7 +307,7 @@ def refcheck(
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run RefChecker: extraction + checking in one pass, one output document."""
-    from contextchecker.pipelines.refchecker import RefCheckerPipeline
+    from claimlens.pipelines.refchecker import RefCheckerPipeline
 
     # Activate logging (pretty by default, debug if --debug)
     settings.enable_logging(debug=debug)
@@ -341,7 +341,7 @@ def refcheck(
         )
         pipeline.run_sync(data)
         report = pipeline.last_report
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -376,7 +376,7 @@ def ragcheck(
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run RagChecker: 2 extractions + 4 checking directions, one report file."""
-    from contextchecker.pipelines.ragchecker import RagCheckerPipeline
+    from claimlens.pipelines.ragchecker import RagCheckerPipeline
 
     settings.enable_logging(debug=debug)
 
@@ -410,7 +410,7 @@ def ragcheck(
         )
         pipeline.run_sync(data)
         report = pipeline.last_report
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -445,7 +445,7 @@ def faithcheck(
     debug: bool = typer.Option(False, "--debug", help="Enable debug output with timestamps and module names."),
 ):
     """Run faithfulness checking without ground truth: response claims vs retrieved context."""
-    from contextchecker.pipelines.faithfulness import FaithfulnessPipeline
+    from claimlens.pipelines.faithfulness import FaithfulnessPipeline
 
     settings.enable_logging(debug=debug)
 
@@ -479,7 +479,7 @@ def faithcheck(
         )
         pipeline.run_sync(data)
         report = pipeline.last_report
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -542,7 +542,7 @@ def eval_checker(
     ),
 ):
     """Evaluate checker accuracy against human-labeled GT triplets."""
-    from contextchecker.eval.checkereval import CheckerEvaluator
+    from claimlens.eval.checkereval import CheckerEvaluator
 
     settings.enable_logging(debug=debug)
     _print_header("eval checker")
@@ -574,7 +574,7 @@ def eval_checker(
         )
         record, findings = evaluator.run_sync(data)
         _args = _capture_args("eval checker")
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)
@@ -648,7 +648,7 @@ def eval_extractor(
     ),
 ):
     """Evaluate extractor quality: extract live, then match against GT using LLM 2-pass."""
-    from contextchecker.eval.extractoreval import ExtractorEvaluator
+    from claimlens.eval.extractoreval import ExtractorEvaluator
 
     settings.enable_logging(debug=debug)
     _print_header("eval extractor")
@@ -683,7 +683,7 @@ def eval_extractor(
         )
         record, findings = evaluator.run_sync(data)
         _args = _capture_args("eval extractor")
-    except ContextCheckerError as exc:
+    except ClaimLensError as exc:
         logger.error("")
         logger.error("❌ %s: %s", type(exc).__name__, exc)
         raise typer.Exit(code=1)

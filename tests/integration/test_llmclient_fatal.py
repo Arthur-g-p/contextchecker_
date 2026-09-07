@@ -25,8 +25,8 @@ from openai import (
     BadRequestError,
 )
 
-from contextchecker.llmclient import LLMClient
-from contextchecker.exceptions import LLMClientError
+from claimlens.llmclient import LLMClient
+from claimlens.exceptions import LLMClientError
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ def client(tmp_path):
     Preflight connection check and strategy discovery are both skipped
     so tests can focus purely on error handling during generate/generate_batch.
     """
-    with patch("contextchecker.llmclient.AsyncOpenAI"):
+    with patch("claimlens.llmclient.AsyncOpenAI"):
         c = LLMClient(
             api_key="test-key-abc123",
             model="test-model",
@@ -111,7 +111,7 @@ def client_and_mock(request, tmp_path):
     """Fixture parameterizing the client across OpenAI and LiteLLM paths."""
     mode = request.param
     if mode == "openai":
-        with patch("contextchecker.llmclient.AsyncOpenAI"):
+        with patch("claimlens.llmclient.AsyncOpenAI"):
             c = LLMClient(
                 api_key="test-key-abc123",
                 model="test-model",
@@ -467,7 +467,7 @@ class TestFatalAbortReporting:
             body=None,
         )
 
-        with patch("contextchecker.llmclient.tqdm") as mock_tqdm:
+        with patch("claimlens.llmclient.tqdm") as mock_tqdm:
             pbar = MagicMock()
             mock_tqdm.return_value = pbar
 

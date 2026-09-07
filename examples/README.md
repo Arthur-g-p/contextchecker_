@@ -40,7 +40,7 @@ Eight answers about the exoplanet Kepler-22b. `extract` decomposes each
 and is included only so the items read naturally.
 
 ```bash
-contextchecker extract examples/extract/kepler22b.json --extractor-model <your-model>
+claimlens extract examples/extract/kepler22b.json --extractor-model <your-model>
 ```
 
 Read the output claim by claim. A good response should split into several
@@ -60,7 +60,7 @@ you can equally point `check` at your own `results/kepler22b_extract.json` once
 you have added references to it.
 
 ```bash
-contextchecker check examples/check/kepler22b_extracted.json \
+claimlens check examples/check/kepler22b_extracted.json \
   --extractor-model openai/gpt-5.6-luna \
   --checker-model <your-model>
 ```
@@ -77,7 +77,7 @@ methods and the same prompts are used, so the output should be more or less
 identical to running 01 and 02 back to back.
 
 ```bash
-contextchecker refcheck examples/refcheck/kepler22b.json \
+claimlens refcheck examples/refcheck/kepler22b.json \
   --extractor-model <your-model> \
   --checker-model <your-model>
 ```
@@ -98,7 +98,7 @@ truth is needed yet — which is what makes it usable on live traffic, where no
 reference answer exists.
 
 ```bash
-contextchecker faithcheck examples/faithcheck/kepler22b.json \
+claimlens faithcheck examples/faithcheck/kepler22b.json \
   --extractor-model <your-model> \
   --checker-model <your-model>
 ```
@@ -124,7 +124,7 @@ The core feature. It needs the full set of variables:
   item identifiable downstream
 
 ```bash
-contextchecker ragcheck examples/ragcheck/kepler22b.json \
+claimlens ragcheck examples/ragcheck/kepler22b.json \
   --extractor-model <your-model> \
   --checker-model <your-model>
 ```

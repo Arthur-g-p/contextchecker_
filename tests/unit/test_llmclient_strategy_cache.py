@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from contextchecker.llmclient import LLMClient, RETRY_MATRIX
+from claimlens.llmclient import LLMClient, RETRY_MATRIX
 
 
 BASE_URL = "http://fake/v1"
@@ -34,7 +34,7 @@ def _fake_response(content: str = '{"ok": true}') -> MagicMock:
 
 def _make_client(tmp_path, base_url=BASE_URL, model=MODEL) -> LLMClient:
     """Build an LLMClient with a mocked SDK backend, preflight skipped."""
-    with patch("contextchecker.llmclient.AsyncOpenAI"):
+    with patch("claimlens.llmclient.AsyncOpenAI"):
         c = LLMClient(api_key="k", model=model, base_url=base_url)
     c._connection_verified = True  # skip preflight
     c.client.chat.completions.create = AsyncMock(return_value=_fake_response())

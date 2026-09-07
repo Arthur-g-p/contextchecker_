@@ -15,19 +15,19 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from contextchecker.llmclient import LLMClient
-from contextchecker.models import (
+from claimlens.llmclient import LLMClient
+from claimlens.models import (
     DEFAULT_RETRY_ROUNDS,
     CheckingPayload,
     RetryRoundConfig,
 )
-from contextchecker.exceptions import (
+from claimlens.exceptions import (
     ParsingError, ContextTooLongError, ContentPolicyError, LLMTimeoutError,
     FinishReasonLengthError,
 )
-from contextchecker.stats import PhaseStats, RoundResult
-from contextchecker.utils import format_prompt, plural, prepare_plain_prompt
-from contextchecker import settings
+from claimlens.stats import PhaseStats, RoundResult
+from claimlens.utils import format_prompt, plural, prepare_plain_prompt
+from claimlens import settings
 
 logger = settings.get_logger(__name__)
 

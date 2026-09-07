@@ -8,8 +8,8 @@ Covers:
 
 import pytest
 
-from contextchecker.services.base import BaseService
-from contextchecker.utils import canonicalize_triplets
+from claimlens.services.base import BaseService
+from claimlens.utils import canonicalize_triplets
 
 
 # ── Test Fixtures ────────────────────────────────────────────────────────────

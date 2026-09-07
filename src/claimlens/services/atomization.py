@@ -12,13 +12,13 @@ Pipeline steps:
 6. Reporting:  Logs validation, skip, config, results, and done line.
 """
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError, FilterError
-from contextchecker.services.base import BaseService
-from contextchecker.models import AtomizationPayload
-from contextchecker.utils import canonicalize_triplets, deduplicate_triplets
-from contextchecker.workers.atomizer import Atomizer, AtomicTriplet, AtomizationDecision
-from contextchecker.stats import PhaseStats, log_api_parsing, log_token_stats
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError, FilterError
+from claimlens.services.base import BaseService
+from claimlens.models import AtomizationPayload
+from claimlens.utils import canonicalize_triplets, deduplicate_triplets
+from claimlens.workers.atomizer import Atomizer, AtomicTriplet, AtomizationDecision
+from claimlens.stats import PhaseStats, log_api_parsing, log_token_stats
 
 logger = settings.get_logger(__name__)
 

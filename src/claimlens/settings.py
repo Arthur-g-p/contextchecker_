@@ -7,7 +7,7 @@ Services validate that the config they need is present before running.
 Logging architecture:
     - Every module calls get_logger(__name__) → silent by default (NullHandler).
     - CLI calls enable_logging() at startup → pretty output via PrettyFormatter.
-    - Library users call contextchecker.enable_logging() to opt in.
+    - Library users call claimlens.enable_logging() to opt in.
     - --debug flag switches to DebugFormatter (timestamp + module prefix).
 """
 
@@ -34,27 +34,27 @@ class DebugFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%H:%M:%S")
-        src = record.name.removeprefix("contextchecker.")
+        src = record.name.removeprefix("claimlens.")
         # Pad source to 12 chars for alignment
         return f"{ts} | {src:<12} | {record.getMessage()}"
 
 
 # Install a NullHandler on the root logger so library users get silence.
 # Without this, Python's lastResort handler prints WARNING+ to stderr.
-logging.getLogger("contextchecker").addHandler(logging.NullHandler())
+logging.getLogger("claimlens").addHandler(logging.NullHandler())
 
 
 def enable_logging(debug: bool = False) -> None:
-    """Activate console output for the contextchecker package.
+    """Activate console output for the claimlens package.
 
     Called automatically by the CLI. Library users can call this
     explicitly to see output:
 
-        import contextchecker
-        contextchecker.enable_logging()        # pretty output
-        contextchecker.enable_logging(debug=True)  # + timestamps & module & sometimes more info and certain events
+        import claimlens
+        claimlens.enable_logging()        # pretty output
+        claimlens.enable_logging(debug=True)  # + timestamps & module & sometimes more info and certain events
     """
-    root = logging.getLogger("contextchecker")
+    root = logging.getLogger("claimlens")
 
     # Remove any existing handlers (avoid duplicates on repeated calls)
     for h in root.handlers[:]:
@@ -71,10 +71,10 @@ def enable_logging(debug: bool = False) -> None:
 def get_logger(name: str) -> logging.Logger:
     """Return a namespaced logger for *name*.
 
-    The logger inherits from the 'contextchecker' root logger.
+    The logger inherits from the 'claimlens' root logger.
     No handlers are attached here — enable_logging() controls output.
     """
-    return logging.getLogger(f"contextchecker.{name}")
+    return logging.getLogger(f"claimlens.{name}")
 
 
 # ── API keys ─────────────────────────────────────────────────────────────────

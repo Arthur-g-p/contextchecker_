@@ -6,8 +6,8 @@ report projection. Workers are patched out at construction — no LLM.
 import pytest
 from unittest.mock import patch
 
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.pipelines.ragchecker import (
+from claimlens.exceptions import InvalidInputError
+from claimlens.pipelines.ragchecker import (
     METRIC_NAMES,
     RagCheckerPipeline,
     compute_item_metrics,
@@ -26,14 +26,14 @@ GT_KG = f"{EXT}_gt_answer_kg"
 
 @pytest.fixture(autouse=True)
 def _patch_api_keys(monkeypatch):
-    monkeypatch.setattr("contextchecker.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
-    monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
 
 @pytest.fixture
 def pipeline():
-    with patch("contextchecker.services.extraction.Extractor"), \
-         patch("contextchecker.services.checking.Checker"):
+    with patch("claimlens.services.extraction.Extractor"), \
+         patch("claimlens.services.checking.Checker"):
         return RagCheckerPipeline(extractor_model=EXT, checker_model=CHK)
 
 
@@ -105,13 +105,13 @@ class TestValidate:
 
     def test_paper_results_envelope_unwrapped(self):
         """The original RAGChecker input format wraps items in {'results': []}."""
-        from contextchecker.pipelines.directions import unwrap_items
+        from claimlens.pipelines.directions import unwrap_items
         items = [_full_item()]
         assert unwrap_items({"results": items}) == items
         assert unwrap_items(items) == items
 
     def test_garbage_input_raises(self):
-        from contextchecker.pipelines.directions import unwrap_items
+        from claimlens.pipelines.directions import unwrap_items
         with pytest.raises(InvalidInputError):
             unwrap_items("just a string")
         with pytest.raises(InvalidInputError):

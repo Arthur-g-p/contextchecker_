@@ -15,8 +15,8 @@ import httpx
 import pytest
 from openai import APITimeoutError, APIConnectionError
 
-from contextchecker.llmclient import LLMClient, TIMEOUT_RETRIES
-from contextchecker.exceptions import (
+from claimlens.llmclient import LLMClient, TIMEOUT_RETRIES
+from claimlens.exceptions import (
     LLMClientError, LLMTimeoutError, ContextTooLongError, ContentPolicyError,
 )
 
@@ -45,7 +45,7 @@ def _ok(content: str = '{"ok": true}') -> MagicMock:
 
 
 def _client() -> LLMClient:
-    with patch("contextchecker.llmclient.AsyncOpenAI"):
+    with patch("claimlens.llmclient.AsyncOpenAI"):
         c = LLMClient(api_key="k", model=MODEL, base_url=BASE_URL)
     c._connection_verified = True
     c._strategy_discovered = True

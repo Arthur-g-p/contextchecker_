@@ -18,9 +18,9 @@ import copy
 import time
 from abc import ABC, abstractmethod
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.stats import (
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError
+from claimlens.stats import (
     VarianceTracker,
     document_meta,
     log_multi_run_hint,

@@ -1,6 +1,6 @@
 # RagChecker Pipeline
 
-`contextchecker ragcheck` — full RAGChecker-style RAG evaluation:
+`claimlens ragcheck` — full RAGChecker-style RAG evaluation:
 2 extractions + 4 checking directions + 11 metrics, one self-contained
 report file. Implements the methodology of RAGChecker (Ru et al., 2024)
 with modernized data contracts, explicit error handling, and additional

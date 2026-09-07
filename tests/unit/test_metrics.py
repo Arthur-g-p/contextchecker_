@@ -1,7 +1,7 @@
-"""Unit tests for the custom metric helpers in contextchecker.eval.metrics."""
+"""Unit tests for the custom metric helpers in claimlens.eval.metrics."""
 
 import pytest
-from contextchecker.eval.metrics import (
+from claimlens.eval.metrics import (
     accuracy_score,
     f1_score,
     confusion_matrix,

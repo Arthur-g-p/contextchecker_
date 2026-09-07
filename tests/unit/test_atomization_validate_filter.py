@@ -9,8 +9,8 @@ These test the NEW logic:
 import pytest
 from unittest.mock import patch, MagicMock
 
-from contextchecker.services.atomization import AtomizationService
-from contextchecker.exceptions import InvalidInputError
+from claimlens.services.atomization import AtomizationService
+from claimlens.exceptions import InvalidInputError
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -25,12 +25,12 @@ def _service(**kwargs) -> AtomizationService:
     """Build a service with mocked Atomizer worker."""
     defaults = dict(model=MODEL, source_kg_key=SOURCE_KEY)
     defaults.update(kwargs)
-    with patch("contextchecker.services.atomization.settings") as mock_settings:
+    with patch("claimlens.services.atomization.settings") as mock_settings:
         mock_settings.ATOMIZER_API_KEY = "test-key"
         mock_settings.PROMPT_PATH = "/fake/prompts.json"
         mock_settings.PROMPTS = {"atomizer_prompt": "test"}
         mock_settings.get_logger = MagicMock(return_value=MagicMock())
-        with patch("contextchecker.services.atomization.Atomizer"):
+        with patch("claimlens.services.atomization.Atomizer"):
             return AtomizationService(**defaults)
 
 

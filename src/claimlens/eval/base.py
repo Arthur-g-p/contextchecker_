@@ -20,8 +20,8 @@ import asyncio
 import copy
 import time
 
-from contextchecker import settings
-from contextchecker.stats import (
+from claimlens import settings
+from claimlens.stats import (
     VarianceTracker,
     document_meta,
     log_multi_run_hint,

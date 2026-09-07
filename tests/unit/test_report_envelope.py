@@ -11,14 +11,14 @@ from unittest.mock import patch
 
 import pytest
 
-from contextchecker.cli import _ARGS_ORDER, _capture_args
-from contextchecker.utils import REPORT_SCHEMA_VERSION, build_meta
+from claimlens.cli import _ARGS_ORDER, _capture_args
+from claimlens.utils import REPORT_SCHEMA_VERSION, build_meta
 
 
 META_CORE = (
     "schema_version",
     "report_type",
-    "contextchecker_version",
+    "claimlensversion",
     "timestamp",
     "duration_seconds",
     "total_items",
@@ -63,7 +63,7 @@ class TestBuildMeta:
         assert "gt_key" not in _meta()
 
     def test_version_is_reported(self):
-        assert _meta()["contextchecker_version"]
+        assert _meta()["claimlensversion"]
 
 
 class TestMetaConformance:

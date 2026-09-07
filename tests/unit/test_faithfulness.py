@@ -7,8 +7,8 @@ at construction — no LLM.
 import pytest
 from unittest.mock import patch
 
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.pipelines.faithfulness import (
+from claimlens.exceptions import InvalidInputError
+from claimlens.pipelines.faithfulness import (
     FaithfulnessPipeline,
     check_faithfulness,
 )
@@ -24,14 +24,14 @@ NAMESPACE = f"{CHK}_retrieved2response"
 
 @pytest.fixture(autouse=True)
 def _patch_api_keys(monkeypatch):
-    monkeypatch.setattr("contextchecker.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
-    monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
 
 @pytest.fixture
 def pipeline():
-    with patch("contextchecker.services.extraction.Extractor"), \
-         patch("contextchecker.services.checking.Checker"):
+    with patch("claimlens.services.extraction.Extractor"), \
+         patch("claimlens.services.checking.Checker"):
         return FaithfulnessPipeline(extractor_model=EXT, checker_model=CHK)
 
 
@@ -184,7 +184,7 @@ class TestFacade:
     def test_check_faithfulness_returns_single_entry(self):
         fake_report = {"runs": [{"items": [{"metrics": {"faithfulness": 0.75}}]}]}
 
-        with patch("contextchecker.pipelines.faithfulness.FaithfulnessPipeline") as cls:
+        with patch("claimlens.pipelines.faithfulness.FaithfulnessPipeline") as cls:
             instance = cls.return_value
             instance.last_report = fake_report
             entry = check_faithfulness(

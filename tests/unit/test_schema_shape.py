@@ -10,9 +10,9 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from contextchecker.utils import build_schema_shape
-from contextchecker.workers.checker import JointCheckResult
-from contextchecker.workers.extractor import ExtractionResult
+from claimlens.utils import build_schema_shape
+from claimlens.workers.checker import JointCheckResult
+from claimlens.workers.extractor import ExtractionResult
 
 
 def shape(model) -> dict:

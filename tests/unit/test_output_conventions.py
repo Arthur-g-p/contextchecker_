@@ -13,18 +13,18 @@ import logging
 
 import pytest
 
-from contextchecker.utils import build_variance
-from contextchecker.stats import (
+from claimlens.utils import build_variance
+from claimlens.stats import (
     log_mece_tree,
     log_rate_rows,
     log_run_line,
     log_variance_block,
     roster_from_sections,
 )
-from contextchecker.pipelines.directions import abstention_counts
+from claimlens.pipelines.directions import abstention_counts
 
 # NOTE: settings.get_logger(__name__) double-prefixes module
-# loggers ("contextchecker.contextchecker.stats"), so tests
+# loggers ("claimlens.claimlens.stats"), so tests
 # capture at the root level rather than by logger name.
 
 
@@ -73,7 +73,7 @@ class TestCheckerEvalDerivedRates:
     """A data gap must never masquerade as a score."""
 
     def _result(self, gt, pred, parse_errors=0):
-        from contextchecker.eval.checkereval import CheckerEvaluator
+        from claimlens.eval.checkereval import CheckerEvaluator
         dummy = object.__new__(CheckerEvaluator)   # ctor needs an API key
         return CheckerEvaluator._build_result(
             dummy, gt, pred, parse_errors, 1,
@@ -272,7 +272,7 @@ class TestAbstentionCounts:
 class TestExtractorEvalSurfacedRates:
     def _result(self, atomicity=None, duplicates=None):
         from types import SimpleNamespace
-        from contextchecker.eval.extractoreval import (
+        from claimlens.eval.extractoreval import (
             ExtractorEvaluator, _ItemBucket,
         )
         gt_item = {"gt": [{"s": 1}], "pred": [{"s": 1}]}
@@ -324,7 +324,7 @@ class TestExtractorEvalSurfacedRates:
         assert r.duplicate_rate == 0.0417
 
     def test_bucket_rate_empty_universe_is_none(self):
-        from contextchecker.eval.extractoreval import _bucket_rate
+        from claimlens.eval.extractoreval import _bucket_rate
         assert _bucket_rate(0, 0) is None
         assert _bucket_rate(1, 4) == 0.25
 
@@ -333,7 +333,7 @@ class TestExtractorEvalSurfacedRates:
 
 class TestAbstentionBreakdown:
     def test_split_predicate_and_uncategorized(self):
-        from contextchecker.pipelines.ragchecker import _abstention_breakdown
+        from claimlens.pipelines.ragchecker import _abstention_breakdown
         entries = [
             {"metrics": {"claim_recall": 0.8}},                        # answered
             {"is_abstention": True, "metrics": {"claim_recall": 0.0}},    # unjustified — all chunks irrelevant
@@ -359,7 +359,7 @@ class TestAbstentionBreakdown:
 
 class TestVerdictCellCounts:
     def test_ragcheck_skips_errored_items(self):
-        from contextchecker.pipelines.ragchecker import _verdict_cell_counts
+        from claimlens.pipelines.ragchecker import _verdict_cell_counts
         ok = {"answer2response": [{"verdict": "Entailment"}, {"verdict": None}],
               "response2answer": [{"verdict": "Neutral"}],
               "retrieved2response": [[{"verdict": None}]],
@@ -372,7 +372,7 @@ class TestVerdictCellCounts:
         assert (total, none) == (5, 2)   # errored item's cells never counted
 
     def test_faithcheck_matrix_counts(self):
-        from contextchecker.pipelines.faithfulness import _verdict_cell_counts
+        from claimlens.pipelines.faithfulness import _verdict_cell_counts
         ok = {"retrieved2response": [[{"verdict": "Entailment"},
                                       {"verdict": None}],
                                      [{"verdict": "Neutral"}]]}
@@ -386,7 +386,7 @@ class TestVerdictCellCounts:
 
 class TestFmtRatio:
     def _fmt(self, *args, **kwargs):
-        from contextchecker.eval.extractoreval import ExtractorEvaluator
+        from claimlens.eval.extractoreval import ExtractorEvaluator
         return ExtractorEvaluator._fmt_ratio(*args, **kwargs)
 
     def test_plain_fraction(self):

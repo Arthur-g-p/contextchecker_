@@ -21,9 +21,9 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from pydantic import ValidationError
 
-from contextchecker.stats import GLOBAL_STATS
-from contextchecker import settings as default_config
-from contextchecker.exceptions import (
+from claimlens.stats import GLOBAL_STATS
+from claimlens import settings as default_config
+from claimlens.exceptions import (
     LLMClientError, WorkerError, ContextTooLongError, ContentPolicyError,
     LLMParseError, LLMTimeoutError, FinishReasonLengthError,
 )

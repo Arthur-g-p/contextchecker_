@@ -1,12 +1,12 @@
 """
-ContextChecker exception hierarchy.
+ClaimLens exception hierarchy.
 
 Every module in the package imports its errors from here.
-This file is a leaf dependency — it imports nothing from contextchecker.
+This file is a leaf dependency — it imports nothing from claimlens.
 
 Hierarchy
 ---------
-ContextCheckerError          ← catch-all for any package error
+ClaimLensError          ← catch-all for any package error
 ├── CLIError                 ← bad flags, missing files, I/O issues
 ├── ServiceError             ← orchestration / pipeline failures
 │   ├── InvalidInputError    ← validation rejects the data
@@ -25,19 +25,19 @@ Compat aliases (used by llmclient.py, will migrate later):
 """
 
 
-class ContextCheckerError(Exception):
-    """Root exception for the entire contextchecker package."""
+class ClaimLensError(Exception):
+    """Root exception for the entire claimlens package."""
 
 
 # ── CLI layer ────────────────────────────────────────────────────────────────
 
-class CLIError(ContextCheckerError):
+class CLIError(ClaimLensError):
     """Raised when the CLI receives invalid arguments or encounters I/O issues."""
 
 
 # ── Service layer ────────────────────────────────────────────────────────────
 
-class ServiceError(ContextCheckerError):
+class ServiceError(ClaimLensError):
     """Raised when a service-level orchestration step fails."""
 
 
@@ -51,7 +51,7 @@ class FilterError(ServiceError):
 
 # ── Worker layer ─────────────────────────────────────────────────────────────
 
-class WorkerError(ContextCheckerError):
+class WorkerError(ClaimLensError):
     """Raised when a worker-level execution step fails."""
 
 

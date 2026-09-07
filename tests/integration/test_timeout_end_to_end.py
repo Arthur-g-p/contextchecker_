@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from contextchecker.exceptions import LLMTimeoutError
-from contextchecker.llmclient import LLMClient, TIMEOUT_RETRIES
+from claimlens.exceptions import LLMTimeoutError
+from claimlens.llmclient import LLMClient, TIMEOUT_RETRIES
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -62,7 +62,7 @@ async def servers():
 
 
 def _client(port: int) -> LLMClient:
-    with patch("contextchecker.llmclient.default_config") as cfg:
+    with patch("claimlens.llmclient.default_config") as cfg:
         cfg.LLM_TIMEOUT = DEADLINE
         cfg.LLM_MAX_TOKENS = None
         cfg.PROMPTS = {}

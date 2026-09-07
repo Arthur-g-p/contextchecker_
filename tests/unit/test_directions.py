@@ -10,9 +10,9 @@ import asyncio
 
 import pytest
 
-from contextchecker.exceptions import FilterError
-from contextchecker.models import Direction
-from contextchecker.pipelines.directions import run_direction
+from claimlens.exceptions import FilterError
+from claimlens.models import Direction
+from claimlens.pipelines.directions import run_direction
 
 
 KG_KEY = "ext_response_kg"

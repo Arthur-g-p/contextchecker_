@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from contextchecker.cli import _resolve_output
+from claimlens.cli import _resolve_output
 
 
 # ── Naming per operation ─────────────────────────────────────────────────────
@@ -89,12 +89,12 @@ class TestOverwriteWarning:
     def test_warns_when_target_exists(self, tmp_path):
         (tmp_path / "results").mkdir()
         (tmp_path / "results" / "d_extract.json").write_text("{}")
-        with patch("contextchecker.cli.logger") as mock_log:
+        with patch("claimlens.cli.logger") as mock_log:
             _resolve_output(tmp_path / "d.json", "extract")
         mock_log.warning.assert_called_once()
 
     def test_silent_when_target_is_new(self, tmp_path):
-        with patch("contextchecker.cli.logger") as mock_log:
+        with patch("claimlens.cli.logger") as mock_log:
             _resolve_output(tmp_path / "d.json", "extract")
         mock_log.warning.assert_not_called()
 
@@ -102,7 +102,7 @@ class TestOverwriteWarning:
         """-o is not exempt: an explicit target gets clobbered just the same."""
         explicit = tmp_path / "mine.json"
         explicit.write_text("{}")
-        with patch("contextchecker.cli.logger") as mock_log:
+        with patch("claimlens.cli.logger") as mock_log:
             _resolve_output(tmp_path / "d.json", "extract", explicit)
         mock_log.warning.assert_called_once()
 

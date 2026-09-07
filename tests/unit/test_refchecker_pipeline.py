@@ -16,8 +16,8 @@ item becomes valid there.
 import pytest
 from unittest.mock import patch
 
-from contextchecker.pipelines.refchecker import RefCheckerPipeline
-from contextchecker.exceptions import InvalidInputError
+from claimlens.pipelines.refchecker import RefCheckerPipeline
+from claimlens.exceptions import InvalidInputError
 
 
 EXTRACTOR = "ext-model"
@@ -32,8 +32,8 @@ _MISSING = object()
 
 def _pipeline():
     """Build a RefCheckerPipeline with both child services mocked out."""
-    with patch("contextchecker.pipelines.refchecker.ExtractionService"), \
-         patch("contextchecker.pipelines.refchecker.CheckingService"):
+    with patch("claimlens.pipelines.refchecker.ExtractionService"), \
+         patch("claimlens.pipelines.refchecker.CheckingService"):
         return RefCheckerPipeline(
             extractor_model=EXTRACTOR, checker_model=CHECKER, verbosity="silent"
         )

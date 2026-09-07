@@ -1,11 +1,11 @@
-# ContextChecker — Architecture
+# ClaimLens — Architecture
 
 > Status: written 2026-07-07. Sections marked **[UNVERIFIED]** describe parts
 > not re-checked against the code at writing time — verify before relying on them.
 
 ## What this package is
 
-ContextChecker is a claim-level evaluation toolkit for LLM outputs. Its core
+ClaimLens is a claim-level evaluation toolkit for LLM outputs. Its core
 methodology: decompose text into atomic (subject, predicate, object) claims
 via an extractor LLM, then classify each claim against a reference via a
 checker LLM (Entailment / Contradiction / Neutral). Everything else — RAG
@@ -26,11 +26,11 @@ CLI (controllers)  →  Pipelines / Services (orchestration)  →  Workers (exec
 | **Workers** (`workers/`) | Single-task async LLM execution, response parsing, retry rounds, per-item error classification | Orchestration, validation |
 | **Evaluators** (`eval/`) | Measurement: run services on prepared data, compare against ground truth, compute metrics, assemble output documents. Share `eval/base.Evaluator` (the --runs loop and document assembly; see "Evaluator contract") | Mutation semantics of BaseService (they do not inherit it) |
 
-### Foundation modules (leaf dependencies — import nothing from contextchecker)
+### Foundation modules (leaf dependencies — import nothing from claimlens)
 
 - `settings.py` — env vars, logger factory, prompt loading. Reads eagerly,
   never crashes on missing config ("Settings reads, Services validate").
-- `exceptions.py` — hierarchy: `ContextCheckerError → CLIError / ServiceError
+- `exceptions.py` — hierarchy: `ClaimLensError → CLIError / ServiceError
   (InvalidInputError, FilterError) / WorkerError (LLMClientError, ParsingError,
   ContextTooLongError, ContentPolicyError)`. **[UNVERIFIED: exact leaf list]**
 - `models.py` — dataclass payloads: the typed contracts between layers
@@ -227,7 +227,7 @@ LLMClient.generate()
   │    → service persists {model}_extraction_error / {namespace}_error
   └─ fatal error (Auth, Connection, Budget)
        → re-raised → propagates through worker + service
-       → CLI catches ContextCheckerError → logs → exit(1)
+       → CLI catches ClaimLensError → logs → exit(1)
 ```
 
 An empty result is never left ambiguous on disk: `[]` plus an error marker is

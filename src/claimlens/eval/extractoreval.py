@@ -18,28 +18,28 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.models import ExtractorEvalResult
-from contextchecker.stats import (
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError
+from claimlens.models import ExtractorEvalResult
+from claimlens.stats import (
     GLOBAL_STATS,
     usage_since,
     log_mece_tree,
     format_headline,
     log_rate_rows,
 )
-from contextchecker.utils import (
+from claimlens.utils import (
     plural,
     build_meta,
     canonicalize_triplets,
     find_duplicate_triplets,
     findings_view,
 )
-from contextchecker.eval.base import Evaluator
-from contextchecker.services.base import BaseService
-from contextchecker.services.checking import CheckingService, mode_label
-from contextchecker.services.extraction import ExtractionService
-from contextchecker.services.atomization import AtomizationService
+from claimlens.eval.base import Evaluator
+from claimlens.services.base import BaseService
+from claimlens.services.checking import CheckingService, mode_label
+from claimlens.services.extraction import ExtractionService
+from claimlens.services.atomization import AtomizationService
 
 logger = settings.get_logger(__name__)
 

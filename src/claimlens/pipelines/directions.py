@@ -28,11 +28,11 @@ How verdicts land on the source items:
 
 import copy
 
-from contextchecker import settings
-from contextchecker.exceptions import FilterError, InvalidInputError
-from contextchecker.models import Direction
-from contextchecker.services.checking import CheckingService
-from contextchecker.stats import PhaseStats, log_mece_tree
+from claimlens import settings
+from claimlens.exceptions import FilterError, InvalidInputError
+from claimlens.models import Direction
+from claimlens.services.checking import CheckingService
+from claimlens.stats import PhaseStats, log_mece_tree
 
 logger = settings.get_logger(__name__)
 

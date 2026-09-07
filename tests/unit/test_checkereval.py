@@ -8,8 +8,8 @@ metric computation, and edge cases (parse errors, empty GT, missing keys).
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from contextchecker.eval.checkereval import CheckerEvaluator, LABELS
-from contextchecker.models import CheckerEvalResult
+from claimlens.eval.checkereval import CheckerEvaluator, LABELS
+from claimlens.models import CheckerEvalResult
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ def sample_items():
 class TestPrepareGt:
     """Tests for the GT validation and classification step."""
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_valid_items(self, mock_svc_cls, sample_items):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._gt_key = "claude2_response_kg"
@@ -79,7 +79,7 @@ class TestPrepareGt:
         assert skip["empty_gt"] == 0
         assert skip["unlabeled_claims"] == 0
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_missing_gt_key(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._gt_key = "claude2_response_kg"
@@ -93,7 +93,7 @@ class TestPrepareGt:
         assert len(evaluable) == 1
         assert skip["missing_gt"] == 1
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_missing_reference(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._gt_key = "claude2_response_kg"
@@ -112,7 +112,7 @@ class TestPrepareGt:
         assert len(evaluable) == 1
         assert skip["missing_context"] == 1
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_empty_gt_after_filter(self, mock_svc_cls):
         """GT key exists but no triplet has human_label."""
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
@@ -132,10 +132,10 @@ class TestPrepareGt:
         assert len(evaluable) == 1
         assert skip["empty_gt"] == 1
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_all_items_invalid_raises(self, mock_svc_cls):
         """If no items are evaluable, raise InvalidInputError."""
-        from contextchecker.exceptions import InvalidInputError
+        from claimlens.exceptions import InvalidInputError
 
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._gt_key = "claude2_response_kg"
@@ -145,7 +145,7 @@ class TestPrepareGt:
         with pytest.raises(InvalidInputError):
             evaluator._prepare_gt(items)
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_canonical_format_supported(self, mock_svc_cls):
         """Canonical format (subject/predicate/object) works too."""
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
@@ -165,7 +165,7 @@ class TestPrepareGt:
         assert len(evaluable) == 1
         assert gt_map[0] == {0: "Entailment"}
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_partial_human_labels(self, mock_svc_cls):
         """Only some triplets have human_label — index tracking must be correct."""
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
@@ -192,7 +192,7 @@ class TestPrepareGt:
 class TestPrepareForService:
     """Tests for GT aliasing and verdict stripping."""
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_aliases_gt_key(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._gt_key = "claude2_response_kg"
@@ -209,7 +209,7 @@ class TestPrepareForService:
         # Should contain only the labeled triplet
         assert len(item["_gt_eval_response_kg"]) == 1
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_strips_existing_verdicts(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._gt_key = "claude2_response_kg"
@@ -228,7 +228,7 @@ class TestPrepareForService:
         assert "gpt4o_checker_verdict" not in item["_gt_eval_response_kg"][0]
         assert "gpt4o_checker_explanation" not in item["_gt_eval_response_kg"][0]
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_filters_unlabeled_and_remaps(self, mock_svc_cls):
         """Only labeled triplets go to service, indices get remapped."""
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
@@ -263,7 +263,7 @@ class TestPrepareForService:
 class TestCompare:
     """Tests for the 1:1 verdict comparison step."""
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_basic_comparison(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
         evaluator._service_kg_key = "_gt_eval_response_kg"
@@ -283,7 +283,7 @@ class TestCompare:
         assert pred_flat == ["Entailment", "Contradiction"]
         assert errors == 0
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_parse_errors_excluded(self, mock_svc_cls):
         """None verdicts are excluded from metrics and counted."""
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
@@ -308,7 +308,7 @@ class TestCompare:
         assert gt_flat == ["Entailment", "Neutral"]
         assert pred_flat == ["Entailment", "Neutral"]
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_partial_labels_correct_alignment(self, mock_svc_cls):
         """Only some triplets have GT labels — comparison uses correct indices."""
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
@@ -338,7 +338,7 @@ class TestCompare:
 class TestBuildResult:
     """Tests for metric computation."""
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_perfect_accuracy(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
 
@@ -357,7 +357,7 @@ class TestBuildResult:
             [0, 0, 1],
         ]
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_partial_accuracy(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
 
@@ -371,7 +371,7 @@ class TestBuildResult:
         assert result.total_claims == 4
         assert result.total_items == 2
 
-    @patch("contextchecker.eval.checkereval.CheckingService")
+    @patch("claimlens.eval.checkereval.CheckingService")
     def test_report_contains_all_labels(self, mock_svc_cls):
         evaluator = CheckerEvaluator.__new__(CheckerEvaluator)
 

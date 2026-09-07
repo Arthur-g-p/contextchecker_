@@ -9,9 +9,9 @@ these tests never touch the LLM.
 import pytest
 from unittest.mock import patch, MagicMock
 
-from contextchecker.services.extraction import ExtractionService
-from contextchecker.workers.extractor import Triplet
-from contextchecker.exceptions import InvalidInputError, FilterError
+from claimlens.services.extraction import ExtractionService
+from claimlens.workers.extractor import Triplet
+from claimlens.exceptions import InvalidInputError, FilterError
 
 
 FAKE_API_KEY = "test-key-12345"
@@ -24,20 +24,20 @@ KG_KEY = f"{MODEL}_response_kg"
 @pytest.fixture(autouse=True)
 def _patch_api_key(monkeypatch):
     """Every test gets a valid API key so the service can be constructed."""
-    monkeypatch.setattr("contextchecker.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
 
 
 @pytest.fixture
 def service():
     """ExtractionService with the Extractor worker stubbed out (dedup on)."""
-    with patch("contextchecker.services.extraction.Extractor"):
+    with patch("claimlens.services.extraction.Extractor"):
         return ExtractionService(model=MODEL)
 
 
 @pytest.fixture
 def service_no_dedup():
     """ExtractionService with dedup disabled (the evaluator's path)."""
-    with patch("contextchecker.services.extraction.Extractor"):
+    with patch("claimlens.services.extraction.Extractor"):
         return ExtractionService(model=MODEL, dedup=False)
 
 
@@ -299,7 +299,7 @@ class TestParameterization:
 
     @pytest.fixture
     def gt_service(self):
-        with patch("contextchecker.services.extraction.Extractor"):
+        with patch("claimlens.services.extraction.Extractor"):
             return ExtractionService(
                 model=MODEL,
                 source_key="gt_answer",
@@ -354,11 +354,11 @@ class TestWorkerErrorCauses:
     last_stats.error_causes so the service can persist it."""
 
     def test_classify_records_permanent_causes(self):
-        from contextchecker.workers.extractor import Extractor
-        from contextchecker.exceptions import ContextTooLongError, ContentPolicyError
-        from contextchecker.stats import PhaseStats
+        from claimlens.workers.extractor import Extractor
+        from claimlens.exceptions import ContextTooLongError, ContentPolicyError
+        from claimlens.stats import PhaseStats
 
-        with patch("contextchecker.workers.extractor.LLMClient"):
+        with patch("claimlens.workers.extractor.LLMClient"):
             extractor = Extractor(api_key=FAKE_API_KEY, model=MODEL)
 
         stats = PhaseStats()
@@ -374,10 +374,10 @@ class TestWorkerErrorCauses:
 
     def test_exhausted_retries_marked_as_parse_failure(self):
         import asyncio
-        from contextchecker.workers.extractor import Extractor
-        from contextchecker.models import ExtractionPayload
+        from claimlens.workers.extractor import Extractor
+        from claimlens.models import ExtractionPayload
 
-        with patch("contextchecker.workers.extractor.LLMClient"):
+        with patch("claimlens.workers.extractor.LLMClient"):
             extractor = Extractor(api_key=FAKE_API_KEY, model=MODEL)
 
         async def always_invalid(tasks, **kwargs):

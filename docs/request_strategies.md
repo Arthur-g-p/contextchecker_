@@ -26,12 +26,12 @@ LiteLLM resolves the endpoint, credentials and request transformation.
 
 ```bash
 # base URL set → OpenAI SDK, straight to the endpoint
-contextchecker extract data.json \
+claimlens extract data.json \
   --extractor-base-api https://openrouter.ai/api/v1 \
   --extractor-model openai/gpt-5.6-luna
 
 # no base URL → LiteLLM routes it
-contextchecker extract data.json \
+claimlens extract data.json \
   --extractor-model openrouter/openai/gpt-5.6-luna
 ```
 

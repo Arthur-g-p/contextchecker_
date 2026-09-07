@@ -15,13 +15,13 @@ Pipeline steps:
 
 from pathlib import Path
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError, FilterError
-from contextchecker.services.base import BaseService
-from contextchecker.models import ExtractionPayload
-from contextchecker.utils import plural, deduplicate_triplets
-from contextchecker.workers.extractor import Extractor, Triplet
-from contextchecker.stats import PhaseStats, log_api_parsing, log_mece_tree, log_token_stats
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError, FilterError
+from claimlens.services.base import BaseService
+from claimlens.models import ExtractionPayload
+from claimlens.utils import plural, deduplicate_triplets
+from claimlens.workers.extractor import Extractor, Triplet
+from claimlens.stats import PhaseStats, log_api_parsing, log_mece_tree, log_token_stats
 
 logger = settings.get_logger(__name__)
 

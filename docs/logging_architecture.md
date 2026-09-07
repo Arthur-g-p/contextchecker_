@@ -1,21 +1,21 @@
 # Logging Architecture
 
-How logging works in contextchecker, and how to use it when building new services.
+How logging works in claimlens, and how to use it when building new services.
 
 ## The System
 
 Every module uses Python's standard `logging` via `settings.get_logger(__name__)`. By default, output is **silent** (NullHandler). The CLI activates pretty output at startup via `enable_logging()`.
 
 ```
-contextchecker                         ← NullHandler (silent) + CLI attaches StreamHandler here
-├── contextchecker.cli                 ← box header, output path
-├── contextchecker.services.extraction ← validation, skip, config, results, done line
-├── contextchecker.workers.extractor   ← extraction progress, retries
-├── contextchecker.utils               ← no logger of its own; uses the caller's
-└── contextchecker.llmclient           ← connection test, strategy discovery (future migration)
+claimlens                         ← NullHandler (silent) + CLI attaches StreamHandler here
+├── claimlens.cli                 ← box header, output path
+├── claimlens.services.extraction ← validation, skip, config, results, done line
+├── claimlens.workers.extractor   ← extraction progress, retries
+├── claimlens.utils               ← no logger of its own; uses the caller's
+└── claimlens.llmclient           ← connection test, strategy discovery (future migration)
 ```
 
-All child loggers bubble up to the parent `contextchecker` logger. One handler on the parent controls all output.
+All child loggers bubble up to the parent `claimlens` logger. One handler on the parent controls all output.
 
 ## Two Modes
 
@@ -29,9 +29,9 @@ No separate "verbose" mode exists.
 ## For Library Users
 
 ```python
-import contextchecker
-from contextchecker.settings import enable_logging
-from contextchecker.services.extraction import ExtractionService
+import claimlens
+from claimlens.settings import enable_logging
+from claimlens.services.extraction import ExtractionService
 
 # Silent by default — no output
 service = ExtractionService(model="gemini-2.0-flash")
@@ -47,8 +47,8 @@ enable_logging(debug=True)   # with timestamps + module prefix
 Output is automatic. The `--debug` flag enables debug mode:
 
 ```bash
-contextchecker extract data.json                  # pretty output
-contextchecker extract data.json --debug          # + timestamps & module names
+claimlens extract data.json                  # pretty output
+claimlens extract data.json --debug          # + timestamps & module names
 ```
 
 ## Rules for New Services
@@ -58,7 +58,7 @@ When adding a new service (e.g. `CheckingService`), follow these rules:
 ### 1. Use `logger = settings.get_logger(__name__)` at module level
 
 ```python
-from contextchecker import settings
+from claimlens import settings
 logger = settings.get_logger(__name__)
 ```
 
@@ -157,7 +157,7 @@ These mark transitions between phases (e.g. filtering → extraction → results
 
 ### 8. Leaf modules take the caller's logger
 
-`utils.py` imports nothing from contextchecker, so it has no `get_logger` and no
+`utils.py` imports nothing from claimlens, so it has no `get_logger` and no
 module logger. A helper there that needs to warn takes one as a parameter:
 
 ```python
@@ -167,10 +167,10 @@ def prepare_plain_prompt(template, key, schema, logger: logging.Logger) -> str |
 ```
 
 This keeps the leaf intact and attributes the line to the layer that owns the
-subject — a worker's prompt gap reports as `contextchecker.workers.extractor`,
-not `contextchecker.utils`.
+subject — a worker's prompt gap reports as `claimlens.workers.extractor`,
+not `claimlens.utils`.
 
 Never call `logging.getLogger()` directly instead. A name outside the
-`contextchecker.*` hierarchy finds no handler, falls through to Python's
+`claimlens.*` hierarchy finds no handler, falls through to Python's
 `lastResort`, and prints to stderr for every library consumer regardless of what
 they configured.

@@ -1,6 +1,6 @@
 # Faithfulness Pipeline
 
-`contextchecker faithcheck` (batch) and `check_faithfulness(...)` (library,
+`claimlens faithcheck` (batch) and `check_faithfulness(...)` (library,
 real-time) — faithfulness checking **without ground truth**.
 
 ## Why this exists
@@ -27,7 +27,7 @@ absent or `null` is missing. An empty chunk list is a drop.
 ## Library facade (the real-time entry point)
 
 ```python
-from contextchecker import check_faithfulness
+from claimlens import check_faithfulness
 
 entry = check_faithfulness(
     response="The Nile is the longest river. It has 5 million inhabitants.",

@@ -6,8 +6,8 @@ pipeline-internal --runs mode. No LLM — _run_once is stubbed.
 import pytest
 from unittest.mock import patch
 
-from contextchecker.utils import aggregate_values, build_variance
-from contextchecker.pipelines.ragchecker import RagCheckerPipeline
+from claimlens.utils import aggregate_values, build_variance
+from claimlens.pipelines.ragchecker import RagCheckerPipeline
 
 
 FAKE_API_KEY = "test-key-12345"
@@ -17,13 +17,13 @@ CHK = "chk-model"
 
 @pytest.fixture(autouse=True)
 def _patch_api_keys(monkeypatch):
-    monkeypatch.setattr("contextchecker.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
-    monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.EXTRACTOR_API_KEY", FAKE_API_KEY)
+    monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
 
 def _pipeline(runs, verbosity="full"):
-    with patch("contextchecker.services.extraction.Extractor"), \
-         patch("contextchecker.services.checking.Checker"):
+    with patch("claimlens.services.extraction.Extractor"), \
+         patch("claimlens.services.checking.Checker"):
         return RagCheckerPipeline(extractor_model=EXT, checker_model=CHK,
                                   runs=runs, verbosity=verbosity)
 

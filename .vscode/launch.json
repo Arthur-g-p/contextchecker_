@@ -5,31 +5,31 @@
       "id": "extractorModel",
       "type": "promptString",
       "description": "Extractor model — bare id when a base URL is set (e.g. llama3.2:3b, openai/gpt-5.6-luna)",
-      "default": "llama3.2:3b"
+      "default": "z-ai/glm-5.3-flash"
     },
     {
       "id": "extractorBaseApi",
       "type": "promptString",
       "description": "Extractor base URL — leave blank for LiteLLM provider routing (then prefix the model, e.g. openrouter/...)",
-      "default": "http://localhost:11434/v1"
+      "default": "https://openrouter.ai/api/v1"
     },
     {
       "id": "checkerModel",
       "type": "promptString",
       "description": "Checker model — bare id when a base URL is set (e.g. llama3.2:3b, openai/gpt-5.6-luna)",
-      "default": "llama3.2:3b"
+      "default": "z-ai/glm-5.3-flash"
     },
     {
       "id": "checkerBaseApi",
       "type": "promptString",
       "description": "Checker base URL — leave blank for LiteLLM provider routing (then prefix the model, e.g. openrouter/...)",
-      "default": "http://localhost:11434/v1"
+      "default": "https://openrouter.ai/api/v1"
     },
     {
       "id": "atomizerModel",
       "type": "promptString",
       "description": "Atomizer model — measures whether extracted claims are atomic. Needs ATOMIZER_API_KEY.",
-      "default": "openai/gpt-5.6-luna"
+      "default": "z-ai/glm-5.3-flash"
     },
     {
       "id": "atomizerBaseApi",
@@ -43,15 +43,14 @@
       "name": "01 · extract — kepler22b",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "args": [
         "extract",
         "examples/extract/kepler22b.json",
         "--extractor-model",
         "${input:extractorModel}",
         "--extractor-base-api",
-        "${input:extractorBaseApi}",
-        "--debug"
+        "${input:extractorBaseApi}"
       ],
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
@@ -66,7 +65,7 @@
       "name": "02 · check — kepler22b (extracted)",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "args": [
         "check",
         "examples/check/kepler22b_extracted.json",
@@ -75,8 +74,7 @@
         "--checker-model",
         "${input:checkerModel}",
         "--checker-base-api",
-        "${input:checkerBaseApi}",
-        "--debug"
+        "${input:checkerBaseApi}"
       ],
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
@@ -91,7 +89,7 @@
       "name": "03 · refcheck — kepler22b",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "args": [
         "refcheck",
         "examples/refcheck/kepler22b.json",
@@ -118,7 +116,7 @@
       "name": "04 · faithcheck — kepler22b",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "args": [
         "faithcheck",
         "examples/faithcheck/kepler22b.json",
@@ -130,7 +128,8 @@
         "${input:checkerModel}",
         "--checker-base-api",
         "${input:checkerBaseApi}",
-        "--debug"
+        "--runs",
+        "2"
       ],
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
@@ -145,7 +144,7 @@
       "name": "05 · ragcheck — kepler22b",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "args": [
         "ragcheck",
         "examples/ragcheck/kepler22b.json",
@@ -157,7 +156,8 @@
         "${input:checkerModel}",
         "--checker-base-api",
         "${input:checkerBaseApi}",
-        "--debug"
+        "--runs",
+        "2"
       ],
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
@@ -171,12 +171,12 @@
     {
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": false,
-      "name": "01 · eval checker — msmarco_gpt4_100‚",
+      "name": "01 · eval checker — msmarco_gpt4_5‚",
       "args": [
         "eval",
         "checker",
@@ -185,7 +185,8 @@
         "${input:checkerModel}",
         "--checker-base-api",
         "${input:checkerBaseApi}",
-        "--debug"
+        "--runs",
+        "1"
       ],
       "presentation": {
         "group": "2 · Evaluation",
@@ -195,7 +196,7 @@
     {
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/contextchecker",
+      "program": "${workspaceFolder}/.venv/bin/claimlens",
       "python": "${workspaceFolder}/.venv/bin/python",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
@@ -204,7 +205,7 @@
       "args": [
         "eval",
         "extractor",
-        "eval_data/msmarco/msmarco_gpt4_25.json",
+        "eval_data/msmarco/msmarco_gpt4_5.json",
         "--extractor-model",
         "${input:extractorModel}",
         "--extractor-base-api",
@@ -213,11 +214,8 @@
         "${input:checkerModel}",
         "--checker-base-api",
         "${input:checkerBaseApi}",
-        "--atomizer-model",
-        "${input:atomizerModel}",
-        "--atomizer-base-api",
-        "${input:atomizerBaseApi}",
-        "--debug"
+        "--runs",
+        "2"
       ],
       "presentation": {
         "group": "2 · Evaluation",

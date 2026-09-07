@@ -18,20 +18,20 @@ is simply empty.
 import time
 from datetime import datetime
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.pipelines.directions import (
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError
+from claimlens.pipelines.directions import (
     _location,
     log_pipeline_tree,
     pipeline_counts,
     unwrap_items,
     verdict_summary,
 )
-from contextchecker.services.base import BaseService
-from contextchecker.services.checking import CheckingService
-from contextchecker.services.extraction import ExtractionService
-from contextchecker.stats import GLOBAL_STATS, log_token_stats, usage_since
-from contextchecker.utils import build_meta, findings_view, plural
+from claimlens.services.base import BaseService
+from claimlens.services.checking import CheckingService
+from claimlens.services.extraction import ExtractionService
+from claimlens.stats import GLOBAL_STATS, log_token_stats, usage_since
+from claimlens.utils import build_meta, findings_view, plural
 
 logger = settings.get_logger(__name__)
 

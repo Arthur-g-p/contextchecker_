@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from contextchecker.llmclient import LLMClient, RETRY_MATRIX
-from contextchecker.stats import GLOBAL_STATS
+from claimlens.llmclient import LLMClient, RETRY_MATRIX
+from claimlens.stats import GLOBAL_STATS
 
 
 @pytest.fixture(autouse=True)
@@ -62,8 +62,8 @@ class TestClientRecordsTheLock:
     """The client writes at the moment it locks — no other code path does."""
 
     def test_direct_endpoint_records_the_rung_name(self):
-        from contextchecker.workers.extractor import ExtractionResult
-        with patch("contextchecker.llmclient.AsyncOpenAI"):
+        from claimlens.workers.extractor import ExtractionResult
+        with patch("claimlens.llmclient.AsyncOpenAI"):
             c = LLMClient(api_key="k", model="m", base_url="http://x/v1")
         c._connection_verified = True
         c._strategy_index = 1            # discovery starts on 'Schema Only'
@@ -74,11 +74,11 @@ class TestClientRecordsTheLock:
         assert GLOBAL_STATS.strategies() == {"m": "Schema Only"}
 
     def test_every_rung_name_is_the_matrix_name(self):
-        from contextchecker.workers.extractor import ExtractionResult
+        from claimlens.workers.extractor import ExtractionResult
         for idx, rung in enumerate(RETRY_MATRIX[:2]):     # the schema rungs lock cleanly
             GLOBAL_STATS._strategies.clear()
             LLMClient._STRATEGY_CACHE.clear()
-            with patch("contextchecker.llmclient.AsyncOpenAI"):
+            with patch("claimlens.llmclient.AsyncOpenAI"):
                 c = LLMClient(api_key="k", model="m", base_url="http://x/v1")
             c._connection_verified = True
             c._strategy_index = idx
@@ -98,7 +98,7 @@ class TestClientRecordsTheLock:
     def test_adopting_a_cached_lock_does_not_rerecord(self):
         """A sibling adopting the process cache never locked — it must not write."""
         LLMClient._STRATEGY_CACHE[("http://x/v1", "m")] = 2
-        with patch("contextchecker.llmclient.AsyncOpenAI"):
+        with patch("claimlens.llmclient.AsyncOpenAI"):
             c = LLMClient(api_key="k", model="m", base_url="http://x/v1")
         assert c._strategy_discovered is True
         assert GLOBAL_STATS.strategies() == {}
@@ -108,12 +108,12 @@ class TestWiring:
     """The key must reach a real report's _meta, without the pipeline touching the client."""
 
     def test_refcheck_meta_carries_the_locked_strategy(self):
-        from contextchecker.pipelines.refchecker import RefCheckerPipeline
+        from claimlens.pipelines.refchecker import RefCheckerPipeline
 
         GLOBAL_STATS.record_strategy("ext-model", "http://x/v1", "Reasoning + JSON")
 
-        with patch("contextchecker.pipelines.refchecker.ExtractionService"), \
-             patch("contextchecker.pipelines.refchecker.CheckingService"):
+        with patch("claimlens.pipelines.refchecker.ExtractionService"), \
+             patch("claimlens.pipelines.refchecker.CheckingService"):
             p = RefCheckerPipeline(extractor_model="ext-model",
                                    checker_model="chk-model", verbosity="silent")
 
@@ -128,21 +128,21 @@ class TestWiring:
     def test_only_workers_import_the_client(self):
         """The layering rule this feature must not break."""
         import pathlib
-        root = pathlib.Path(__file__).resolve().parents[2] / "src" / "contextchecker"
+        root = pathlib.Path(__file__).resolve().parents[2] / "src" / "claimlens"
         offenders = sorted(
             str(p.relative_to(root)) for p in root.rglob("*.py")
-            if "from contextchecker.llmclient import" in p.read_text(encoding="utf-8")
+            if "from claimlens.llmclient import" in p.read_text(encoding="utf-8")
             and p.parent.name != "workers"
         )
         assert offenders == []
 
     def test_meta_core_keys_still_come_first(self):
-        from contextchecker.utils import build_meta
+        from claimlens.utils import build_meta
         m = build_meta("refcheck", timestamp="t", duration_seconds=1.0,
                        total_items=1, evaluated_items=1, dropped_items=0,
                        request_strategies={"m": "Schema Only"})
         assert list(m)[:8] == [
-            "schema_version", "report_type", "contextchecker_version",
+            "schema_version", "report_type", "claimlensversion",
             "timestamp", "duration_seconds", "total_items",
             "evaluated_items", "dropped_items",
         ]

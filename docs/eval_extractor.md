@@ -182,7 +182,7 @@ either side is. A `0.0` therefore always means a real, measured zero.
 ## Running the Evaluator (CLI)
 
 ```bash
-contextchecker eval extractor <input_file> [options]
+claimlens eval extractor <input_file> [options]
 ```
 
 > Requires **two** models: one performs the live extraction
@@ -229,7 +229,7 @@ contextchecker eval extractor <input_file> [options]
 ### Worked example
 
 ```bash
-contextchecker eval extractor eval_data/msmarco/msmarco_gpt4_5.json \
+claimlens eval extractor eval_data/msmarco/msmarco_gpt4_5.json \
   --extractor-model gemini-3.1 \
   --checker-model gemini-3.1 \
   --extractor-base-api http://localhost:4000/v1 \

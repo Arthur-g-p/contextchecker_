@@ -3,11 +3,11 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from contextchecker.services.atomization import AtomizationService
-from contextchecker.models import AtomizationPayload
-from contextchecker.workers.atomizer import AtomicTriplet, AtomizationDecision
-from contextchecker.stats import PhaseStats
-from contextchecker.exceptions import InvalidInputError
+from claimlens.services.atomization import AtomizationService
+from claimlens.models import AtomizationPayload
+from claimlens.workers.atomizer import AtomicTriplet, AtomizationDecision
+from claimlens.stats import PhaseStats
+from claimlens.exceptions import InvalidInputError
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -26,11 +26,11 @@ def _service(**kwargs) -> AtomizationService:
         source_kg_key=SOURCE_KEY,
     )
     defaults.update(kwargs)
-    with patch("contextchecker.services.atomization.settings") as mock_settings:
+    with patch("claimlens.services.atomization.settings") as mock_settings:
         mock_settings.ATOMIZER_API_KEY = "test-key"
         mock_settings.PROMPT_PATH = "/fake/prompts.json"
         mock_settings.get_logger = MagicMock(return_value=MagicMock())
-        with patch("contextchecker.services.atomization.Atomizer"):
+        with patch("claimlens.services.atomization.Atomizer"):
             return AtomizationService(**defaults)
 
 

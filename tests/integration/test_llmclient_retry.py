@@ -29,8 +29,8 @@ import pytest
 from openai import RateLimitError, BadRequestError, ConflictError
 from pydantic import BaseModel, ValidationError
 
-from contextchecker.llmclient import LLMClient, RETRY_MATRIX
-from contextchecker.exceptions import LLMClientError, LLMParseError
+from claimlens.llmclient import LLMClient, RETRY_MATRIX
+from claimlens.exceptions import LLMClientError, LLMParseError
 
 
 BASE_URL = "http://fake/v1"
@@ -91,7 +91,7 @@ def _bad_request(message: str) -> BadRequestError:
 
 
 def _make_client(tmp_path, *, discovered: bool) -> LLMClient:
-    with patch("contextchecker.llmclient.AsyncOpenAI"):
+    with patch("claimlens.llmclient.AsyncOpenAI"):
         c = LLMClient(api_key="k", model=MODEL, base_url=BASE_URL)
     c._connection_verified = True
     if discovered:
@@ -186,7 +186,7 @@ class TestRateLimit:
             _fake_response(),
         ]
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            with caplog.at_level(logging.WARNING, logger="contextchecker"):
+            with caplog.at_level(logging.WARNING, logger="claimlens"):
                 await c.generate([{"role": "user", "content": "hi"}])
 
         msgs = [r.getMessage() for r in caplog.records]
@@ -247,7 +247,7 @@ class TestParseRetryNoBackoff:
         c.client.chat.completions.create.side_effect = [_validation_error()] * 3
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            with caplog.at_level(logging.ERROR, logger="contextchecker"):
+            with caplog.at_level(logging.ERROR, logger="claimlens"):
                 with pytest.raises(LLMParseError):
                     await c.generate([{"role": "user", "content": "hi"}])
 
@@ -264,7 +264,7 @@ class TestParseRetryNoBackoff:
         ]
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            with caplog.at_level(logging.ERROR, logger="contextchecker"):
+            with caplog.at_level(logging.ERROR, logger="claimlens"):
                 with pytest.raises(LLMParseError):
                     await c.generate([{"role": "user", "content": "hi"}])
 
@@ -276,7 +276,7 @@ class TestParseRetryNoBackoff:
         c.client.chat.completions.create.side_effect = [_conflict_error()] * 3
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            with caplog.at_level(logging.ERROR, logger="contextchecker"):
+            with caplog.at_level(logging.ERROR, logger="claimlens"):
                 with pytest.raises(LLMParseError):
                     await c.generate([{"role": "user", "content": "hi"}])
 

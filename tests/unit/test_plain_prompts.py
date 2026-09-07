@@ -9,17 +9,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from openai import BadRequestError
 
-from contextchecker import settings
-from contextchecker.exceptions import LLMClientError
-from contextchecker.llmclient import LLMClient
-from contextchecker.models import (
+from claimlens import settings
+from claimlens.exceptions import LLMClientError
+from claimlens.llmclient import LLMClient
+from claimlens.models import (
     AtomizationPayload,
     CheckingPayload,
     ExtractionPayload,
 )
-from contextchecker.workers.atomizer import Atomizer
-from contextchecker.workers.checker import Checker
-from contextchecker.workers.extractor import Extractor
+from claimlens.workers.atomizer import Atomizer
+from claimlens.workers.checker import Checker
+from claimlens.workers.extractor import Extractor
 
 BASE_URL = "http://fake/v1"
 

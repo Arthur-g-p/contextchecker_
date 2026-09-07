@@ -6,7 +6,7 @@ These test _is_full_abstention — a pure function with no dependencies.
 
 import pytest
 
-from contextchecker.services.extraction import _is_full_abstention
+from claimlens.services.extraction import _is_full_abstention
 
 
 class TestIsFullAbstention:

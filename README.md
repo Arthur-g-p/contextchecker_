@@ -1,9 +1,9 @@
-# ContextChecker
+# ClaimLens
 
 Claim-level evaluation for LLM outputs: decompose text into atomic claims,
 then verify every claim against a reference.
 
-Instead of asking a judge LLM "rate this answer 1-10", ContextChecker
+Instead of asking a judge LLM "rate this answer 1-10", ClaimLens
 extracts atomic `(subject, predicate, object)` claims from a response with
 an extractor LLM, then classifies each claim against a reference with a
 checker LLM: Entailment, Contradiction, or Neutral. Every score the toolkit
@@ -69,8 +69,8 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 Then clone and install into a virtual environment:
 
 ```bash
-git clone https://github.com/Arthur-g-p/contextchecker_.git
-cd contextchecker_
+git clone https://github.com/Arthur-g-p/claimlens.git
+cd claimlens
 uv venv
 uv pip install -e .
 ```
@@ -78,7 +78,7 @@ uv pip install -e .
 `uv venv` reads `.python-version` and downloads CPython 3.12 if it isn't
 already present. It does not touch your system Python.
 
-Activate the environment before using the `contextchecker` command:
+Activate the environment before using the `claimlens` command:
 
 ```bash
 source .venv/bin/activate     # macOS / Linux
@@ -89,7 +89,7 @@ source .venv/bin/activate     # macOS / Linux
 ```
 
 Activation is per-shell — you need it again in every new terminal. To skip it,
-prefix commands with `uv run` instead (`uv run contextchecker --help`).
+prefix commands with `uv run` instead (`uv run claimlens --help`).
 
 To also install the test dependencies (pytest, pytest-asyncio, coverage):
 
@@ -100,7 +100,7 @@ uv pip install -e ".[test]"
 Verify the install:
 
 ```bash
-contextchecker --help
+claimlens --help
 ```
 
 ## Quick start
@@ -140,26 +140,26 @@ plus `eval_data/` with human-labelled data for the `eval` commands.
 Start at step 01 — decompose responses into claims:
 
 ```bash
-contextchecker extract examples/extract/kepler22b.json --extractor-model gpt-4o-mini
+claimlens extract examples/extract/kepler22b.json --extractor-model gpt-4o-mini
 ```
 
 Run the full RAG pipeline (step 05), which needs `gt_answer` and
 `retrieved_context` as well:
 
 ```bash
-contextchecker ragcheck examples/ragcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini
+claimlens ragcheck examples/ragcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini
 ```
 
 Repeat the whole experiment five times and report variance (5x LLM cost):
 
 ```bash
-contextchecker ragcheck examples/ragcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini --runs 5
+claimlens ragcheck examples/ragcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini --runs 5
 ```
 
 Check faithfulness with no ground truth at all (step 04):
 
 ```bash
-contextchecker faithcheck examples/faithcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini
+claimlens faithcheck examples/faithcheck/kepler22b.json --extractor-model gpt-4o-mini --checker-model gpt-4o-mini
 ```
 
 The model flags have short aliases (`-e`, `-c`, `-m`), but the long names are
@@ -177,7 +177,7 @@ claim record — `--runs N` adds entries, it never reshapes. The
 the console's own branch names, derived from the record. The building
 blocks (`extract`, `check`, `atomize`) instead emit the item list itself,
 enriched in place, so each one's output is the next one's input.
-`contextchecker --help` lists all commands and flags.
+`claimlens --help` lists all commands and flags.
 
 ## Using other providers and local models
 
@@ -189,7 +189,7 @@ to reach a non-OpenAI endpoint.
 the model name must **not** carry a provider prefix:
 
 ```bash
-contextchecker extract examples/extract/kepler22b.json \
+claimlens extract examples/extract/kepler22b.json \
   --extractor-base-api https://openrouter.ai/api/v1 \
   --extractor-model openai/gpt-5.6-luna
 ```
@@ -201,7 +201,7 @@ The same flag points at any OpenAI-compatible server, including a local one
 instead. LiteLLM resolves the endpoint:
 
 ```bash
-contextchecker extract examples/extract/kepler22b.json --extractor-model openrouter/openai/gpt-5.6-luna
+claimlens extract examples/extract/kepler22b.json --extractor-model openrouter/openai/gpt-5.6-luna
 ```
 
 Prefer the direct endpoint for very new models: LiteLLM routing depends on the

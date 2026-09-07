@@ -19,16 +19,16 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-from contextchecker import settings
-from contextchecker.settings import DEFAULT_MAX_WORDS
-from contextchecker.exceptions import InvalidInputError, FilterError
-from contextchecker.models import CheckingPayload
-from contextchecker.utils import canonicalize_triplets, plural
-from contextchecker.services.base import BaseService
-from contextchecker.workers.checker import (
+from claimlens import settings
+from claimlens.settings import DEFAULT_MAX_WORDS
+from claimlens.exceptions import InvalidInputError, FilterError
+from claimlens.models import CheckingPayload
+from claimlens.utils import canonicalize_triplets, plural
+from claimlens.services.base import BaseService
+from claimlens.workers.checker import (
     Checker, ClaimVerdict, _reference_word_count,
 )
-from contextchecker.stats import GLOBAL_STATS, log_api_parsing, log_mece_tree, log_token_stats
+from claimlens.stats import GLOBAL_STATS, log_api_parsing, log_mece_tree, log_token_stats
 
 logger = settings.get_logger(__name__)
 

@@ -4,19 +4,19 @@ import json
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from contextchecker.workers.atomizer import (
+from claimlens.workers.atomizer import (
     Atomizer,
     AtomicTriplet,
     AtomizationDecision,
     RetryRoundConfig,
 )
-from contextchecker.models import AtomizationPayload
-from contextchecker.exceptions import (
+from claimlens.models import AtomizationPayload
+from claimlens.exceptions import (
     ContextTooLongError,
     ContentPolicyError,
     ParsingError,
 )
-from contextchecker.stats import PhaseStats
+from claimlens.stats import PhaseStats
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ def _atomizer(**kwargs) -> Atomizer:
         model="test-model",
     )
     defaults.update(kwargs)
-    with patch("contextchecker.workers.atomizer.LLMClient"):
+    with patch("claimlens.workers.atomizer.LLMClient"):
         a = Atomizer(**defaults)
         # Set a default template for messages rendering
         a._prompt_template = "subject: {{subject}}, predicate: {{predicate}}, object: {{object}}, response: {{response}}"

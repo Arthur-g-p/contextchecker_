@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import LengthFinishReasonError, ContentFilterFinishReasonError
 
-from contextchecker.llmclient import LLMClient, ErrorAction
-from contextchecker.exceptions import (
+from claimlens.llmclient import LLMClient, ErrorAction
+from claimlens.exceptions import (
     ContextTooLongError, ContentPolicyError, LLMParseError, LLMClientError,
     FinishReasonLengthError,
 )
@@ -38,7 +38,7 @@ class _Schema(MagicMock):
 
 
 def _client(discovered: bool = True) -> LLMClient:
-    with patch("contextchecker.llmclient.AsyncOpenAI"):
+    with patch("claimlens.llmclient.AsyncOpenAI"):
         c = LLMClient(api_key="k", model="m", base_url=BASE_URL)
     c._connection_verified = True
     if discovered:
@@ -135,10 +135,10 @@ class TestDiscoveryIsNotBlamed:
 class TestReachesTheTree:
 
     async def test_worker_records_it_as_finish_reason_length(self):
-        from contextchecker.stats import PhaseStats
-        from contextchecker.workers.extractor import Extractor
+        from claimlens.stats import PhaseStats
+        from claimlens.workers.extractor import Extractor
 
-        with patch("contextchecker.workers.extractor.LLMClient"):
+        with patch("claimlens.workers.extractor.LLMClient"):
             ex = Extractor(api_key="k", model="m")
         stats = PhaseStats()
         ex._classify([FinishReasonLengthError("cut off")], stats)
@@ -188,21 +188,21 @@ class TestSeparateFromContextTooLong:
 
     async def test_own_counter_and_own_tree_row(self, caplog):
         import logging
-        from contextchecker.stats import PhaseStats, log_api_parsing
+        from claimlens.stats import PhaseStats, log_api_parsing
 
         s = PhaseStats(first_pass_count=5, first_pass_ok=1,
                        context_too_long=2, finish_reason_length=2)
-        with caplog.at_level(logging.INFO, logger="contextchecker"):
+        with caplog.at_level(logging.INFO, logger="claimlens"):
             log_api_parsing(pending=5, stats=s)
         assert "2 context too long" in caplog.text
         assert "2 finish reason length" in caplog.text
         assert s.total_permanent == 4
 
     async def test_checker_marks_the_verdict_with_its_own_cause(self):
-        from contextchecker.models import CheckingPayload
-        from contextchecker.workers.checker import Checker
+        from claimlens.models import CheckingPayload
+        from claimlens.workers.checker import Checker
 
-        with patch("contextchecker.workers.checker.LLMClient"):
+        with patch("claimlens.workers.checker.LLMClient"):
             ck = Checker(api_key="k", model="m")
         ck.client.generate_batch = AsyncMock(
             return_value=[FinishReasonLengthError("cut off")])
@@ -215,10 +215,10 @@ class TestSeparateFromContextTooLong:
         assert ck.last_stats.finish_reason_length == 1
 
     async def test_atomizer_counts_it_apart(self):
-        from contextchecker.models import AtomizationPayload
-        from contextchecker.workers.atomizer import Atomizer
+        from claimlens.models import AtomizationPayload
+        from claimlens.workers.atomizer import Atomizer
 
-        with patch("contextchecker.workers.atomizer.LLMClient"):
+        with patch("claimlens.workers.atomizer.LLMClient"):
             a = Atomizer(api_key="k", model="m")
         a.client.generate_batch = AsyncMock(
             return_value=[FinishReasonLengthError("cut off")])

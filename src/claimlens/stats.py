@@ -3,8 +3,8 @@ from dataclasses import dataclass, field
 from typing import List
 import threading
 
-from contextchecker import settings
-from contextchecker.utils import build_variance
+from claimlens import settings
+from claimlens.utils import build_variance
 
 logger = settings.get_logger(__name__)
 

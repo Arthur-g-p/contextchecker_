@@ -16,19 +16,19 @@ Covers:
 import pytest
 from unittest.mock import patch
 
-from contextchecker.services.checking import (
+from claimlens.services.checking import (
     _effective_joint_num,
     CheckingService,
     DEFAULT_MAX_WORDS,
     CONTEXT_BUDGET_RATIO,
 )
-from contextchecker.workers.checker import (
+from claimlens.workers.checker import (
     ClaimVerdict,
     Verdict,
     _format_reference,
     _reference_word_count,
 )
-from contextchecker.exceptions import InvalidInputError, FilterError
+from claimlens.exceptions import InvalidInputError, FilterError
 
 
 FAKE_API_KEY = "test-key-12345"
@@ -147,7 +147,7 @@ class TestFlatToMap:
 
     def test_basic_mapping(self):
         """Flat payloads+verdicts → nested dict."""
-        from contextchecker.models import CheckingPayload
+        from claimlens.models import CheckingPayload
 
         payloads = [
             CheckingPayload(claim="c1", reference=["r"], item_index=0, claim_index=0),
@@ -164,7 +164,7 @@ class TestFlatToMap:
 
     def test_with_none_verdicts(self):
         """None verdicts (failures) are preserved."""
-        from contextchecker.models import CheckingPayload
+        from claimlens.models import CheckingPayload
 
         payloads = [
             CheckingPayload(claim="c1", reference=["r"], item_index=0, claim_index=0),
@@ -186,11 +186,11 @@ class TestSerialize:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     @pytest.fixture
     def service(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
 
     def test_basic_serialize(self, service):
@@ -235,7 +235,7 @@ class TestSerialize:
     def test_serialize_writes_error_cause_for_null_verdict(self, service):
         """A None verdict is never uninterpretable: the worker's cause is
         persisted as {model}_checker_error."""
-        from contextchecker.workers.checker import ClaimVerdict
+        from claimlens.workers.checker import ClaimVerdict
         items = [
             {KG_KEY: [
                 {"subject": "A", "predicate": "is", "object": "B"},
@@ -259,10 +259,10 @@ class TestParameterization:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     def test_verdict_namespace_drives_all_output_keys(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             service = CheckingService(
                 model="chk",
                 extractor_model="ext",
@@ -277,7 +277,7 @@ class TestParameterization:
         assert service.extraction_error_key == "ext_gt_extraction_error"
 
     def test_defaults_reproduce_classic_keys(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             service = CheckingService(model="chk", extractor_model="ext")
         assert service.kg_key == "ext_response_kg"
         assert service.verdict_key == "chk_checker_verdict"
@@ -292,11 +292,11 @@ class TestWarnOversizedReferences:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     def test_no_warning_when_max_words_none(self, caplog):
         """No warning when max_words is None (single mode, unset)."""
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             service = CheckingService(
                 model="checker", extractor_model=EXTRACTOR_MODEL,
                 joint=False, max_words=None,
@@ -308,26 +308,26 @@ class TestWarnOversizedReferences:
     def test_warning_when_reference_exceeds_budget(self, caplog):
         """Warning emitted when reference exceeds the word budget."""
         import logging
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             service = CheckingService(
                 model="checker", extractor_model=EXTRACTOR_MODEL,
                 max_words=100,
             )
         items = [{"reference": [" ".join(["word"] * 200)], KG_KEY: []}]
-        with caplog.at_level(logging.WARNING, logger="contextchecker.services.checking"):
+        with caplog.at_level(logging.WARNING, logger="claimlens.services.checking"):
             service._warn_oversized_references(items)
         assert "too large" in caplog.text
 
     def test_no_warning_when_within_budget(self, caplog):
         """No warning when reference is within budget."""
         import logging
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             service = CheckingService(
                 model="checker", extractor_model=EXTRACTOR_MODEL,
                 max_words=6000,
             )
         items = [{"reference": ["short ref"], KG_KEY: []}]
-        with caplog.at_level(logging.WARNING, logger="contextchecker.services.checking"):
+        with caplog.at_level(logging.WARNING, logger="claimlens.services.checking"):
             service._warn_oversized_references(items)
         assert "too large" not in caplog.text
 
@@ -338,11 +338,11 @@ class TestCheckingValidation:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     @pytest.fixture
     def service(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
 
     def test_legacy_triplets_normalized_during_validation(self, service):
@@ -409,11 +409,11 @@ class TestCheckingFilter:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     @pytest.fixture
     def service(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
 
     def test_pending_items_returned(self, service):
@@ -541,11 +541,11 @@ class TestBuildPayloads:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     @pytest.fixture
     def service(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
 
     def test_single_item_single_claim(self, service):
@@ -588,11 +588,11 @@ class TestClaimLevelResumption:
 
     @pytest.fixture(autouse=True)
     def _patch_api_key(self, monkeypatch):
-        monkeypatch.setattr("contextchecker.settings.CHECKER_API_KEY", FAKE_API_KEY)
+        monkeypatch.setattr("claimlens.settings.CHECKER_API_KEY", FAKE_API_KEY)
 
     @pytest.fixture
     def service(self):
-        with patch("contextchecker.services.checking.Checker"):
+        with patch("claimlens.services.checking.Checker"):
             return CheckingService(model="checker-model", extractor_model=EXTRACTOR_MODEL)
 
     def test_single_mode_builds_payloads_only_for_unchecked(self, service):
@@ -629,7 +629,7 @@ class TestClaimLevelResumption:
         ]
 
         from unittest.mock import AsyncMock
-        from contextchecker.workers.checker import ClaimVerdict, Verdict
+        from claimlens.workers.checker import ClaimVerdict, Verdict
         mock_results = [{
             1: ClaimVerdict(verdict=Verdict.CONTRADICTION, explanation="Explanation 1"),
             2: ClaimVerdict(verdict=Verdict.NEUTRAL, explanation="Explanation 2")
@@ -668,7 +668,7 @@ class TestClaimLevelResumption:
         }]
 
         from unittest.mock import AsyncMock
-        from contextchecker.workers.checker import ClaimVerdict, Verdict
+        from claimlens.workers.checker import ClaimVerdict, Verdict
 
         captured = []
 
@@ -694,7 +694,7 @@ class TestClaimLevelResumption:
 
     def test_serialize_merges_and_preserves_verdicts(self, service):
         """_serialize updates new verdicts, preserves existing ones, and fills legacy root list."""
-        from contextchecker.workers.checker import ClaimVerdict, Verdict
+        from claimlens.workers.checker import ClaimVerdict, Verdict
 
         items = [
             {

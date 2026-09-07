@@ -179,7 +179,7 @@ For a checking model run with name `gemini-3.1`, two keys are added to each trip
 Trigger entailment checking via the `check` command:
 
 ```bash
-contextchecker check <input_file> [options]
+claimlens check <input_file> [options]
 ```
 
 ### Arguments and Options

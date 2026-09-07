@@ -4,13 +4,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
-from contextchecker.eval.extractoreval import (
+from claimlens.eval.extractoreval import (
     ExtractorEvaluator,
     _ItemBucket,
     _ItemMatchResult,
 )
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.models import ExtractorEvalResult
+from claimlens.exceptions import InvalidInputError
+from claimlens.models import ExtractorEvalResult
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ def _evaluator(**kwargs):
     )
     defaults.update(kwargs)
 
-    with patch("contextchecker.eval.extractoreval.ExtractionService"):
+    with patch("claimlens.eval.extractoreval.ExtractionService"):
         return ExtractorEvaluator(**defaults)
 
 
@@ -168,7 +168,7 @@ class TestDataTreeRendering:
         ev = _evaluator()
         ev._dropped_missing_response = 0
         ev._dropped_missing_gt = 1
-        with patch("contextchecker.eval.extractoreval.logger") as mock_log:
+        with patch("claimlens.eval.extractoreval.logger") as mock_log:
             ev._log_data_pre(6, 1, 5)
         lines = [str(c) for c in mock_log.info.call_args_list]
         assert any("missing GT key" in l and "1" in l for l in lines)
@@ -178,7 +178,7 @@ class TestDataTreeRendering:
         ev = _evaluator()
         ev._dropped_missing_response = 0
         ev._dropped_missing_gt = 0
-        with patch("contextchecker.eval.extractoreval.logger") as mock_log:
+        with patch("claimlens.eval.extractoreval.logger") as mock_log:
             ev._log_data_pre(5, 0, 5)
         lines = [str(c) for c in mock_log.info.call_args_list]
         assert not any("dropped" in l for l in lines)

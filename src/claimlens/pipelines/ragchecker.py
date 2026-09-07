@@ -24,13 +24,13 @@ objects). Metrics are stubbed until the formulas are settled.
 import time
 from datetime import datetime
 
-from contextchecker import settings
-from contextchecker.exceptions import InvalidInputError
-from contextchecker.models import Direction
-from contextchecker.services.base import BaseService
-from contextchecker.services.extraction import ExtractionService
-from contextchecker.services.checking import CheckingService
-from contextchecker.pipelines.directions import (
+from claimlens import settings
+from claimlens.exceptions import InvalidInputError
+from claimlens.models import Direction
+from claimlens.services.base import BaseService
+from claimlens.services.extraction import ExtractionService
+from claimlens.services.checking import CheckingService
+from claimlens.pipelines.directions import (
     _location,
     abstention_counts,
     log_pipeline_tree,
@@ -40,8 +40,8 @@ from contextchecker.pipelines.directions import (
     run_direction,
     unwrap_items,
 )
-from contextchecker.stats import GLOBAL_STATS, format_headline, log_mece_tree, log_rate_rows, log_token_stats, usage_since
-from contextchecker.utils import build_meta, findings_view, plural
+from claimlens.stats import GLOBAL_STATS, format_headline, log_mece_tree, log_rate_rows, log_token_stats, usage_since
+from claimlens.utils import build_meta, findings_view, plural
 
 logger = settings.get_logger(__name__)
 

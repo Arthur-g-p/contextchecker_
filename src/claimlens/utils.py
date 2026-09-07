@@ -1,7 +1,7 @@
 """
 Shared utility functions — pure helpers.
 
-This file is a leaf dependency — it imports nothing from contextchecker.
+This file is a leaf dependency — it imports nothing from claimlens.
 """
 import json
 import logging
@@ -270,7 +270,7 @@ def build_meta(
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "report_type": report_type,
-        "contextchecker_version": _package_version(),
+        "claimlensversion": _package_version(),
         "timestamp": timestamp,
         "duration_seconds": round(duration_seconds, 1),
         "total_items": total_items,
@@ -283,6 +283,6 @@ def build_meta(
 def _package_version() -> str:
     try:
         from importlib.metadata import version
-        return version("contextchecker")
+        return version("claimlens")
     except Exception:
         return "unknown"

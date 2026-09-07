@@ -9,26 +9,26 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from contextchecker.exceptions import LLMTimeoutError, ContextTooLongError
-from contextchecker.models import ExtractionPayload, AtomizationPayload, CheckingPayload
-from contextchecker.stats import PhaseStats
-from contextchecker.workers.extractor import Extractor
-from contextchecker.workers.atomizer import Atomizer
-from contextchecker.workers.checker import Checker
+from claimlens.exceptions import LLMTimeoutError, ContextTooLongError
+from claimlens.models import ExtractionPayload, AtomizationPayload, CheckingPayload
+from claimlens.stats import PhaseStats
+from claimlens.workers.extractor import Extractor
+from claimlens.workers.atomizer import Atomizer
+from claimlens.workers.checker import Checker
 
 
 def _extractor() -> Extractor:
-    with patch("contextchecker.workers.extractor.LLMClient"):
+    with patch("claimlens.workers.extractor.LLMClient"):
         return Extractor(api_key="k", model="m")
 
 
 def _checker(**kw) -> Checker:
-    with patch("contextchecker.workers.checker.LLMClient"):
+    with patch("claimlens.workers.checker.LLMClient"):
         return Checker(api_key="k", model="m", **kw)
 
 
 def _atomizer() -> Atomizer:
-    with patch("contextchecker.workers.atomizer.LLMClient"):
+    with patch("claimlens.workers.atomizer.LLMClient"):
         return Atomizer(api_key="k", model="m")
 
 
@@ -105,8 +105,8 @@ class TestStatsDisplay:
 
     def test_shown_in_the_api_block(self, caplog):
         import logging
-        from contextchecker.stats import log_api_parsing
+        from claimlens.stats import log_api_parsing
         s = PhaseStats(first_pass_count=2, timeout=2)
-        with caplog.at_level(logging.INFO, logger="contextchecker"):
+        with caplog.at_level(logging.INFO, logger="claimlens"):
             log_api_parsing(pending=2, stats=s)
         assert "2 timed out" in caplog.text

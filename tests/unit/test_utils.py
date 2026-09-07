@@ -2,7 +2,7 @@
 
 import pytest
 
-from contextchecker.utils import (
+from claimlens.utils import (
     canonicalize_triplets,
     deduplicate_triplets,
     find_duplicate_triplets,
